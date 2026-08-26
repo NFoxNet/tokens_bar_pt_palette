@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "TokensLimitsExtension (Package)": {
+      "commandName": "MsixPackage",
+      "doNotLaunchApp": true
+    },
+    "TokensLimitsExtension (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
