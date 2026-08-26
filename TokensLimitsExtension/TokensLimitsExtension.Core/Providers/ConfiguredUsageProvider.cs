@@ -62,6 +62,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetAmpSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GetWindsurfSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (_descriptor.Id.Equals("deepgram", StringComparison.OrdinalIgnoreCase))
         {
             return await GetDeepgramSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -935,6 +940,360 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
     private static double ParseInvariantNumber(string value)
         => double.TryParse(value.Replace(",", string.Empty), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+
+    private async Task<UsageSnapshot> GetWindsurfSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var rawBundle = _configuration.GetValue(Descriptor.Id, "sessionBundle")
+            ?? Environment.GetEnvironmentVariable("WINDSURF_SESSION_BUNDLE");
+        if (string.IsNullOrWhiteSpace(rawBundle))
+        {
+            throw new UsageProviderConfigurationException(
+                "Для Windsurf задайте session bundle с devin_session_token, devin_auth1_token, devin_account_id и devin_primary_org_id.");
+        }
+
+        var session = ParseWindsurfSession(rawBundle);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "https://windsurf.com/_backend/exa.seat_management_pb.SeatManagementService/GetPlanStatus");
+        request.Headers.TryAddWithoutValidation("Content-Type", "application/proto");
+        request.Headers.TryAddWithoutValidation("Connect-Protocol-Version", "1");
+        request.Headers.TryAddWithoutValidation("Origin", "https://windsurf.com");
+        request.Headers.TryAddWithoutValidation("Referer", "https://windsurf.com/profile");
+        request.Headers.TryAddWithoutValidation("x-auth-token", session.SessionToken);
+        request.Headers.TryAddWithoutValidation("x-devin-session-token", session.SessionToken);
+        request.Headers.TryAddWithoutValidation("x-devin-auth1-token", session.Auth1Token);
+        request.Headers.TryAddWithoutValidation("x-devin-account-id", session.AccountId);
+        request.Headers.TryAddWithoutValidation("x-devin-primary-org-id", session.PrimaryOrgId);
+        request.Content = new ByteArrayContent(EncodeWindsurfRequest(session.SessionToken));
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/proto");
+
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"Windsurf GetPlanStatus: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        var status = DecodeWindsurfResponse(bytes);
+        var metrics = new List<UsageMetric>();
+        if (!string.IsNullOrWhiteSpace(status.PlanName))
+        {
+            metrics.Add(new UsageMetric("Plan", status.PlanName));
+        }
+
+        if (status.PlanEnd is not null)
+        {
+            metrics.Add(new UsageMetric("Plan expires", status.PlanEnd.Value.ToString("O", CultureInfo.InvariantCulture), ResetAt: status.PlanEnd));
+        }
+
+        UsageWindow? primary = null;
+        UsageWindow? secondary = null;
+        if (status.DailyRemainingPercent is not null)
+        {
+            metrics.Add(new UsageMetric("Daily remaining", status.DailyRemainingPercent.Value.ToString(CultureInfo.InvariantCulture), "%", Remaining: status.DailyRemainingPercent));
+            if (status.DailyResetAt is not null)
+            {
+                primary = new UsageWindow(100 - Math.Clamp(status.DailyRemainingPercent.Value, 0, 100), status.DailyResetAt.Value, 24 * 60 * 60);
+            }
+        }
+
+        if (status.WeeklyRemainingPercent is not null)
+        {
+            metrics.Add(new UsageMetric("Weekly remaining", status.WeeklyRemainingPercent.Value.ToString(CultureInfo.InvariantCulture), "%", Remaining: status.WeeklyRemainingPercent));
+            if (status.WeeklyResetAt is not null)
+            {
+                secondary = new UsageWindow(100 - Math.Clamp(status.WeeklyRemainingPercent.Value, 0, 100), status.WeeklyResetAt.Value, 7 * 24 * 60 * 60);
+            }
+        }
+
+        if (status.GracePeriodStatus is not null)
+        {
+            metrics.Add(new UsageMetric("Grace period status", status.GracePeriodStatus.Value.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (metrics.Count == 0)
+        {
+            throw new UsageProviderRequestException("Windsurf GetPlanStatus не содержит данных тарифа или квот.");
+        }
+
+        _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from protobuf GetPlanStatus.");
+        return new UsageSnapshot(Descriptor.Id, Descriptor.DisplayName, primary, secondary, status.PlanName, false)
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Source = "SeatManagementService/GetPlanStatus (protobuf)",
+            Metrics = metrics,
+        };
+    }
+
+    private static WindsurfSession ParseWindsurfSession(string raw)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        values[property.Name] = property.Value.GetString() ?? string.Empty;
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            foreach (var segment in raw.Trim().Trim('{', '}').Split([';', ',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var separator = segment.IndexOf('=');
+                if (separator < 0) separator = segment.IndexOf(':');
+                if (separator > 0)
+                {
+                    values[segment[..separator].Trim().Trim('"', '\'')] = segment[(separator + 1)..].Trim().Trim('"', '\'');
+                }
+            }
+        }
+
+        var sessionToken = FirstSessionValue(values, "devin_session_token", "devinSessionToken", "sessionToken");
+        var auth1Token = FirstSessionValue(values, "devin_auth1_token", "devinAuth1Token", "auth1Token");
+        var accountId = FirstSessionValue(values, "devin_account_id", "devinAccountId", "accountID", "accountId");
+        var primaryOrgId = FirstSessionValue(values, "devin_primary_org_id", "devinPrimaryOrgId", "primaryOrgID", "primaryOrgId");
+        if (string.IsNullOrWhiteSpace(sessionToken)
+            || string.IsNullOrWhiteSpace(auth1Token)
+            || string.IsNullOrWhiteSpace(accountId)
+            || string.IsNullOrWhiteSpace(primaryOrgId))
+        {
+            throw new UsageProviderConfigurationException(
+                "Windsurf session bundle должен содержать четыре значения Devin-сессии.");
+        }
+
+        return new WindsurfSession(sessionToken, auth1Token, accountId, primaryOrgId);
+    }
+
+    private static string? FirstSessionValue(IReadOnlyDictionary<string, string> values, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    private static byte[] EncodeWindsurfRequest(string sessionToken)
+    {
+        using var stream = new MemoryStream();
+        WriteProtoVarint(stream, (1u << 3) | 2u);
+        WriteProtoBytes(stream, Encoding.UTF8.GetBytes(sessionToken));
+        WriteProtoVarint(stream, 2u << 3);
+        WriteProtoVarint(stream, 1);
+        return stream.ToArray();
+    }
+
+    private static WindsurfStatus DecodeWindsurfResponse(byte[] bytes)
+    {
+        var reader = new ProtobufReader(bytes);
+        var status = new WindsurfStatus();
+        while (reader.TryReadField(out var field, out var wireType))
+        {
+            if (field == 1 && wireType == 2)
+            {
+                DecodeWindsurfPlanStatus(reader.ReadBytes(), status);
+            }
+            else
+            {
+                reader.Skip(wireType);
+            }
+        }
+
+        return status;
+    }
+
+    private static void DecodeWindsurfPlanStatus(byte[] bytes, WindsurfStatus status)
+    {
+        var reader = new ProtobufReader(bytes);
+        while (reader.TryReadField(out var field, out var wireType))
+        {
+            switch (field, wireType)
+            {
+                case (1, 2):
+                    DecodeWindsurfPlanInfo(reader.ReadBytes(), status);
+                    break;
+                case (2, 2):
+                    status.PlanStart = DecodeWindsurfTimestamp(reader.ReadBytes());
+                    break;
+                case (3, 2):
+                    status.PlanEnd = DecodeWindsurfTimestamp(reader.ReadBytes());
+                    break;
+                case (12, 0):
+                    status.GracePeriodStatus = checked((int)reader.ReadVarint());
+                    break;
+                case (14, 0):
+                    status.DailyRemainingPercent = checked((int)reader.ReadVarint());
+                    break;
+                case (15, 0):
+                    status.WeeklyRemainingPercent = checked((int)reader.ReadVarint());
+                    break;
+                case (17, 0):
+                    status.DailyResetAt = DateTimeOffset.FromUnixTimeSeconds(checked((long)reader.ReadVarint()));
+                    break;
+                case (18, 0):
+                    status.WeeklyResetAt = DateTimeOffset.FromUnixTimeSeconds(checked((long)reader.ReadVarint()));
+                    break;
+                default:
+                    reader.Skip(wireType);
+                    break;
+            }
+        }
+    }
+
+    private static void DecodeWindsurfPlanInfo(byte[] bytes, WindsurfStatus status)
+    {
+        var reader = new ProtobufReader(bytes);
+        while (reader.TryReadField(out var field, out var wireType))
+        {
+            switch (field, wireType)
+            {
+                case (1, 0):
+                    status.TeamsTier = checked((int)reader.ReadVarint());
+                    break;
+                case (2, 2):
+                    status.PlanName = reader.ReadString();
+                    break;
+                default:
+                    reader.Skip(wireType);
+                    break;
+            }
+        }
+    }
+
+    private static DateTimeOffset DecodeWindsurfTimestamp(byte[] bytes)
+    {
+        var reader = new ProtobufReader(bytes);
+        long seconds = 0;
+        long nanos = 0;
+        while (reader.TryReadField(out var field, out var wireType))
+        {
+            switch (field, wireType)
+            {
+                case (1, 0): seconds = checked((long)reader.ReadVarint()); break;
+                case (2, 0): nanos = checked((long)reader.ReadVarint()); break;
+                default: reader.Skip(wireType); break;
+            }
+        }
+
+        return DateTimeOffset.FromUnixTimeSeconds(seconds).AddTicks(nanos / 100);
+    }
+
+    private static void WriteProtoVarint(Stream stream, uint value)
+    {
+        while (value >= 0x80)
+        {
+            stream.WriteByte((byte)(value | 0x80));
+            value >>= 7;
+        }
+
+        stream.WriteByte((byte)value);
+    }
+
+    private static void WriteProtoBytes(Stream stream, byte[] bytes)
+    {
+        WriteProtoVarint(stream, (uint)bytes.Length);
+        stream.Write(bytes);
+    }
+
+    private sealed record WindsurfSession(string SessionToken, string Auth1Token, string AccountId, string PrimaryOrgId);
+
+    private sealed class WindsurfStatus
+    {
+        public string? PlanName { get; set; }
+        public int? TeamsTier { get; set; }
+        public DateTimeOffset? PlanStart { get; set; }
+        public DateTimeOffset? PlanEnd { get; set; }
+        public int? DailyRemainingPercent { get; set; }
+        public int? WeeklyRemainingPercent { get; set; }
+        public DateTimeOffset? DailyResetAt { get; set; }
+        public DateTimeOffset? WeeklyResetAt { get; set; }
+        public int? GracePeriodStatus { get; set; }
+    }
+
+    private sealed class ProtobufReader(byte[] bytes)
+    {
+        private readonly byte[] _bytes = bytes;
+        private int _offset;
+
+        public bool TryReadField(out int field, out int wireType)
+        {
+            if (_offset >= _bytes.Length)
+            {
+                field = 0;
+                wireType = 0;
+                return false;
+            }
+
+            var key = ReadVarint();
+            field = checked((int)(key >> 3));
+            wireType = checked((int)(key & 7));
+            if (field <= 0) throw new UsageProviderRequestException("Windsurf protobuf содержит некорректный номер поля.");
+            return true;
+        }
+
+        public ulong ReadVarint()
+        {
+            ulong value = 0;
+            var shift = 0;
+            while (_offset < _bytes.Length && shift < 64)
+            {
+                var current = _bytes[_offset++];
+                value |= (ulong)(current & 0x7F) << shift;
+                if ((current & 0x80) == 0) return value;
+                shift += 7;
+            }
+
+            throw new UsageProviderRequestException("Windsurf protobuf оборван.");
+        }
+
+        public byte[] ReadBytes()
+        {
+            var length = checked((int)ReadVarint());
+            if (length < 0 || _offset + length > _bytes.Length)
+            {
+                throw new UsageProviderRequestException("Windsurf protobuf содержит некорректную длину.");
+            }
+
+            var result = _bytes[_offset..(_offset + length)];
+            _offset += length;
+            return result;
+        }
+
+        public string ReadString()
+            => Encoding.UTF8.GetString(ReadBytes());
+
+        public void Skip(int wireType)
+        {
+            switch (wireType)
+            {
+                case 0: _ = ReadVarint(); break;
+                case 1: Advance(8); break;
+                case 2: _ = ReadBytes(); break;
+                case 5: Advance(4); break;
+                default: throw new UsageProviderRequestException($"Windsurf protobuf wire type {wireType} не поддержан.");
+            }
+        }
+
+        private void Advance(int count)
+        {
+            if (_offset + count > _bytes.Length) throw new UsageProviderRequestException("Windsurf protobuf оборван.");
+            _offset += count;
+        }
+    }
 
     private async Task<UsageSnapshot> GetDeepgramSnapshotAsync(CancellationToken cancellationToken)
     {

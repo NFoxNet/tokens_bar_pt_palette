@@ -226,7 +226,17 @@ public static class UsageProviderDescriptorRegistry
         new("vertexai", "Vertex AI", UsageProviderAuthKind.OAuth, "https://console.cloud.google.com/vertex-ai", settings: [new("oauthToken", "Google OAuth token", "OAuth access token Vertex AI.", true), Project(), Region()]),
         Api("warp", "Warp", "https://docs.warp.dev/reference/cli/api-keys", "WARP_API_KEY", withBaseUrl: true),
         Api("wayfinder", "Wayfinder", "", "WAYFINDER_API_KEY", withBaseUrl: true),
-        CookieProvider("windsurf", "Windsurf", "https://windsurf.com/subscription/usage"),
+        new(
+            "windsurf",
+            "Windsurf",
+            UsageProviderAuthKind.Cookie,
+            "https://windsurf.com/subscription/usage",
+            settings:
+            [
+                new("sessionBundle", "Windsurf session bundle", "JSON или key=value с devin_session_token, devin_auth1_token, devin_account_id и devin_primary_org_id.", true, "WINDSURF_SESSION_BUNDLE"),
+                Cookie(),
+            ],
+            sourceDescription: "Официальный Windsurf GetPlanStatus protobuf API; нужен session bundle из авторизованной сессии Windsurf/Devin."),
         Api("xai", "xAI", "https://console.x.ai", "XAI_MANAGEMENT_API_KEY", withBaseUrl: true, withAccount: true),
         new(
             "zai",

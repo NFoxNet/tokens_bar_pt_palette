@@ -197,25 +197,18 @@ public sealed class ProviderCatalogTests
     {
         var dailyReset = DateTimeOffset.UtcNow.AddHours(3).ToUnixTimeSeconds();
         var weeklyReset = DateTimeOffset.UtcNow.AddDays(4).ToUnixTimeSeconds();
-        var handler = new StubHandler($$"""
-            {
-              "planStatus": {
-                "dailyQuotaRemainingPercent": 85,
-                "weeklyQuotaRemainingPercent": 67,
-                "dailyQuotaResetAtUnix": {{dailyReset}},
-                "weeklyQuotaResetAtUnix": {{weeklyReset}}
-              }
-            }
-            """);
+        var handler = new BinaryStubHandler(BuildWindsurfResponse(dailyReset, weeklyReset));
         using var provider = new ConfiguredUsageProvider(
             UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "windsurf"),
-            new TestConfiguration(("windsurf", "cookieHeader", "session=test")),
+            new TestConfiguration(("windsurf", "sessionBundle", "{\"devin_session_token\":\"session-token\",\"devin_auth1_token\":\"auth1-token\",\"devin_account_id\":\"account-id\",\"devin_primary_org_id\":\"org-id\"}")),
             new HttpClient(handler));
 
         var snapshot = await provider.GetUsageSnapshotAsync();
 
         Assert.Equal(15, snapshot.PrimaryWindow!.UsedPercent);
         Assert.Equal(33, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("session-token", handler.LastRequest!.Headers.GetValues("x-auth-token").Single());
+        Assert.Equal("auth1-token", handler.LastRequest.Headers.GetValues("x-devin-auth1-token").Single());
     }
 
     [Fact]
@@ -443,6 +436,62 @@ public sealed class ProviderCatalogTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                RequestMessage = request,
+            });
+        }
+    }
+
+    private static byte[] BuildWindsurfResponse(long dailyReset, long weeklyReset)
+    {
+        var planInfo = new List<byte>();
+        AddProtoBytes(planInfo, 2, Encoding.UTF8.GetBytes("Pro"));
+
+        var planStatus = new List<byte>();
+        AddProtoBytes(planStatus, 1, planInfo.ToArray());
+        AddProtoVarint(planStatus, 14, 85);
+        AddProtoVarint(planStatus, 15, 67);
+        AddProtoVarint(planStatus, 17, (ulong)dailyReset);
+        AddProtoVarint(planStatus, 18, (ulong)weeklyReset);
+
+        var response = new List<byte>();
+        AddProtoBytes(response, 1, planStatus.ToArray());
+        return response.ToArray();
+    }
+
+    private static void AddProtoBytes(List<byte> target, int field, byte[] value)
+    {
+        WriteProtoVarint(target, (ulong)((field << 3) | 2));
+        WriteProtoVarint(target, (ulong)value.Length);
+        target.AddRange(value);
+    }
+
+    private static void AddProtoVarint(List<byte> target, int field, ulong value)
+    {
+        WriteProtoVarint(target, (ulong)(field << 3));
+        WriteProtoVarint(target, value);
+    }
+
+    private static void WriteProtoVarint(List<byte> target, ulong value)
+    {
+        while (value >= 0x80)
+        {
+            target.Add((byte)((value & 0x7F) | 0x80));
+            value >>= 7;
+        }
+
+        target.Add((byte)value);
+    }
+
+    private sealed class BinaryStubHandler(byte[] response) : HttpMessageHandler
+    {
+        public HttpRequestMessage? LastRequest { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastRequest = request;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(response),
                 RequestMessage = request,
             });
         }
