@@ -77,7 +77,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         IUsageProvider provider,
         Action<string> logger)
     {
-        WrappedDockItem? wrappedBand = null;
+        UsageWrappedDockItem? wrappedBand = null;
         var item = new UsageDockBandItem(
             provider,
             logger,
@@ -85,16 +85,16 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             {
                 if (wrappedBand is not null)
                 {
-                    wrappedBand.Subtitle = dockSubtitle;
+                    wrappedBand.UpdateDockSubtitle(dockSubtitle);
                 }
             });
-        wrappedBand = new WrappedDockItem(
+        wrappedBand = new UsageWrappedDockItem(
             [item],
             $"com.tokenslimits.provider.{provider.Descriptor.Id}.band",
-            provider.Descriptor.DisplayName)
+            provider.Descriptor.DisplayName,
+            item.DockSubtitle)
         {
             Icon = item.Icon,
-            Subtitle = item.DockSubtitle,
         };
 
         return (item, wrappedBand);
