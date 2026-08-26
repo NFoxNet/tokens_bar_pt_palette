@@ -13,25 +13,17 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private readonly ICodexUsageProvider _usageService;
     private readonly Action<string> _logger;
     private readonly Timer _refreshTimer;
-    private readonly bool _centerWindowOnDockInvocation;
     private bool _disposed;
 
-    public TokensLimitsPage(
-        CodexUsageService usageService,
-        Action<string>? logger = null,
-        bool centerWindowOnDockInvocation = false)
-        : this((ICodexUsageProvider)usageService, logger, centerWindowOnDockInvocation)
+    public TokensLimitsPage(CodexUsageService usageService, Action<string>? logger = null)
+        : this((ICodexUsageProvider)usageService, logger)
     {
     }
 
-    public TokensLimitsPage(
-        ICodexUsageProvider usageService,
-        Action<string>? logger = null,
-        bool centerWindowOnDockInvocation = false)
+    public TokensLimitsPage(ICodexUsageProvider usageService, Action<string>? logger = null)
     {
         _usageService = usageService ?? throw new ArgumentNullException(nameof(usageService));
         _logger = logger ?? LogMessage;
-        _centerWindowOnDockInvocation = centerWindowOnDockInvocation;
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         Id = "com.tokenslimits.codex.limits";
         Title = "Tokens Limits";
@@ -57,27 +49,17 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             IsLoading = true;
             var snapshot = _usageService.GetSnapshotAsync().GetAwaiter().GetResult();
             IsLoading = false;
-            ScheduleDockWindowPositioningIfNeeded();
             return CreateItems(snapshot);
         }
         catch (Exception ex)
         {
             IsLoading = false;
             _logger($"[TokensLimits] ERROR: {ex.Message}");
-            ScheduleDockWindowPositioningIfNeeded();
             return [new ListItem(new NoOpCommand())
             {
                 Title = "Tokens Limits",
                 Subtitle = $"Не удалось получить лимиты: {ex.Message}",
             }];
-        }
-    }
-
-    private void ScheduleDockWindowPositioningIfNeeded()
-    {
-        if (_centerWindowOnDockInvocation && !_disposed)
-        {
-            DockPalettePositioner.ScheduleCenterOnInvokingWidget(_logger);
         }
     }
 

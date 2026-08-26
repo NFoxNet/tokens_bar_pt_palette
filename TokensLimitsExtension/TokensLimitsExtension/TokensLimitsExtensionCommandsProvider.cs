@@ -21,7 +21,6 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private readonly ICommandItem[] _commands;
     private readonly ICommandItem[] _dockBands;
     private readonly TokensLimitsPage _limitsPage;
-    private readonly TokensLimitsPage _dockLimitsPage;
     private readonly UsageDockBandItem[] _dockBandItems;
     private int _disposed;
 
@@ -34,7 +33,6 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         usageService ??= CreateDefaultService();
         _limitsPage = new TokensLimitsPage(usageService, LogMessage);
-        _dockLimitsPage = new TokensLimitsPage(usageService, LogMessage, centerWindowOnDockInvocation: true);
         _commands = [
             new CommandItem(_limitsPage) { Title = DisplayName },
         ];
@@ -42,7 +40,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         providerRegistry ??= UsageProviderRegistryFactory.CreateDefault(usageService);
         var providers = providerRegistry.Providers;
         var dockBands = providers
-            .Select(provider => CreateDockBand(provider, LogMessage, _dockLimitsPage))
+            .Select(provider => CreateDockBand(provider, LogMessage, _limitsPage))
             .ToArray();
         _dockBandItems = dockBands.Select(pair => pair.Item).ToArray();
         _dockBands = dockBands.Select(pair => pair.Band).ToArray();
@@ -71,7 +69,6 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         }
 
         _limitsPage.Dispose();
-        _dockLimitsPage.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();
     }
