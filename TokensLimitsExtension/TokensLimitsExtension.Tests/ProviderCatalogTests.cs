@@ -452,6 +452,40 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task MiniMaxRemainsResponseMapsModelQuotaAndReset()
+    {
+        var reset = DateTimeOffset.UtcNow.AddHours(4).ToUnixTimeMilliseconds();
+        var handler = new StubHandler($$"""
+            {
+              "data": {
+                "plan_name": "Coding Plan Pro",
+                "model_remains": [
+                  {
+                    "model_name": "text",
+                    "current_interval_total_count": 100,
+                    "current_interval_usage_count": 75,
+                    "current_interval_remaining_percent": 75,
+                    "end_time": {{reset}}
+                  }
+                ]
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "minimax"),
+            new TestConfiguration(("minimax", "apiKey", "minimax-key")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(25, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(reset, snapshot.PrimaryWindow.ResetAt.ToUnixTimeMilliseconds());
+        Assert.Equal("Coding Plan Pro", snapshot.Plan);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "model name" && metric.Value == "text");
+        Assert.All(handler.Requests, request => Assert.Equal("Bearer minimax-key", request.Headers.Authorization!.ToString()));
+    }
+
+    [Fact]
     public async Task JetBrainsQuotaFileIsDetectedFromTheOfficialLocalFormat()
     {
         var reset = DateTimeOffset.UtcNow.AddDays(12);

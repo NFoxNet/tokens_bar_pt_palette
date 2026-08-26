@@ -2817,7 +2817,20 @@ internal static class UsageJsonParser
         }
 
         var windows = FindWindows(descriptor, root, fetchedAt);
-        var plan = FindString(root, "plan", "planName", "tier", "subscription", "product", "displayName", "planId");
+        var plan = FindString(
+            root,
+            "plan",
+            "planName",
+            "plan_name",
+            "tier",
+            "subscription",
+            "product",
+            "displayName",
+            "planId",
+            "current_subscribe_title",
+            "current_plan_title",
+            "combo_title",
+            "packageName");
         if (windows.Primary is null && windows.Secondary is null && metrics.Count == 0)
         {
             throw new UsageProviderRequestException(
@@ -3077,7 +3090,9 @@ internal static class UsageJsonParser
                 "percentage_remaining",
                 "percentRemaining",
                 "currentIntervalRemainingPercent",
-                "currentWeeklyRemainingPercent");
+                "current_interval_remaining_percent",
+                "currentWeeklyRemainingPercent",
+                "current_weekly_remaining_percent");
             var limit = FindNumber(
                 properties,
                 "limit",
@@ -3093,6 +3108,10 @@ internal static class UsageJsonParser
                 "cap",
                 "tokenLimit",
                 "weeklyLimit",
+                "currentIntervalTotalCount",
+                "current_interval_total_count",
+                "currentWeeklyTotalCount",
+                "current_weekly_total_count",
                 "currentIntervalLimit",
                 "currentWeeklyLimit");
             var amountUsed = FindNumber(
@@ -3108,7 +3127,9 @@ internal static class UsageJsonParser
                 "consumedToken",
                 "weeklyUsed",
                 "currentIntervalUsageCount",
-                "currentWeeklyUsageCount");
+                "current_interval_usage_count",
+                "currentWeeklyUsageCount",
+                "current_weekly_usage_count");
             if (FindNumber(properties, "currentValue") is { } zAiCurrent
                 && FindNumber(properties, "usage") is { } zAiUsage)
             {
@@ -3138,6 +3159,10 @@ internal static class UsageJsonParser
                 "currentIntervalResetAt",
                 "currentWeeklyResetAt",
                 "weeklyResetsAt",
+                "endTime",
+                "end_time",
+                "weeklyEndTime",
+                "weekly_end_time",
                 "currentPeriodEnd",
                 "dailyQuotaResetAtUnix",
                 "weeklyQuotaResetAtUnix",

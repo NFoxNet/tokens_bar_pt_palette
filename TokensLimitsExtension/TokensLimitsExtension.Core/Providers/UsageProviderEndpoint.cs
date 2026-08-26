@@ -227,7 +227,19 @@ public static class UsageProviderEndpointCatalog
                 Get("token-plan-detail", "https://platform.xiaomimimo.com/api/v1/tokenPlan/detail", cookie: true, apiKey: false),
                 Get("token-plan-usage", "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage", cookie: true, apiKey: false),
             ],
-            ["minimax"] = [Get("coding-plan", "https://api.minimax.io/v1/api/openplatform/coding_plan/remains", baseUrl: true)],
+            ["minimax"] =
+            [
+                Get(
+                    "coding-plan-remains",
+                    "https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
+                    baseUrl: true,
+                    headers: new Dictionary<string, string> { ["MM-API-Source"] = "TokensLimitsExtension" }),
+                Get(
+                    "token-plan-remains",
+                    "https://api.minimax.io/v1/token_plan/remains",
+                    baseUrl: true,
+                    headers: new Dictionary<string, string> { ["MM-API-Source"] = "TokensLimitsExtension" }),
+            ],
             ["mistral"] =
             [
                 Get("usage", "https://admin.mistral.ai/api/billing/v2/usage", cookie: true, apiKey: false),
