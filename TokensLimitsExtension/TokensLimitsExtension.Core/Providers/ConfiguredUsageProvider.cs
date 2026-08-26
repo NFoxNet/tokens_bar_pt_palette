@@ -52,6 +52,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetLocalSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GetOpenAiSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (_descriptor.Id.Equals("deepgram", StringComparison.OrdinalIgnoreCase))
         {
             return await GetDeepgramSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -446,6 +451,306 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         {
             return UsageJsonParser.ParseXml(Descriptor, "local", raw, DateTimeOffset.UtcNow);
         }
+    }
+
+    private async Task<UsageSnapshot> GetOpenAiSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var apiKey = _configuration.GetValue(Descriptor.Id, "adminApiKey")
+            ?? Environment.GetEnvironmentVariable("OPENAI_ADMIN_KEY")
+            ?? _configuration.GetValue(Descriptor.Id, "apiKey")
+            ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new UsageProviderConfigurationException(
+                "Для OpenAI нужен Admin API-ключ (OPENAI_ADMIN_KEY или поле Admin API-ключ). ");
+        }
+
+        var baseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl") ?? "https://api.openai.com";
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri)
+            || (baseUri.Scheme != Uri.UriSchemeHttps && baseUri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new UsageProviderConfigurationException("Базовый URL OpenAI имеет неверный формат.");
+        }
+
+        var historyDays = 30;
+        var configuredHistoryDays = _configuration.GetValue(Descriptor.Id, "historyDays");
+        if (!string.IsNullOrWhiteSpace(configuredHistoryDays)
+            && (!int.TryParse(configuredHistoryDays, NumberStyles.Integer, CultureInfo.InvariantCulture, out historyDays)
+                || historyDays is < 1 or > 365))
+        {
+            throw new UsageProviderConfigurationException("История OpenAI должна быть целым числом от 1 до 365 дней.");
+        }
+
+        var projectId = _configuration.GetValue(Descriptor.Id, "projectId");
+        var totals = new OpenAiUsageTotals();
+        var now = DateTimeOffset.UtcNow;
+        var start = now.UtcDateTime.Date.AddDays(-(historyDays - 1));
+        var remainingDays = historyDays;
+        while (remainingDays > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var chunkDays = Math.Min(31, remainingDays);
+            var rangeStart = new DateTimeOffset(start, TimeSpan.Zero);
+            var rangeEnd = rangeStart.AddDays(chunkDays);
+            await CollectOpenAiPagesAsync(
+                baseUri,
+                "/v1/organization/costs",
+                "line_item",
+                rangeStart.ToUnixTimeSeconds(),
+                rangeEnd.ToUnixTimeSeconds(),
+                projectId,
+                apiKey,
+                totals,
+                costs: true,
+                cancellationToken).ConfigureAwait(false);
+            await CollectOpenAiPagesAsync(
+                baseUri,
+                "/v1/organization/usage/completions",
+                "model",
+                rangeStart.ToUnixTimeSeconds(),
+                rangeEnd.ToUnixTimeSeconds(),
+                projectId,
+                apiKey,
+                totals,
+                costs: false,
+                cancellationToken).ConfigureAwait(false);
+            start = start.AddDays(chunkDays);
+            remainingDays -= chunkDays;
+        }
+
+        var metrics = new List<UsageMetric>
+        {
+            new("Spend", FormatNumber(totals.Cost), "USD", Used: totals.Cost),
+            new("Requests", FormatNumber(totals.Requests), "requests", Used: totals.Requests),
+            new("Tokens", FormatNumber(totals.Tokens), "tokens", Used: totals.Tokens),
+            new("Input tokens", FormatNumber(totals.InputTokens), "tokens", Used: totals.InputTokens),
+            new("Cached input tokens", FormatNumber(totals.CachedInputTokens), "tokens", Used: totals.CachedInputTokens),
+            new("Output tokens", FormatNumber(totals.OutputTokens), "tokens", Used: totals.OutputTokens),
+            new("History", historyDays.ToString(CultureInfo.InvariantCulture), "days"),
+        };
+        foreach (var model in totals.Models.OrderByDescending(pair => pair.Value.Tokens).Take(24))
+        {
+            metrics.Add(new UsageMetric(
+                $"Model {model.Key}",
+                FormatNumber(model.Value.Tokens),
+                "tokens",
+                Used: model.Value.Tokens));
+        }
+
+        _logger($"[TokensLimits] Provider {Descriptor.Id}: fetched OpenAI costs and completion usage for {historyDays} days.");
+        return new UsageSnapshot(
+            Descriptor.Id,
+            Descriptor.DisplayName,
+            null,
+            null,
+            "Admin API",
+            false)
+        {
+            FetchedAt = now,
+            Source = "organization/costs + organization/usage/completions",
+            Metrics = metrics,
+        };
+    }
+
+    private async Task CollectOpenAiPagesAsync(
+        Uri baseUri,
+        string path,
+        string groupBy,
+        long startTime,
+        long endTime,
+        string? projectId,
+        string apiKey,
+        OpenAiUsageTotals totals,
+        bool costs,
+        CancellationToken cancellationToken)
+    {
+        string? page = null;
+        var seenPages = new HashSet<string>(StringComparer.Ordinal);
+        for (var pageNumber = 0; pageNumber < 100; pageNumber++)
+        {
+            var requestUri = BuildOpenAiUri(
+                baseUri,
+                path,
+                startTime,
+                endTime,
+                groupBy,
+                projectId,
+                page);
+            using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            using var response = await _httpClient
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new UsageProviderRequestException(
+                    $"OpenAI {path}: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            }
+
+            await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("data", out var data)
+                || data.ValueKind != JsonValueKind.Array
+                || !root.TryGetProperty("has_more", out var hasMore)
+                || hasMore.ValueKind is not JsonValueKind.True and not JsonValueKind.False)
+            {
+                throw new UsageProviderRequestException($"OpenAI {path}: ответ не похож на страницу Usage API.");
+            }
+
+            foreach (var bucket in data.EnumerateArray())
+            {
+                if (bucket.ValueKind != JsonValueKind.Object
+                    || !bucket.TryGetProperty("results", out var results)
+                    || results.ValueKind != JsonValueKind.Array)
+                {
+                    throw new UsageProviderRequestException($"OpenAI {path}: бакет не содержит массив results.");
+                }
+
+                foreach (var result in results.EnumerateArray())
+                {
+                    if (result.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    if (costs)
+                    {
+                        var amount = result.TryGetProperty("amount", out var amountObject)
+                            && amountObject.ValueKind == JsonValueKind.Object
+                            && TryGetJsonDouble(amountObject, "value", out var cost)
+                            ? cost
+                            : 0;
+                        totals.Cost += amount;
+                    }
+                    else
+                    {
+                        var input = TryGetJsonDouble(result, "input_tokens", out var inputTokens) ? inputTokens : 0;
+                        var cached = TryGetJsonDouble(result, "input_cached_tokens", out var cachedTokens) ? cachedTokens : 0;
+                        var audioInput = TryGetJsonDouble(result, "input_audio_tokens", out var inputAudioTokens) ? inputAudioTokens : 0;
+                        var output = TryGetJsonDouble(result, "output_tokens", out var outputTokens) ? outputTokens : 0;
+                        var audioOutput = TryGetJsonDouble(result, "output_audio_tokens", out var outputAudioTokens) ? outputAudioTokens : 0;
+                        var requests = TryGetJsonDouble(result, "num_model_requests", out var modelRequests) ? modelRequests : 0;
+                        var totalTokens = input + audioInput + output + audioOutput;
+                        totals.InputTokens += input + audioInput;
+                        totals.CachedInputTokens += cached;
+                        totals.OutputTokens += output + audioOutput;
+                        totals.Tokens += totalTokens;
+                        totals.Requests += requests;
+                        var model = result.TryGetProperty("model", out var modelValue)
+                            ? modelValue.GetString()
+                            : null;
+                        if (string.IsNullOrWhiteSpace(model))
+                        {
+                            model = "Responses and Chat Completions";
+                        }
+
+                        if (!totals.Models.TryGetValue(model, out var modelTotal))
+                        {
+                            modelTotal = new OpenAiModelTotals();
+                            totals.Models[model] = modelTotal;
+                        }
+
+                        modelTotal.Tokens += totalTokens;
+                        modelTotal.Requests += requests;
+                    }
+                }
+            }
+
+            if (!hasMore.GetBoolean())
+            {
+                return;
+            }
+
+            if (!root.TryGetProperty("next_page", out var nextPageValue)
+                || nextPageValue.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(nextPageValue.GetString()))
+            {
+                throw new UsageProviderRequestException($"OpenAI {path}: отсутствует курсор пагинации.");
+            }
+
+            page = nextPageValue.GetString()!.Trim();
+            if (!seenPages.Add(page))
+            {
+                throw new UsageProviderRequestException($"OpenAI {path}: курсор пагинации повторился.");
+            }
+        }
+
+        throw new UsageProviderRequestException($"OpenAI {path}: пагинация превысила 100 страниц.");
+    }
+
+    private static Uri BuildOpenAiUri(
+        Uri baseUri,
+        string path,
+        long startTime,
+        long endTime,
+        string groupBy,
+        string? projectId,
+        string? page)
+    {
+        var builder = new UriBuilder(baseUri)
+        {
+            Path = path,
+        };
+        var query = new List<string>
+        {
+            $"start_time={startTime}",
+            $"end_time={endTime}",
+            "bucket_width=1d",
+            "limit=31",
+            $"group_by={Uri.EscapeDataString(groupBy)}",
+        };
+        if (!string.IsNullOrWhiteSpace(projectId))
+        {
+            query.Add($"project_ids={Uri.EscapeDataString(projectId)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(page))
+        {
+            query.Add($"page={Uri.EscapeDataString(page)}");
+        }
+
+        builder.Query = string.Join("&", query);
+        return builder.Uri;
+    }
+
+    private static bool TryGetJsonDouble(JsonElement objectElement, string propertyName, out double value)
+    {
+        if (objectElement.TryGetProperty(propertyName, out var property))
+        {
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out value))
+            {
+                return true;
+            }
+
+            if (property.ValueKind == JsonValueKind.String
+                && double.TryParse(property.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+            {
+                return true;
+            }
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private sealed class OpenAiUsageTotals
+    {
+        public double Cost { get; set; }
+        public double Requests { get; set; }
+        public double Tokens { get; set; }
+        public double InputTokens { get; set; }
+        public double CachedInputTokens { get; set; }
+        public double OutputTokens { get; set; }
+        public Dictionary<string, OpenAiModelTotals> Models { get; } = new(StringComparer.Ordinal);
+    }
+
+    private sealed class OpenAiModelTotals
+    {
+        public double Requests { get; set; }
+        public double Tokens { get; set; }
     }
 
     private async Task<UsageSnapshot> GetDeepgramSnapshotAsync(CancellationToken cancellationToken)

@@ -174,6 +174,7 @@ public static class UsageProviderDescriptorRegistry
                 BaseUrl(),
                 Account(),
                 Project(),
+                Plain("historyDays", "Дней истории", "Сколько последних дней запрашивать в Usage API OpenAI (1–365).", "OPENAI_HISTORY_DAYS", "30"),
             ],
             sourceDescription: "Официальные OpenAI Usage/Costs API; для организации обычно требуется Admin API-ключ.") ,
         CookieProvider("opencode", "OpenCode", "https://opencode.ai/auth"),

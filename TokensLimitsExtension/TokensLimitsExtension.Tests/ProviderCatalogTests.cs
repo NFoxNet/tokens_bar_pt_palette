@@ -326,6 +326,32 @@ public sealed class ProviderCatalogTests
         Assert.Contains(snapshot.Metrics, metric => metric.Name == "Model 1" && metric.Value == "qwen2.5:7b");
     }
 
+    [Fact]
+    public async Task OpenAiUsageUsesAdminKeyAndFollowsUsagePagination()
+    {
+        var handler = new OpenAiHandler();
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "openai"),
+            new TestConfiguration(
+                ("openai", "adminApiKey", "admin-key"),
+                ("openai", "baseUrl", "https://openai.example.test"),
+                ("openai", "historyDays", "1")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Spend" && metric.Value == "1.25");
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Tokens" && metric.Value == "120");
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Model gpt-test" && metric.Value == "120");
+        Assert.Equal(4, handler.Requests.Count);
+        Assert.All(handler.Requests, request =>
+        {
+            Assert.Equal("Bearer admin-key", request.Headers.Authorization!.ToString());
+            Assert.Contains("limit=31", request.RequestUri!.Query, StringComparison.Ordinal);
+        });
+        Assert.Contains(handler.Requests, request => request.RequestUri!.Query.Contains("page=next", StringComparison.Ordinal));
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {
@@ -349,6 +375,30 @@ public sealed class ProviderCatalogTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(response, Encoding.UTF8, "application/json"),
+                RequestMessage = request,
+            });
+        }
+    }
+
+    private sealed class OpenAiHandler : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            var isCosts = request.RequestUri!.AbsolutePath.EndsWith("/costs", StringComparison.Ordinal);
+            var hasPage = request.RequestUri.Query.Contains("page=next", StringComparison.Ordinal);
+            var body = isCosts
+                ? hasPage
+                    ? "{\"data\":[],\"has_more\":false}"
+                    : "{\"data\":[{\"results\":[{\"amount\":{\"value\":1.25}}]}],\"has_more\":true,\"next_page\":\"next\"}"
+                : hasPage
+                    ? "{\"data\":[],\"has_more\":false}"
+                    : "{\"data\":[{\"results\":[{\"model\":\"gpt-test\",\"input_tokens\":80,\"output_tokens\":40,\"num_model_requests\":2}]}],\"has_more\":true,\"next_page\":\"next\"}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
                 RequestMessage = request,
             });
         }
