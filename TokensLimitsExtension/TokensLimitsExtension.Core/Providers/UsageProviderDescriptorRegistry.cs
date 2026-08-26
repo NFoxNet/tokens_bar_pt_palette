@@ -123,7 +123,7 @@ public static class UsageProviderDescriptorRegistry
         Api("chutes", "Chutes", "https://chutes.ai", "CHUTES_API_KEY", withBaseUrl: true),
         new("claude", "Claude", UsageProviderAuthKind.OAuthOrCookie, "https://claude.ai/settings/usage", settings: [ApiKey("ANTHROPIC_API_KEY"), Cookie(), Account("Организация")]),
         Api("clawrouter", "ClawRouter", "https://clawrouter.openclaw.ai/dashboard/access", "CLAWROUTER_API_KEY", withBaseUrl: true),
-        Api("clinepass", "ClinePass", "https://app.cline.bot/dashboard/subscription", "CLINE_API_KEY", withBaseUrl: true),
+        Api("clinepass", "ClinePass", "https://app.cline.bot/dashboard/subscription", "CLINE_API_KEY"),
         Api("codebuff", "Codebuff", "https://www.codebuff.com/usage", "CODEBUFF_API_KEY", withBaseUrl: true),
         CookieProvider("commandcode", "Command Code", "https://commandcode.ai/studio"),
         new("copilot", "Copilot", UsageProviderAuthKind.OAuthOrCookie, "https://github.com/settings/copilot", settings: [new("oauthToken", "GitHub OAuth token", "Токен GitHub Copilot, если автоматический вход недоступен.", true), Cookie()]),

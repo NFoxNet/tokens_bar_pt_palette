@@ -51,6 +51,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetLocalSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("deepgram", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GetDeepgramSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var endpoints = UsageProviderEndpointCatalog.For(_descriptor.Id);
         if (endpoints.Count == 0)
         {
@@ -347,6 +352,200 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return UsageJsonParser.ParseXml(Descriptor, "local", raw, DateTimeOffset.UtcNow);
         }
     }
+
+    private async Task<UsageSnapshot> GetDeepgramSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var credential = ResolveCredential();
+        if (string.IsNullOrWhiteSpace(credential.ApiKey))
+        {
+            throw new UsageProviderConfigurationException("Для Deepgram не задан API-ключ.");
+        }
+
+        var baseValue = _configuration.GetValue(Descriptor.Id, "baseUrl") ?? "https://api.deepgram.com/v1";
+        if (!Uri.TryCreate(baseValue, UriKind.Absolute, out var baseUri))
+        {
+            throw new UsageProviderConfigurationException("Базовый URL Deepgram имеет неверный формат.");
+        }
+
+        var basePath = baseUri.AbsolutePath.TrimEnd('/');
+        if (!basePath.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            baseUri = new Uri(baseUri, basePath + "/v1/");
+        }
+
+        var projectId = _configuration.GetValue(Descriptor.Id, "projectId");
+        IReadOnlyList<(string Id, string Name)> projects;
+        if (!string.IsNullOrWhiteSpace(projectId))
+        {
+            projects = [(projectId, projectId)];
+        }
+        else
+        {
+            var projectsRoot = await GetJsonRootAsync(
+                new Uri(baseUri, "projects"),
+                credential.ApiKey,
+                "Token ",
+                cancellationToken).ConfigureAwait(false);
+            if (!projectsRoot.TryGetProperty("projects", out var rawProjects)
+                || rawProjects.ValueKind != JsonValueKind.Array)
+            {
+                throw new UsageProviderRequestException("Ответ Deepgram не содержит список проектов.");
+            }
+
+            projects = rawProjects.EnumerateArray()
+                .Where(project => project.ValueKind == JsonValueKind.Object)
+                .Select(project =>
+                {
+                    var id = project.TryGetProperty("project_id", out var idValue)
+                        ? idValue.GetString()
+                        : null;
+                    var name = project.TryGetProperty("name", out var nameValue)
+                        ? nameValue.GetString()
+                        : null;
+                    return (Id: id ?? string.Empty, Name: string.IsNullOrWhiteSpace(name) ? id ?? string.Empty : name);
+                })
+                .Where(project => !string.IsNullOrWhiteSpace(project.Id))
+                .ToArray();
+        }
+
+        if (projects.Count == 0)
+        {
+            throw new UsageProviderRequestException("Deepgram не вернул ни одного проекта.");
+        }
+
+        var totals = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var periodStart = string.Empty;
+        var periodEnd = string.Empty;
+        foreach (var project in projects)
+        {
+            var usageRoot = await GetJsonRootAsync(
+                new Uri(baseUri, $"projects/{Uri.EscapeDataString(project.Id)}/usage/breakdown"),
+                credential.ApiKey,
+                "Token ",
+                cancellationToken).ConfigureAwait(false);
+            if (usageRoot.TryGetProperty("start", out var startValue))
+            {
+                periodStart = startValue.GetString() ?? periodStart;
+            }
+
+            if (usageRoot.TryGetProperty("end", out var endValue))
+            {
+                periodEnd = endValue.GetString() ?? periodEnd;
+            }
+
+            if (!usageRoot.TryGetProperty("results", out var results)
+                || results.ValueKind != JsonValueKind.Array)
+            {
+                throw new UsageProviderRequestException("Ответ Deepgram не содержит usage results.");
+            }
+
+            foreach (var row in results.EnumerateArray())
+            {
+                if (row.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                foreach (var field in new[] { "hours", "total_hours", "agent_hours", "tokens_in", "tokens_out", "tts_characters", "requests" })
+                {
+                    if (row.TryGetProperty(field, out var value)
+                        && TryGetNumber(value, out var number))
+                    {
+                        totals[field] = totals.GetValueOrDefault(field) + number;
+                    }
+                }
+            }
+        }
+
+        var metrics = new List<UsageMetric>
+        {
+            new("Requests", FormatNumber(totals.GetValueOrDefault("requests")), "requests"),
+        };
+        if (totals.GetValueOrDefault("hours") != 0 || totals.GetValueOrDefault("total_hours") != 0)
+        {
+            metrics.Add(new UsageMetric("Audio", FormatNumber(totals.GetValueOrDefault("hours")), "hours"));
+            metrics.Add(new UsageMetric("Billable audio", FormatNumber(totals.GetValueOrDefault("total_hours")), "hours"));
+        }
+
+        if (totals.GetValueOrDefault("agent_hours") != 0)
+        {
+            metrics.Add(new UsageMetric("Agent hours", FormatNumber(totals.GetValueOrDefault("agent_hours")), "hours"));
+        }
+
+        if (totals.GetValueOrDefault("tokens_in") != 0 || totals.GetValueOrDefault("tokens_out") != 0)
+        {
+            metrics.Add(new UsageMetric(
+                "Tokens",
+                FormatNumber(totals.GetValueOrDefault("tokens_in") + totals.GetValueOrDefault("tokens_out")),
+                "tokens"));
+        }
+
+        if (totals.GetValueOrDefault("tts_characters") != 0)
+        {
+            metrics.Add(new UsageMetric("TTS characters", FormatNumber(totals.GetValueOrDefault("tts_characters")), "characters"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(periodStart) || !string.IsNullOrWhiteSpace(periodEnd))
+        {
+            metrics.Add(new UsageMetric("Period", $"{periodStart} — {periodEnd}"));
+        }
+
+        return new UsageSnapshot(
+            Descriptor.Id,
+            Descriptor.DisplayName,
+            null,
+            null,
+            null,
+            false)
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Source = "projects/*/usage/breakdown",
+            Metrics = metrics,
+        };
+    }
+
+    private async Task<JsonElement> GetJsonRootAsync(
+        Uri uri,
+        string credential,
+        string prefix,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.TryAddWithoutValidation("Authorization", prefix + credential);
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"Deepgram: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return document.RootElement.Clone();
+    }
+
+    private static bool TryGetNumber(JsonElement value, out double number)
+    {
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out number))
+        {
+            return true;
+        }
+
+        if (value.ValueKind == JsonValueKind.String
+            && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number))
+        {
+            return true;
+        }
+
+        number = 0;
+        return false;
+    }
+
+    private static string FormatNumber(double value)
+        => value.ToString(value == Math.Truncate(value) ? "0" : "0.##", CultureInfo.InvariantCulture);
 
     private ResolvedCredential ResolveCredential()
     {

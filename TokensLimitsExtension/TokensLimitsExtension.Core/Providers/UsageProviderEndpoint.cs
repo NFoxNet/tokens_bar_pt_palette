@@ -74,14 +74,14 @@ public static class UsageProviderEndpointCatalog
                 Get("web-usage", "https://claude.ai/api/organizations/{accountId}/usage", cookie: true, apiKey: false),
                 Get("web-credits", "https://claude.ai/api/organizations/{accountId}/prepaid/credits", cookie: true, apiKey: false),
             ],
-            ["clawrouter"] = [Get("usage", "https://clawrouter.openclaw.ai/api/usage", baseUrl: true)],
-            ["clinepass"] = [Get("usage", "https://app.cline.bot/api/usage", cookie: true, apiKey: false, baseUrl: true)],
+            ["clawrouter"] = [Get("usage", "https://clawrouter.openclaw.ai/v1/usage", baseUrl: true)],
+            ["clinepass"] = [Get("usage", "https://api.cline.bot/api/v1/users/me/plan/usage-limits")],
             ["codebuff"] = [new UsageProviderEndpoint("usage", "https://www.codebuff.com/api/v1/usage", "POST", "Authorization", "Bearer ", RequiresApiKey: true, UseConfiguredBaseUrl: true, RequestBody: "{\"fingerprintId\":\"tokens-limits\"}")],
             ["commandcode"] = [Get("credits", "https://api.commandcode.ai/internal/billing/credits", cookie: true, apiKey: false)],
             ["copilot"] = [Get("budget", "https://github.com/settings/billing/budgets", cookie: true, apiKey: false)],
-            ["crof"] = [Get("usage", "https://crof.ai/api/usage", baseUrl: true)],
+            ["crof"] = [Get("usage", "https://crof.ai/usage_api/", baseUrl: true)],
             ["cursor"] = [Get("usage-summary", "https://cursor.com/api/usage-summary", cookie: true, apiKey: false)],
-            ["deepgram"] = [Get("projects", "https://api.deepgram.com/v1/projects")],
+            ["deepgram"] = [Get("projects", "https://api.deepgram.com/v1/projects", prefix: "Token ")],
             ["deepinfra"] =
             [
                 Get("checklist", "https://api.deepinfra.com/payment/checklist?compute_owed=true"),
@@ -158,11 +158,25 @@ public static class UsageProviderEndpointCatalog
             ["opencodego"] = [Get("usage", "https://opencode.ai/zen/go/v1/usage", cookie: true, apiKey: false)],
             ["openrouter"] = [Get("key", "https://openrouter.ai/api/v1/key", baseUrl: true)],
             ["perplexity"] = [Get("credits", "https://www.perplexity.ai/rest/billing/credits?version=2.18&source=default", cookie: true, apiKey: false)],
-            ["poe"] = [Get("usage", "https://poe.com/api/account/usage", baseUrl: true)],
+            ["poe"] =
+            [
+                Get("current-balance", "https://api.poe.com/usage/current_balance", baseUrl: true),
+                Get("points-history", "https://api.poe.com/usage/points_history?limit=100", baseUrl: true),
+            ],
             ["qoder"] =
             [
-                Get("credits", "https://qoder.com/api/v2/me/usages/big_model_credits", cookie: true, apiKey: false),
-                Get("credits-cn", "https://qoder.com.cn/api/v2/me/usages/big_model_credits", cookie: true, apiKey: false),
+                Get("credits", "https://qoder.com/api/v2/me/usages/big_model_credits", cookie: true, apiKey: false,
+                    headers: new Dictionary<string, string>
+                    {
+                        ["X-Requested-With"] = "XMLHttpRequest",
+                        ["Bx-V"] = "2.5.35",
+                    }),
+                Get("credits-cn", "https://qoder.com.cn/api/v2/me/usages/big_model_credits", cookie: true, apiKey: false,
+                    headers: new Dictionary<string, string>
+                    {
+                        ["X-Requested-With"] = "XMLHttpRequest",
+                        ["Bx-V"] = "2.5.35",
+                    }),
             ],
             ["qwencloud"] =
             [
@@ -176,8 +190,20 @@ public static class UsageProviderEndpointCatalog
                 Get("plan-status", "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/GetStepPlanStatus", cookie: true, apiKey: false),
             ],
             ["sub2api"] = [Get("usage", "/v1/usage", baseUrl: true, requiresBaseUrl: true)],
-            ["synthetic"] = [Get("usage", "/v1/usage", baseUrl: true, requiresBaseUrl: true)],
-            ["t3chat"] = [Get("customer", "https://t3.chat/api/trpc/getCustomerData", cookie: true, apiKey: false)],
+            ["synthetic"] = [Get("usage", "https://api.synthetic.new/v2/quotas", baseUrl: true)],
+            ["t3chat"] = [Get(
+                "customer",
+                "https://t3.chat/api/trpc/getCustomerData?batch=1&input=%7B%220%22%3A%7B%22json%22%3A%7B%22sessionId%22%3Anull%7D%2C%22meta%22%3A%7B%22values%22%3A%7B%22sessionId%22%3A%5B%22undefined%22%5D%7D%7D%7D%7D",
+                cookie: true,
+                apiKey: false,
+                headers: new Dictionary<string, string>
+                {
+                    ["Origin"] = "https://t3.chat",
+                    ["Referer"] = "https://t3.chat/settings/customization",
+                    ["trpc-accept"] = "application/jsonl",
+                    ["x-trpc-source"] = "web-client",
+                    ["x-trpc-batch"] = "true",
+                })],
             ["venice"] = [Get("balance", "https://api.venice.ai/api/v1/billing/balance", baseUrl: true)],
             ["vertexai"] = [Get("quota", "https://monitoring.googleapis.com/v3/projects/{projectId}/timeSeries")],
             ["warp"] = [new UsageProviderEndpoint(
