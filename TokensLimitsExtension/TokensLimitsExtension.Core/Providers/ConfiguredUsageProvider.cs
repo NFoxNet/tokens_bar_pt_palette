@@ -176,6 +176,37 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             }
         }
 
+        if (Descriptor.Id.Equals("openrouter", StringComparison.OrdinalIgnoreCase))
+        {
+            var referer = _configuration.GetValue(Descriptor.Id, "httpReferer");
+            var title = _configuration.GetValue(Descriptor.Id, "clientTitle");
+            if (!string.IsNullOrWhiteSpace(referer))
+            {
+                request.Headers.TryAddWithoutValidation("HTTP-Referer", referer);
+            }
+
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                request.Headers.TryAddWithoutValidation("X-Title", title);
+            }
+        }
+
+        if (Descriptor.Id.Equals("zai", StringComparison.OrdinalIgnoreCase)
+            && _configuration.GetValue(Descriptor.Id, "scope")?.Equals("team", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            var organization = _configuration.GetValue(Descriptor.Id, "accountId");
+            var project = _configuration.GetValue(Descriptor.Id, "projectId");
+            if (!string.IsNullOrWhiteSpace(organization))
+            {
+                request.Headers.TryAddWithoutValidation("Bigmodel-Organization", organization);
+            }
+
+            if (!string.IsNullOrWhiteSpace(project))
+            {
+                request.Headers.TryAddWithoutValidation("Bigmodel-Project", project);
+            }
+        }
+
         if (!string.Equals(endpoint.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(endpoint.HttpMethod, "HEAD", StringComparison.OrdinalIgnoreCase))
         {
@@ -208,7 +239,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
     private Uri ResolveUrl(UsageProviderEndpoint endpoint)
     {
-        var endpointUrl = endpoint.Url;
+        var endpointUrl = ResolveProviderEndpointUrl(endpoint);
         if (string.IsNullOrWhiteSpace(endpointUrl))
         {
             throw new UsageProviderConfigurationException(
@@ -297,6 +328,36 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         }
 
         return AddProviderQuery(new Uri(configuredBaseUri, replaced), endpoint);
+    }
+
+    private string? ResolveProviderEndpointUrl(UsageProviderEndpoint endpoint)
+    {
+        var endpointUrl = endpoint.Url;
+        if (!Descriptor.Id.Equals("zai", StringComparison.OrdinalIgnoreCase))
+        {
+            return endpointUrl;
+        }
+
+        var settingKey = endpoint.Name.ToLowerInvariant() switch
+        {
+            "quota" => "quotaEndpoint",
+            "model-usage" => "modelUsageEndpoint",
+            "balance-cn" => "balanceEndpoint",
+            _ => null,
+        };
+        var overrideUrl = settingKey is null ? null : _configuration.GetValue(Descriptor.Id, settingKey);
+        if (!string.IsNullOrWhiteSpace(overrideUrl))
+        {
+            return overrideUrl;
+        }
+
+        if (_configuration.GetValue(Descriptor.Id, "region")?.Equals("bigmodel-cn", StringComparison.OrdinalIgnoreCase) == true
+            && endpointUrl is not null)
+        {
+            return endpointUrl.Replace("api.z.ai", "open.bigmodel.cn", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return endpointUrl;
     }
 
     private Uri AddProviderQuery(Uri uri, UsageProviderEndpoint endpoint)
@@ -437,7 +498,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 .ToArray();
         }
 
-        if (projects.Count == 0)
+        if (projects.Length == 0)
         {
             throw new UsageProviderRequestException("Deepgram не вернул ни одного проекта.");
         }

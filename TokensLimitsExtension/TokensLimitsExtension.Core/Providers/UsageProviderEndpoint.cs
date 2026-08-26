@@ -166,7 +166,11 @@ public static class UsageProviderEndpointCatalog
                 Get("workspace-usage", "https://opencode.ai/workspace/{accountId}/usage", cookie: true, apiKey: false),
             ],
             ["opencodego"] = [Get("usage", "https://opencode.ai/zen/go/v1/usage", cookie: true, apiKey: false)],
-            ["openrouter"] = [Get("key", "https://openrouter.ai/api/v1/key", baseUrl: true)],
+            ["openrouter"] =
+            [
+                Get("credits", "https://openrouter.ai/api/v1/credits", baseUrl: true),
+                Get("key", "https://openrouter.ai/api/v1/key", baseUrl: true),
+            ],
             ["perplexity"] = [Get("credits", "https://www.perplexity.ai/rest/billing/credits?version=2.18&source=default", cookie: true, apiKey: false)],
             ["poe"] =
             [
