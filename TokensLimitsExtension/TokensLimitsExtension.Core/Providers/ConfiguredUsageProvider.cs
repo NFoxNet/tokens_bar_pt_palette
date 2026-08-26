@@ -1,7 +1,10 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
+using System.Xml;
+using System.Xml.Linq;
 using TokensLimitsExtension.Core.Models;
 
 namespace TokensLimitsExtension.Core.Providers;
@@ -18,7 +21,6 @@ public sealed class UsageProviderRequestException(string message, Exception? inn
 /// </summary>
 public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 {
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
     private readonly UsageProviderDescriptor _descriptor;
     private readonly IUsageProviderConfiguration _configuration;
     private readonly HttpClient _httpClient;
@@ -132,6 +134,15 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 endpoint.ApiKeyPrefix + credential.ApiKey);
         }
 
+        if (!string.Equals(endpoint.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(endpoint.HttpMethod, "HEAD", StringComparison.OrdinalIgnoreCase))
+        {
+            request.Content = new StringContent(
+                endpoint.RequestBody ?? "{}",
+                Encoding.UTF8,
+                "application/json");
+        }
+
         if (endpoint.Name.Equals("usage", StringComparison.OrdinalIgnoreCase)
             && endpoint.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase))
         {
@@ -228,9 +239,16 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             throw new UsageProviderConfigurationException($"Файл данных {path} не найден.");
         }
 
-        await using var stream = File.OpenRead(path);
-        using var documentFromFile = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-        return UsageJsonParser.Parse(Descriptor, "local", documentFromFile.RootElement, DateTimeOffset.UtcNow);
+        var raw = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var documentFromFile = JsonDocument.Parse(raw);
+            return UsageJsonParser.Parse(Descriptor, "local", documentFromFile.RootElement, DateTimeOffset.UtcNow);
+        }
+        catch (JsonException)
+        {
+            return UsageJsonParser.ParseXml(Descriptor, "local", raw, DateTimeOffset.UtcNow);
+        }
     }
 
     private ResolvedCredential ResolveCredential()
@@ -324,6 +342,54 @@ internal static class UsageJsonParser
         };
     }
 
+    public static UsageSnapshot ParseXml(
+        UsageProviderDescriptor descriptor,
+        string source,
+        string raw,
+        DateTimeOffset fetchedAt)
+    {
+        XDocument document;
+        try
+        {
+            document = XDocument.Parse(raw, LoadOptions.None);
+        }
+        catch (Exception ex) when (ex is XmlException or InvalidOperationException)
+        {
+            throw new UsageProviderRequestException(
+                $"Ответ {descriptor.DisplayName} не является JSON/XML с метриками.",
+                ex);
+        }
+
+        var metrics = document
+            .Descendants()
+            .SelectMany(element => element.Attributes()
+                .Select(attribute => new KeyValuePair<string, string>(attribute.Name.LocalName, attribute.Value))
+                .Append(new KeyValuePair<string, string>(element.Name.LocalName, element.Value.Trim())))
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Value)
+                && InterestingWords.Any(word => pair.Key.Contains(word, StringComparison.OrdinalIgnoreCase)))
+            .Take(32)
+            .Select(pair => new UsageMetric(PrettyName(pair.Key), pair.Value))
+            .ToArray();
+        if (metrics.Length == 0)
+        {
+            throw new UsageProviderRequestException(
+                $"Ответ {descriptor.DisplayName} не содержит распознаваемых локальных метрик.");
+        }
+
+        return new UsageSnapshot(
+            descriptor.Id,
+            descriptor.DisplayName,
+            null,
+            null,
+            null,
+            false)
+        {
+            FetchedAt = fetchedAt,
+            Source = source,
+            Metrics = metrics,
+        };
+    }
+
     private static (UsageWindow? Primary, UsageWindow? Secondary) FindWindows(JsonElement root, DateTimeOffset fetchedAt)
     {
         var candidates = new List<UsageWindowCandidate>();
@@ -351,7 +417,7 @@ internal static class UsageJsonParser
         {
             var properties = element.EnumerateObject().ToArray();
             var used = FindNumber(properties, "used_percent", "usedPercent", "usage_percent", "usagePercent", "percentage_used");
-            var utilization = FindNumber(properties, "utilization", "utilization_percent");
+            var utilization = FindNumber(properties, "utilization", "utilization_percent", "usage_percentage", "usagePercentage");
             var remaining = FindNumber(properties, "remaining_percent", "remainingPercent", "percentage_remaining");
             var limit = FindNumber(properties, "limit", "quota", "max", "maximum");
             var amountUsed = FindNumber(properties, "used", "usage", "consumed", "current");
