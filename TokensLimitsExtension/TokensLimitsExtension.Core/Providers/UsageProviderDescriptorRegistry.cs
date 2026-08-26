@@ -27,6 +27,14 @@ public static class UsageProviderDescriptorRegistry
     private static UsageProviderSettingDescriptor Region()
         => new("region", "Регион", "Регион API, если провайдер его требует.", false, null, "us-east-1");
 
+    private static UsageProviderSettingDescriptor Plain(
+        string key,
+        string label,
+        string description,
+        string? environmentVariable = null,
+        string? defaultValue = null)
+        => new(key, label, description, false, environmentVariable, defaultValue);
+
     public static UsageProviderDescriptor Codex { get; } = new(
         "codex",
         "Codex",
@@ -98,7 +106,19 @@ public static class UsageProviderDescriptorRegistry
         Api("amp", "Amp", "https://ampcode.com/settings/usage", "AMP_API_TOKEN", withBaseUrl: true),
         new("antigravity", "Antigravity", UsageProviderAuthKind.OAuth, "https://antigravity.google", settings: [new("credentialsJson", "OAuth credentials JSON", "OAuth credentials для Antigravity.", true)]),
         CookieProvider("augment", "Augment", "https://app.augmentcode.com/account/subscription"),
-        Api("azureopenai", "Azure OpenAI", "https://ai.azure.com", "AZURE_OPENAI_API_KEY", withBaseUrl: true, withProject: true),
+        new(
+            "azureopenai",
+            "Azure OpenAI",
+            UsageProviderAuthKind.ApiKey,
+            "https://ai.azure.com",
+            settings:
+            [
+                ApiKey("AZURE_OPENAI_API_KEY"),
+                BaseUrl("AZURE_OPENAI_ENDPOINT"),
+                Plain("deploymentName", "Deployment", "Имя deployment Azure OpenAI.", "AZURE_OPENAI_DEPLOYMENT"),
+                Plain("apiVersion", "Версия API", "Версия Azure OpenAI API.", "AZURE_OPENAI_API_VERSION", "2024-10-21"),
+            ],
+            sourceDescription: "Проверка доступности указанного Azure OpenAI deployment через официальный chat completions API; Azure не публикует общий процент квоты этим endpoint.") ,
         Api("bedrock", "AWS Bedrock", "https://console.aws.amazon.com/bedrock", "AWS_ACCESS_KEY_ID", withBaseUrl: true, withRegion: true),
         Api("chutes", "Chutes", "https://chutes.ai", "CHUTES_API_KEY", withBaseUrl: true),
         new("claude", "Claude", UsageProviderAuthKind.OAuthOrCookie, "https://claude.ai/settings/usage", settings: [ApiKey("ANTHROPIC_API_KEY"), Cookie(), Account("Организация")]),
@@ -154,7 +174,7 @@ public static class UsageProviderDescriptorRegistry
         Api("warp", "Warp", "https://docs.warp.dev/reference/cli/api-keys", "WARP_API_KEY", withBaseUrl: true),
         Api("wayfinder", "Wayfinder", "", "WAYFINDER_API_KEY", withBaseUrl: true),
         CookieProvider("windsurf", "Windsurf", "https://windsurf.com/subscription/usage"),
-        Api("xai", "xAI", "https://console.x.ai", "XAI_API_KEY", withBaseUrl: true, withAccount: true),
+        Api("xai", "xAI", "https://console.x.ai", "XAI_MANAGEMENT_API_KEY", withBaseUrl: true, withAccount: true),
         Api("zai", "z.ai", "https://z.ai/manage-apikey/coding-plan/personal/my-plan", "ZAI_API_KEY", withBaseUrl: true, withAccount: true, withProject: true),
         Local("zed", "Zed"),
         Api("zenmux", "ZenMux", "https://zenmux.ai/platform/management", "ZENMUX_API_KEY", withBaseUrl: true),
