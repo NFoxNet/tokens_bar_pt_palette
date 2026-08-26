@@ -93,13 +93,16 @@ public static class UsageProviderDescriptorRegistry
     private static UsageProviderDescriptor Local(
         string id,
         string displayName,
-        string? dashboardUrl = null)
+        string? dashboardUrl = null,
+        string settingKey = "dataPath",
+        string settingLabel = "Путь к данным",
+        string settingDescription = "Необязательный путь к локальному файлу или каталогу провайдера.")
         => new(
             id,
             displayName,
             UsageProviderAuthKind.Local,
             dashboardUrl,
-            settings: [new("dataPath", "Путь к данным", "Необязательный путь к локальному файлу или каталогу провайдера.")],
+            settings: [new(settingKey, settingLabel, settingDescription)],
             sourceDescription: "Локальный источник провайдера; сетевые лимиты не придумываются.");
 
     public static IReadOnlyList<UsageProviderDescriptor> All { get; } =
@@ -158,10 +161,21 @@ public static class UsageProviderDescriptorRegistry
         CookieProvider("grok", "Grok", "https://grok.com/?_s=usage"),
         Api("groq", "Groq", "https://console.groq.com/dashboard/usage", "GROQ_API_KEY", withBaseUrl: true),
         Api("ibmbob", "IBM Bob", "https://bob.ibm.com", "IBM_BOB_API_KEY", withBaseUrl: true),
-        Local("jetbrains", "JetBrains AI"),
+        Local(
+            "jetbrains",
+            "JetBrains AI",
+            settingKey: "dataPath",
+            settingLabel: "Путь к quota-файлу",
+            settingDescription: "Необязательный путь к AIAssistantQuotaManager2.xml. Если пусто, расширение найдёт последний профиль JetBrains автоматически."),
         Api("kilo", "Kilo", "https://app.kilo.ai/usage", "KILO_API_KEY", withBaseUrl: true),
         new("kimi", "Kimi Code", UsageProviderAuthKind.ApiKeyOrCookie, "https://www.kimi.com/code/console", settings: [ApiKey("KIMI_API_KEY"), Cookie(), BaseUrl()]),
-        Local("kiro", "Kiro", "https://app.kiro.dev/account/usage"),
+        Local(
+            "kiro",
+            "Kiro",
+            "https://app.kiro.dev/account/usage",
+            settingKey: "cliPath",
+            settingLabel: "Путь к kiro-cli",
+            settingDescription: "Необязательный путь к kiro-cli.exe. Если пусто, используется kiro-cli из PATH."),
         Api("litellm", "LiteLLM", "", "LITELLM_API_KEY", withBaseUrl: true),
         Api("llmproxy", "LLM Proxy", "", "LLMPROXY_API_KEY", withBaseUrl: true),
         CookieProvider("longcat", "LongCat", "https://longcat.chat/platform/"),

@@ -320,6 +320,39 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task JetBrainsQuotaFileIsDetectedFromTheOfficialLocalFormat()
+    {
+        var reset = DateTimeOffset.UtcNow.AddDays(12);
+        var path = Path.Combine(Path.GetTempPath(), $"AIAssistantQuotaManager2-{Guid.NewGuid():N}.xml");
+        var xml = $$$"""
+            <application>
+              <component name="AIAssistantQuotaManager2">
+                <option name="quotaInfo" value="{&quot;type&quot;:&quot;monthly&quot;,&quot;current&quot;:&quot;25&quot;,&quot;maximum&quot;:&quot;100&quot;,&quot;until&quot;:&quot;{{{reset:O}}}&quot;,&quot;tariffQuota&quot;:{&quot;available&quot;:&quot;75&quot;}}" />
+                <option name="nextRefill" value="{&quot;next&quot;:&quot;{{{reset:O}}}&quot;}" />
+              </component>
+            </application>
+            """;
+        await File.WriteAllTextAsync(path, xml);
+        try
+        {
+            using var provider = new ConfiguredUsageProvider(
+                UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "jetbrains"),
+                new TestConfiguration(("jetbrains", "dataPath", path)),
+                new HttpClient());
+
+            var snapshot = await provider.GetUsageSnapshotAsync();
+
+            Assert.Equal(25, snapshot.PrimaryWindow!.UsedPercent);
+            Assert.Equal(reset, snapshot.PrimaryWindow.ResetAt);
+            Assert.Contains(snapshot.Metrics, metric => metric.Name == "Credits remaining" && metric.Value == "75");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task OpenAiUsageUsesAdminKeyAndFollowsUsagePagination()
     {
         var handler = new OpenAiHandler();
