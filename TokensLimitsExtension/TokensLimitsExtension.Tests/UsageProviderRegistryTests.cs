@@ -56,9 +56,9 @@ public sealed class UsageProviderRegistryTests
 
         Assert.Equal("codex", snapshot.ProviderId);
         Assert.Equal("Codex", snapshot.ProviderDisplayName);
-        Assert.Equal(38, snapshot.PrimaryWindow.UsedPercent);
+        Assert.Equal(38, snapshot.PrimaryWindow!.UsedPercent);
         Assert.Equal(5 * 60 * 60, snapshot.PrimaryWindow.LimitWindowSeconds);
-        Assert.Equal(7 * 24 * 60 * 60, snapshot.SecondaryWindow.LimitWindowSeconds);
+        Assert.Equal(7 * 24 * 60 * 60, snapshot.SecondaryWindow!.LimitWindowSeconds);
         Assert.Equal("pro", snapshot.Plan);
         Assert.False(snapshot.IsEstimate);
         var additional = Assert.Single(snapshot.AdditionalRateLimits);

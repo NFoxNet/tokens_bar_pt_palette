@@ -39,4 +39,18 @@ public sealed class CodexUsageNormalizerTests
 
         Assert.Equal("сброс уже прошёл", CodexUsageNormalizer.FormatTimeUntilReset(now.AddSeconds(-1), now));
     }
+
+    [Fact]
+    public void FormatDockSubtitleUsesRemainingPercentAndMarksMissingWindow()
+    {
+        var snapshot = new TokensLimitsExtension.Core.Models.UsageSnapshot(
+            "codex",
+            "Codex",
+            new TokensLimitsExtension.Core.Models.UsageWindow(2, DateTimeOffset.UtcNow, 18_000),
+            null,
+            null,
+            false);
+
+        Assert.Equal("5ч\\98%, 7д\\—", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot));
+    }
 }

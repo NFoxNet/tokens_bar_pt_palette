@@ -10,25 +10,27 @@ namespace TokensLimitsExtension.IntegrationTests;
 public sealed class TokensLimitsPageIntegrationTests
 {
     [Fact]
-    public void PageReturnsTwoLimitItemsWithExpectedTitles()
+    public async Task PageReturnsDetailedLimitItemsWithExpectedTitles()
     {
         var now = DateTimeOffset.UtcNow;
         using var page = new TokensLimitsPage(new FakeUsageProvider(
             new CodexUsageSnapshot(38, now.AddHours(1), 12, now.AddDays(2), "pro", false)));
 
+        await page.RefreshAsync();
         var items = page.GetItems();
 
-        Assert.Equal(2, items.Length);
+        Assert.Equal(3, items.Length);
         Assert.Contains(items, item => item.Title == "5ч");
         Assert.Contains(items, item => item.Title == "Еженедельно");
         Assert.Contains(items, item => item.Subtitle.Contains("62% осталось", StringComparison.Ordinal));
         Assert.Contains(items, item => item.Subtitle.Contains("через", StringComparison.Ordinal));
+        Assert.Contains(items, item => item.Title == "План" && item.Subtitle == "pro");
     }
 
     [Fact]
     public void CommandsProviderExposesExactlyOneCommand()
     {
-        var provider = new TokensLimitsExtensionCommandsProvider(new FakeUsageProvider(
+        using var provider = new TokensLimitsExtensionCommandsProvider(new FakeUsageProvider(
             new CodexUsageSnapshot(1, DateTimeOffset.UtcNow, 2, DateTimeOffset.UtcNow, null, true)));
 
         Assert.Single(provider.TopLevelCommands());
@@ -67,7 +69,7 @@ public sealed class TokensLimitsPageIntegrationTests
         var dockItem = Assert.Single(wrappedBand.Items);
         Assert.Equal("Other Provider", dockItem.Title);
         Assert.Equal("5ч\\90%, 7д\\80%", dockItem.Subtitle);
-        Assert.Equal("com.tokenslimits.codex.limits", dockItem.Command!.Id);
+        Assert.Equal("com.tokenslimits.provider.other-provider.limits", dockItem.Command!.Id);
         Assert.IsType<TokensLimitsPage>(dockItem.Command);
     }
 

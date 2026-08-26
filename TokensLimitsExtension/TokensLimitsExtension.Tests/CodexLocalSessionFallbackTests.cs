@@ -1,4 +1,5 @@
 using TokensLimitsExtension.Core.Services;
+using System.Text.Json;
 
 namespace TokensLimitsExtension.Tests;
 
@@ -63,8 +64,54 @@ public sealed class CodexLocalSessionFallbackTests
         }
     }
 
+    [Fact]
+    public async Task ReusesUnchangedFileAndInvalidatesItWhenItGrows()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var firstLine = CreateTokenCountLine(now.AddHours(-1));
+        await File.WriteAllTextAsync(file, firstLine + Environment.NewLine);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, 10_000, 100_000, new FixedTimeProvider(now));
+
+            var first = await provider.GetSnapshotAsync(CancellationToken.None);
+            var second = await provider.GetSnapshotAsync(CancellationToken.None);
+            await File.AppendAllTextAsync(file,
+                CreateTokenCountLine(now.AddMinutes(-30)) + Environment.NewLine);
+            var third = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(first.PrimaryUsedPercent, second.PrimaryUsedPercent);
+            Assert.Equal(10, first.PrimaryUsedPercent);
+            Assert.Equal(20, third.PrimaryUsedPercent);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
     }
+
+    private static string CreateTokenCountLine(DateTimeOffset timestamp)
+        => JsonSerializer.Serialize(new
+        {
+            timestamp,
+            type = "event_msg",
+            payload = new
+            {
+                type = "token_count",
+                info = new
+                {
+                    last_token_usage = new { total_tokens = 1000 },
+                },
+            },
+        });
 }
