@@ -3168,6 +3168,22 @@ internal static class UsageJsonParser
                 "weeklyQuotaResetAtUnix",
                 "quotaResetDate");
             var effectiveReset = reset ?? inheritedReset;
+            if (effectiveReset is null)
+            {
+                var resetInSeconds = FindNumber(
+                    properties,
+                    "resetInSec",
+                    "resetInSeconds",
+                    "resetSeconds",
+                    "reset_sec",
+                    "reset_in_sec",
+                    "resetsInSec",
+                    "resetsInSeconds");
+                if (resetInSeconds is > 0)
+                {
+                    effectiveReset = fetchedAt.AddSeconds(resetInSeconds.Value);
+                }
+            }
             var t3FourHour = FindNumber(properties, "usageFourHourPercentage");
             var t3Monthly = FindNumber(properties, "usageMonthPercentage", "usagePeriodPercentage");
             if (t3FourHour is not null)

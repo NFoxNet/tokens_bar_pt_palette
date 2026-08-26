@@ -221,7 +221,13 @@ public static class UsageProviderDescriptorRegistry
             ],
             sourceDescription: "Официальные OpenAI Usage/Costs API; для организации обычно требуется Admin API-ключ.") ,
         CookieProvider("opencode", "OpenCode", "https://opencode.ai/auth"),
-        CookieProvider("opencodego", "OpenCode Go", "https://opencode.ai/auth"),
+        new(
+            "opencodego",
+            "OpenCode Go",
+            UsageProviderAuthKind.ApiKeyOrCookie,
+            "https://opencode.ai/auth",
+            settings: [ApiKey("OPENCODEGO_API_KEY"), Cookie(), Plain("workspaceId", "Рабочее пространство", "Необязательный workspace ID OpenCode Go для веб-источника.")],
+            sourceDescription: "OpenCode Go API/веб-источник; rolling и weekly берутся из ответа usage API."),
         new(
             "openrouter",
             "OpenRouter",

@@ -486,6 +486,29 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task OpenCodeGoApiUsageMapsRelativeRollingAndWeeklyResets()
+    {
+        var handler = new StubHandler("""
+            {
+              "rollingUsage": { "usagePercent": 12, "resetInSec": 1200 },
+              "weeklyUsage": { "usagePercent": 31, "resetInSec": 12000 }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "opencodego"),
+            new TestConfiguration(("opencodego", "apiKey", "opencode-go-key")),
+            new HttpClient(handler));
+
+        var before = DateTimeOffset.UtcNow;
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(12, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(31, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.InRange(snapshot.PrimaryWindow.ResetAt, before.AddSeconds(1190), before.AddSeconds(1210));
+        Assert.Equal("Bearer opencode-go-key", handler.LastRequest!.Headers.Authorization!.ToString());
+    }
+
+    [Fact]
     public async Task JetBrainsQuotaFileIsDetectedFromTheOfficialLocalFormat()
     {
         var reset = DateTimeOffset.UtcNow.AddDays(12);

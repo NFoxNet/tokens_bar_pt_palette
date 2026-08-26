@@ -260,7 +260,11 @@ public static class UsageProviderEndpointCatalog
                 Get("billing", "https://opencode.ai/_server/usage", cookie: true, apiKey: false),
                 Get("workspace-usage", "https://opencode.ai/workspace/{accountId}/usage", cookie: true, apiKey: false),
             ],
-            ["opencodego"] = [Get("usage", "https://opencode.ai/zen/go/v1/usage", cookie: true, apiKey: false)],
+            ["opencodego"] =
+            [
+                Get("api-usage", "https://opencode.ai/zen/go/v1/usage", apiKey: true),
+                Get("web-usage", "https://opencode.ai/zen/go/v1/usage", cookie: true, apiKey: false),
+            ],
             ["openrouter"] =
             [
                 Get("credits", "https://openrouter.ai/api/v1/credits", baseUrl: true),
