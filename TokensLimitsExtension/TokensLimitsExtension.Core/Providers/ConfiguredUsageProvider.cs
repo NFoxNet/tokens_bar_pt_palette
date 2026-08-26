@@ -258,6 +258,13 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             ?? (apiSetting?.EnvironmentVariable is null ? null : Environment.GetEnvironmentVariable(apiSetting.EnvironmentVariable));
         var oauthToken = _configuration.GetValue(Descriptor.Id, "oauthToken")
             ?? Environment.GetEnvironmentVariable(GetOAuthEnvironmentVariable());
+        if (string.IsNullOrWhiteSpace(oauthToken)
+            && Descriptor.Settings.Any(setting => setting.Key.Equals("credentialsJson", StringComparison.OrdinalIgnoreCase)))
+        {
+            oauthToken = ExtractAccessToken(
+                _configuration.GetValue(Descriptor.Id, "credentialsJson")
+                ?? Environment.GetEnvironmentVariable("ANTIGRAVITY_OAUTH_CREDENTIALS_JSON"));
+        }
         var cookie = _configuration.GetValue(Descriptor.Id, "cookieHeader");
 
         return new ResolvedCredential(
@@ -274,6 +281,32 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             "claude" => "CLAUDE_OAUTH_ACCESS_TOKEN",
             _ => string.Empty,
         };
+
+    private static string? ExtractAccessToken(string? credentialsJson)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(credentialsJson);
+            foreach (var name in new[] { "access_token", "accessToken", "token" })
+            {
+                if (document.RootElement.TryGetProperty(name, out var property)
+                    && property.ValueKind == JsonValueKind.String)
+                {
+                    return property.GetString();
+                }
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return null;
+    }
 
     private static string DescribeFailures(List<Exception> failures)
         => failures.Count == 0
