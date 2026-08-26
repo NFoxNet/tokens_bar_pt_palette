@@ -40,6 +40,7 @@
   <ItemGroup>
     <ProjectReference Include="..\TokensLimitsExtension.Core\TokensLimitsExtension.Core.csproj" />
     <PackageReference Include="Microsoft.CommandPalette.Extensions" />
+    <PackageReference Include="JPSoftworks.CommandPalette.Extensions.Toolkit" />
     <PackageReference Include="Microsoft.Windows.CsWinRT" />
     <PackageReference Include="Shmuelie.WinRTServer" />
 

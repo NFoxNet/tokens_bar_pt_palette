@@ -84,7 +84,7 @@ public sealed class CodexUsageClient : ICodexUsageClient
         return snapshot;
     }
 
-    private static IReadOnlyList<CodexAdditionalRateLimit> ParseAdditionalRateLimits(JsonElement root)
+    private static List<CodexAdditionalRateLimit> ParseAdditionalRateLimits(JsonElement root)
     {
         if (!root.TryGetProperty("additional_rate_limits", out var entries)
             || entries.ValueKind != JsonValueKind.Array)

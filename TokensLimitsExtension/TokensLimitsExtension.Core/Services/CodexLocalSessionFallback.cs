@@ -22,15 +22,8 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback
         long weeklyLimitTokens = 500_000,
         TimeProvider? timeProvider = null)
     {
-        if (fiveHourLimitTokens <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(fiveHourLimitTokens));
-        }
-
-        if (weeklyLimitTokens <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(weeklyLimitTokens));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(fiveHourLimitTokens);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(weeklyLimitTokens);
 
         _codexHomes = (codexHome ?? Environment.GetEnvironmentVariable("CODEX_HOME")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"))
