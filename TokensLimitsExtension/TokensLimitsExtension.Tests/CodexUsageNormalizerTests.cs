@@ -10,13 +10,13 @@ public sealed class CodexUsageNormalizerTests
     [InlineData(-10, "100% осталось")]
     [InlineData(110, "0% осталось")]
     [InlineData(37.5, "63% осталось")]
-    public void FormatRemainingPercent_ClampsAndRounds(double used, string expected)
+    public void FormatRemainingPercentClampsAndRounds(double used, string expected)
     {
         Assert.Equal(expected, CodexUsageNormalizer.FormatRemainingPercent(used));
     }
 
     [Fact]
-    public void FormatTimeUntilReset_FormatsHoursAndMinutes()
+    public void FormatTimeUntilResetFormatsHoursAndMinutes()
     {
         var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
 
@@ -24,7 +24,7 @@ public sealed class CodexUsageNormalizerTests
     }
 
     [Fact]
-    public void FormatTimeUntilReset_FormatsDaysAndHours()
+    public void FormatTimeUntilResetFormatsDaysAndHours()
     {
         var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
 
@@ -33,7 +33,7 @@ public sealed class CodexUsageNormalizerTests
     }
 
     [Fact]
-    public void FormatTimeUntilReset_ReportsPastReset()
+    public void FormatTimeUntilResetReportsPastReset()
     {
         var now = DateTimeOffset.UtcNow;
 
