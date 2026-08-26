@@ -15,7 +15,6 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
 {
     private readonly IUsageProvider _provider;
     private readonly Action<string> _logger;
-    private readonly Action<string>? _onDockSubtitleChanged;
     private readonly Timer _refreshTimer;
     private int _refreshInProgress;
     private int _disposed;
@@ -23,8 +22,8 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     public UsageDockBandItem(
         IUsageProvider provider,
         Action<string>? logger = null,
-        Action<string>? onDockSubtitleChanged = null)
-        : base(new NoOpCommand
+        ICommand? detailsCommand = null)
+        : base(detailsCommand ?? new NoOpCommand
         {
             Id = $"com.tokenslimits.provider.{provider?.Descriptor.Id}.dock",
             Name = provider?.Descriptor.DisplayName ?? "Usage limits",
@@ -32,7 +31,6 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _logger = logger ?? LogMessage;
-        _onDockSubtitleChanged = onDockSubtitleChanged;
 
         Title = _provider.Descriptor.DisplayName;
         Subtitle = "Загрузка лимитов...";
@@ -70,10 +68,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
 
             Title = snapshot.ProviderDisplayName;
             DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot);
-            Subtitle = UsageDisplayFormatter.FormatCompactBandSubtitle(
-                snapshot,
-                DateTimeOffset.UtcNow);
-            _onDockSubtitleChanged?.Invoke(DockSubtitle);
+            Subtitle = DockSubtitle;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -84,7 +79,6 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
             {
                 Subtitle = "Лимиты недоступны";
                 DockSubtitle = "Лимиты недоступны";
-                _onDockSubtitleChanged?.Invoke(DockSubtitle);
                 _logger($"[TokensLimits] ERROR: {ex.Message}");
             }
         }

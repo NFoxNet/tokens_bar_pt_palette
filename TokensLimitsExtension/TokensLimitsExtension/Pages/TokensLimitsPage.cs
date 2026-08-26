@@ -25,6 +25,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         _usageService = usageService ?? throw new ArgumentNullException(nameof(usageService));
         _logger = logger ?? LogMessage;
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
+        Id = "com.tokenslimits.codex.limits";
         Title = "Tokens Limits";
         Name = "Show Codex usage limits";
         PlaceholderText = "Codex limits";
@@ -68,13 +69,13 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         var estimatePrefix = snapshot.IsEstimate ? "Оценка: " : string.Empty;
         var primary = new ListItem(new NoOpCommand())
         {
-            Title = "5-часовой лимит",
+            Title = "5ч",
             Subtitle = $"{estimatePrefix}{CodexUsageNormalizer.FormatRemainingPercent(snapshot.PrimaryUsedPercent)} · "
                 + CodexUsageNormalizer.FormatTimeUntilReset(snapshot.PrimaryResetAt, now),
         };
         var secondary = new ListItem(new NoOpCommand())
         {
-            Title = "Недельный лимит",
+            Title = "Еженедельно",
             Subtitle = $"{estimatePrefix}{CodexUsageNormalizer.FormatRemainingPercent(snapshot.SecondaryUsedPercent)} · "
                 + CodexUsageNormalizer.FormatTimeUntilReset(snapshot.SecondaryResetAt, now),
         };

@@ -1,4 +1,5 @@
 using Microsoft.CommandPalette.Extensions;
+using Microsoft.CommandPalette.Extensions.Toolkit;
 using TokensLimitsExtension;
 using TokensLimitsExtension.Core.Models;
 using TokensLimitsExtension.Core.Providers;
@@ -18,9 +19,10 @@ public sealed class TokensLimitsPageIntegrationTests
         var items = page.GetItems();
 
         Assert.Equal(2, items.Length);
-        Assert.Contains(items, item => item.Title.Contains("5-часовой", StringComparison.Ordinal));
-        Assert.Contains(items, item => item.Title.Contains("Недельный", StringComparison.Ordinal));
+        Assert.Contains(items, item => item.Title == "5ч");
+        Assert.Contains(items, item => item.Title == "Еженедельно");
         Assert.Contains(items, item => item.Subtitle.Contains("62% осталось", StringComparison.Ordinal));
+        Assert.Contains(items, item => item.Subtitle.Contains("через", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -60,8 +62,13 @@ public sealed class TokensLimitsPageIntegrationTests
 
         var band = Assert.Single(bands);
         Assert.Equal("com.tokenslimits.provider.other-provider.band", band.Command!.Id);
-        Assert.Equal("5ч\\90%, 7д\\80%", band.Subtitle);
-        Assert.Equal("Other Provider 5ч\\90%, 7д\\80%", band.Title);
+        Assert.Equal("Other Provider", band.Title);
+        var wrappedBand = Assert.IsType<WrappedDockItem>(band);
+        var dockItem = Assert.Single(wrappedBand.Items);
+        Assert.Equal("Other Provider", dockItem.Title);
+        Assert.Equal("5ч\\90%, 7д\\80%", dockItem.Subtitle);
+        Assert.Equal("com.tokenslimits.codex.limits", dockItem.Command!.Id);
+        Assert.IsType<TokensLimitsPage>(dockItem.Command);
     }
 
     [Fact]
@@ -82,9 +89,8 @@ public sealed class TokensLimitsPageIntegrationTests
         await item.RefreshAsync();
 
         Assert.Equal("Codex-like", item.Title);
-        Assert.Contains("62% осталось", item.Subtitle, StringComparison.Ordinal);
-        Assert.Contains("88% осталось", item.Subtitle, StringComparison.Ordinal);
-        Assert.Contains("сброс", item.Subtitle, StringComparison.Ordinal);
+        Assert.Equal("5ч\\62%, 7д\\88%", item.Subtitle);
+        Assert.Equal(item.Subtitle, item.DockSubtitle);
         item.Dispose();
         Assert.True(item.IsDisposed);
     }

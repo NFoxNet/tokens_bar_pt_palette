@@ -40,7 +40,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         providerRegistry ??= UsageProviderRegistryFactory.CreateDefault(usageService);
         var providers = providerRegistry.Providers;
         var dockBands = providers
-            .Select(provider => CreateDockBand(provider, LogMessage))
+            .Select(provider => CreateDockBand(provider, LogMessage, _limitsPage))
             .ToArray();
         _dockBandItems = dockBands.Select(pair => pair.Item).ToArray();
         _dockBands = dockBands.Select(pair => pair.Band).ToArray();
@@ -75,24 +75,14 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 
     private static (UsageDockBandItem Item, ICommandItem Band) CreateDockBand(
         IUsageProvider provider,
-        Action<string> logger)
+        Action<string> logger,
+        ICommand detailsCommand)
     {
-        UsageWrappedDockItem? wrappedBand = null;
-        var item = new UsageDockBandItem(
-            provider,
-            logger,
-            dockSubtitle =>
-            {
-                if (wrappedBand is not null)
-                {
-                    wrappedBand.UpdateDockSubtitle(dockSubtitle);
-                }
-            });
-        wrappedBand = new UsageWrappedDockItem(
+        var item = new UsageDockBandItem(provider, logger, detailsCommand);
+        var wrappedBand = new WrappedDockItem(
             [item],
             $"com.tokenslimits.provider.{provider.Descriptor.Id}.band",
-            provider.Descriptor.DisplayName,
-            item.DockSubtitle)
+            provider.Descriptor.DisplayName)
         {
             Icon = item.Icon,
         };
