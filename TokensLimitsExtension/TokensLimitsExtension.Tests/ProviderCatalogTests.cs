@@ -1,4 +1,5 @@
 using System.Net;
+using System.Globalization;
 using System.Net.Http;
 using System.Text;
 using TokensLimitsExtension.Core.Providers;
@@ -483,6 +484,103 @@ public sealed class ProviderCatalogTests
         Assert.Equal("Coding Plan Pro", snapshot.Plan);
         Assert.Contains(snapshot.Metrics, metric => metric.Name == "model name" && metric.Value == "text");
         Assert.All(handler.Requests, request => Assert.Equal("Bearer minimax-key", request.Headers.Authorization!.ToString()));
+    }
+
+    [Fact]
+    public async Task MiniMaxCookiePageMapsEmbeddedCodingPlanQuota()
+    {
+        var reset = DateTimeOffset.UtcNow.AddHours(4).ToUnixTimeMilliseconds();
+        var weeklyReset = DateTimeOffset.UtcNow.AddDays(5).ToUnixTimeMilliseconds();
+        var html = """
+            <html><body>
+              <script id="__NEXT_DATA__" type="application/json">
+                {"props":{"pageProps":{"data":{"plan_name":"Coding Plan Pro","model_remains":[
+                  {
+                    "model_name":"text",
+                    "current_interval_total_count":100,
+                    "current_interval_usage_count":75,
+                    "current_interval_remaining_percent":75,
+                    "end_time":__RESET__,
+                    "current_weekly_total_count":1000,
+                    "current_weekly_usage_count":600,
+                    "current_weekly_remaining_percent":60,
+                    "weekly_end_time":__WEEKLY_RESET__
+                  }
+                ]}}}}
+              </script>
+            </body></html>
+            """
+            .Replace("__RESET__", reset.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("__WEEKLY_RESET__", weeklyReset.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+        var handler = new StubHandler(html);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "minimax"),
+            new TestConfiguration(("minimax", "cookieHeader", "session=minimax-session")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(25, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(40, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("Coding Plan Pro", snapshot.Plan);
+        Assert.Equal("session=minimax-session", handler.LastRequest!.Headers.GetValues("Cookie").Single());
+        Assert.Contains(
+            handler.LastRequest.Headers.GetValues("Accept"),
+            value => value.Contains("text/html", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CursorUsageSummaryMapsPlanQuotaAndBillingCycleReset()
+    {
+        var handler = new StubHandler("""
+            {
+              "billingCycleStart": "2030-01-01T00:00:00Z",
+              "billingCycleEnd": "2030-02-01T00:00:00Z",
+              "membershipType": "pro",
+              "individualUsage": {
+                "plan": { "used": 20, "limit": 100, "remaining": 80 }
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "cursor"),
+            new TestConfiguration(("cursor", "cookieHeader", "WorkosCursorSession=session")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(20, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(new DateTimeOffset(2030, 2, 1, 0, 0, 0, TimeSpan.Zero), snapshot.PrimaryWindow.ResetAt);
+        Assert.Equal("WorkosCursorSession=session", handler.LastRequest!.Headers.GetValues("Cookie").Single());
+    }
+
+    [Fact]
+    public async Task QoderQuotaSummaryMapsCamelCaseCreditsAndReset()
+    {
+        var reset = DateTimeOffset.UtcNow.AddDays(2);
+        var handler = new StubHandler($$"""
+            {
+              "totalQuota": {
+                "quotaSummary": {
+                  "usedValue": 33,
+                  "limitValue": 100,
+                  "remainingValue": 67,
+                  "usagePercentage": 33
+                }
+              },
+              "nextResetAt": "{{reset:O}}"
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "qoder"),
+            new TestConfiguration(("qoder", "cookieHeader", "qoder-session=session")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(33, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(reset, snapshot.PrimaryWindow.ResetAt);
+        Assert.Equal("qoder-session=session", handler.LastRequest!.Headers.GetValues("Cookie").Single());
     }
 
     [Fact]

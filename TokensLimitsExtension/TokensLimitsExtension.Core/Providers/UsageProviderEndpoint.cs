@@ -118,7 +118,16 @@ public static class UsageProviderEndpointCatalog
                 Get("budget", "https://github.com/settings/billing/budgets", cookie: true, apiKey: false),
             ],
             ["crof"] = [Get("usage", "https://crof.ai/usage_api/", baseUrl: true)],
-            ["cursor"] = [Get("usage-summary", "https://cursor.com/api/usage-summary", cookie: true, apiKey: false)],
+            ["cursor"] = [new UsageProviderEndpoint(
+                "usage-summary",
+                "https://cursor.com/api/usage-summary",
+                RequiresCookie: true,
+                Headers: new Dictionary<string, string>
+                {
+                    ["Accept"] = "application/json",
+                    ["Origin"] = "https://cursor.com",
+                    ["Referer"] = "https://cursor.com/dashboard?tab=usage",
+                })],
             ["deepgram"] = [Get("projects", "https://api.deepgram.com/v1/projects", prefix: "Token ", baseUrl: true)],
             ["deepinfra"] =
             [
@@ -229,6 +238,17 @@ public static class UsageProviderEndpointCatalog
             ],
             ["minimax"] =
             [
+                new UsageProviderEndpoint(
+                    "web-coding-plan",
+                    "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3",
+                    RequiresCookie: true,
+                    Headers: new Dictionary<string, string>
+                    {
+                        ["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        ["Origin"] = "https://platform.minimax.io",
+                        ["Referer"] = "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3",
+                        ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36",
+                    }),
                 Get(
                     "coding-plan-remains",
                     "https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
@@ -270,7 +290,17 @@ public static class UsageProviderEndpointCatalog
                 Get("credits", "https://openrouter.ai/api/v1/credits", baseUrl: true),
                 Get("key", "https://openrouter.ai/api/v1/key", baseUrl: true),
             ],
-            ["perplexity"] = [Get("credits", "https://www.perplexity.ai/rest/billing/credits?version=2.18&source=default", cookie: true, apiKey: false)],
+            ["perplexity"] = [new UsageProviderEndpoint(
+                "credits",
+                "https://www.perplexity.ai/rest/billing/credits?version=2.18&source=default",
+                RequiresCookie: true,
+                Headers: new Dictionary<string, string>
+                {
+                    ["Accept"] = "application/json",
+                    ["Origin"] = "https://www.perplexity.ai",
+                    ["Referer"] = "https://www.perplexity.ai/account/usage",
+                    ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36",
+                })],
             ["poe"] =
             [
                 Get("current-balance", "https://api.poe.com/usage/current_balance", baseUrl: true),

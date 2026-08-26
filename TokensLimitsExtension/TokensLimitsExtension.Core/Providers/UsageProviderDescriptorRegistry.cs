@@ -193,7 +193,7 @@ public static class UsageProviderDescriptorRegistry
             UsageProviderAuthKind.ApiKeyOrCookie,
             "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3",
             settings: [ApiKey("MINIMAX_API_KEY"), Cookie(), BaseUrl()],
-            sourceDescription: "MiniMax coding-plan remains API; показывает model_remains без оценки по тарифу."),
+            sourceDescription: "MiniMax coding-plan API или авторизованная страница кабинета; показывает model_remains без оценки по тарифу."),
         CookieProvider("mistral", "Mistral", "https://admin.mistral.ai/organization/usage"),
         Api("moonshot", "Moonshot", "https://platform.moonshot.ai/console/account", "MOONSHOT_API_KEY", withBaseUrl: true),
         Api("neuralwatt", "Neuralwatt", "https://portal.neuralwatt.com/dashboard", "NEURALWATT_API_KEY", withBaseUrl: true),

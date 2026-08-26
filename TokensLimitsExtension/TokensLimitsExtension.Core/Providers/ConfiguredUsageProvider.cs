@@ -71,6 +71,16 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetOpenCodeSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("minimax", StringComparison.OrdinalIgnoreCase))
+        {
+            var miniMaxCredential = ResolveCredential();
+            if (string.IsNullOrWhiteSpace(miniMaxCredential.ApiKey)
+                && !string.IsNullOrWhiteSpace(miniMaxCredential.CookieHeader))
+            {
+                return await GetMiniMaxWebSnapshotAsync(miniMaxCredential, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         if (_descriptor.Id.Equals("kilo", StringComparison.OrdinalIgnoreCase))
         {
             return await GetKiloSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -671,6 +681,264 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         }
 
         return new UsageWindow(Math.Clamp(percent, 0, 100), now.AddSeconds(resetSeconds), fallbackWindowSeconds);
+    }
+
+    private async Task<UsageSnapshot> GetMiniMaxWebSnapshotAsync(
+        ResolvedCredential credential,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = UsageProviderEndpointCatalog
+            .For(Descriptor.Id)
+            .Single(item => item.Name.Equals("web-coding-plan", StringComparison.OrdinalIgnoreCase));
+        using var request = CreateRequest(endpoint, credential);
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"MiniMax web: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var now = DateTimeOffset.UtcNow;
+        if (TryParseMiniMaxWebJson(body, now, out var snapshot))
+        {
+            _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from web coding plan.");
+            return snapshot;
+        }
+
+        if (TryParseMiniMaxWebText(body, now, out snapshot))
+        {
+            _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from web coding plan text.");
+            return snapshot;
+        }
+
+        throw new UsageProviderRequestException(
+            "MiniMax web: страница не содержит реальных данных coding plan.");
+    }
+
+    private bool TryParseMiniMaxWebJson(string body, DateTimeOffset now, out UsageSnapshot snapshot)
+    {
+        snapshot = default!;
+        var script = Regex.Match(
+            body,
+            @"<script[^>]+id=[""']__NEXT_DATA__[""'][^>]*>(?<json>.*?)</script>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        if (!script.Success)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(script.Groups["json"].Value);
+            JsonElement? modelRemains = null;
+            foreach (var item in EnumerateJsonObjects(document.RootElement))
+            {
+                if (item.TryGetProperty("model_remains", out var remains)
+                    && remains.ValueKind == JsonValueKind.Array)
+                {
+                    modelRemains = remains.Clone();
+                    break;
+                }
+            }
+            if (modelRemains is null)
+            {
+                return false;
+            }
+
+            var metrics = new List<UsageMetric>();
+            var plan = FindMiniMaxPlanName(document.RootElement);
+            if (!string.IsNullOrWhiteSpace(plan))
+            {
+                metrics.Add(new UsageMetric("Plan", plan));
+            }
+
+            UsageWindow? primary = null;
+            UsageWindow? secondary = null;
+            foreach (var item in modelRemains.Value.EnumerateArray().Where(element => element.ValueKind == JsonValueKind.Object))
+            {
+                var modelName = TryGetJsonStringAny(item, "model_name", "modelName");
+                if (!string.IsNullOrWhiteSpace(modelName))
+                {
+                    metrics.Add(new UsageMetric("Model", modelName));
+                }
+
+                AddMiniMaxQuotaMetrics(item, metrics, "current_interval");
+                AddMiniMaxQuotaMetrics(item, metrics, "current_weekly");
+                primary ??= CreateMiniMaxWindow(item, "current_interval", now, 5 * 60 * 60);
+                secondary ??= CreateMiniMaxWindow(item, "current_weekly", now, 7 * 24 * 60 * 60);
+            }
+
+            if (primary is null && secondary is null)
+            {
+                return false;
+            }
+
+            snapshot = new UsageSnapshot(
+                Descriptor.Id,
+                Descriptor.DisplayName,
+                primary,
+                secondary,
+                plan,
+                false)
+            {
+                FetchedAt = now,
+                Source = "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3",
+                Metrics = metrics,
+            };
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private bool TryParseMiniMaxWebText(string body, DateTimeOffset now, out UsageSnapshot snapshot)
+    {
+        snapshot = default!;
+        var remaining = MatchMiniMaxNumber(body, "current_interval_remaining_percent");
+        var total = MatchMiniMaxNumber(body, "current_interval_total_count");
+        var remainingCount = MatchMiniMaxNumber(body, "current_interval_usage_count");
+        var resetAt = MatchMiniMaxDate(body, "end_time");
+        if (remaining is null && (total is null || remainingCount is null))
+        {
+            return false;
+        }
+
+        if (remaining is null && total > 0)
+        {
+            remaining = remainingCount / total * 100;
+        }
+
+        var metrics = new List<UsageMetric>();
+        var plan = MatchMiniMaxString(body, "plan_name")
+            ?? MatchMiniMaxString(body, "current_subscribe_title");
+        if (!string.IsNullOrWhiteSpace(plan))
+        {
+            metrics.Add(new UsageMetric("Plan", plan));
+        }
+
+        if (total is not null)
+        {
+            metrics.Add(new UsageMetric("Quota total", FormatNumber(total.Value), "requests", Limit: total));
+        }
+
+        if (remainingCount is not null)
+        {
+            metrics.Add(new UsageMetric("Quota remaining", FormatNumber(remainingCount.Value), "requests", Remaining: remainingCount));
+        }
+
+        if (remaining is null || resetAt is null)
+        {
+            return false;
+        }
+
+        snapshot = new UsageSnapshot(
+            Descriptor.Id,
+            Descriptor.DisplayName,
+            new UsageWindow(Math.Clamp(100 - remaining.Value, 0, 100), resetAt.Value, 5 * 60 * 60),
+            null,
+            plan,
+            false)
+        {
+            FetchedAt = now,
+            Source = "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3",
+            Metrics = metrics,
+        };
+        return true;
+    }
+
+    private static UsageWindow? CreateMiniMaxWindow(JsonElement item, string prefix, DateTimeOffset now, int windowSeconds)
+    {
+        var remaining = TryGetJsonDoubleAny(
+            item,
+            out var remainingPercent,
+            $"{prefix}_remaining_percent");
+        var total = TryGetJsonDoubleAny(item, out var totalCount, $"{prefix}_total_count");
+        var remainingCount = TryGetJsonDoubleAny(item, out var remainingCountValue, $"{prefix}_usage_count");
+        if (!remaining && total && remainingCount && totalCount > 0)
+        {
+            remainingPercent = remainingCountValue / totalCount * 100;
+            remaining = true;
+        }
+
+        var reset = TryGetJsonDateAny(item, $"{prefix}_end_time", $"{prefix}_endTime", "end_time", "endTime");
+        return remaining && reset is not null
+            ? new UsageWindow(Math.Clamp(100 - remainingPercent, 0, 100), reset.Value, windowSeconds)
+            : null;
+    }
+
+    private static void AddMiniMaxQuotaMetrics(JsonElement item, List<UsageMetric> metrics, string prefix)
+    {
+        if (TryGetJsonDoubleAny(item, out var total, $"{prefix}_total_count"))
+        {
+            metrics.Add(new UsageMetric($"{prefix} total", FormatNumber(total), "requests", Limit: total));
+        }
+
+        if (TryGetJsonDoubleAny(item, out var remaining, $"{prefix}_usage_count"))
+        {
+            metrics.Add(new UsageMetric($"{prefix} remaining", FormatNumber(remaining), "requests", Remaining: remaining));
+        }
+    }
+
+    private static string? FindMiniMaxPlanName(JsonElement root)
+    {
+        foreach (var item in EnumerateJsonObjects(root))
+        {
+            foreach (var property in item.EnumerateObject())
+            {
+                if ((property.Name.Equals("plan_name", StringComparison.OrdinalIgnoreCase)
+                        || property.Name.Equals("planName", StringComparison.OrdinalIgnoreCase)
+                        || property.Name.Equals("current_subscribe_title", StringComparison.OrdinalIgnoreCase)
+                        || property.Name.Equals("currentSubscribeTitle", StringComparison.OrdinalIgnoreCase))
+                    && property.Value.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(property.Value.GetString()))
+                {
+                    return property.Value.GetString();
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static double? MatchMiniMaxNumber(string body, string key)
+    {
+        var match = Regex.Match(
+            body,
+            $@"[""']?{Regex.Escape(key)}[""']?\s*:\s*[""']?(?<value>-?[0-9]+(?:\.[0-9]+)?)[""']?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success
+            && double.TryParse(match.Groups["value"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
+    }
+
+    private static DateTimeOffset? MatchMiniMaxDate(string body, string key)
+    {
+        var match = Regex.Match(
+            body,
+            $@"[""']?{Regex.Escape(key)}[""']?\s*:\s*[""']?(?<value>[0-9]{{10,13}})[""']?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success
+            || !double.TryParse(match.Groups["value"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+        {
+            return null;
+        }
+
+        return FromUnixTime(value);
+    }
+
+    private static string? MatchMiniMaxString(string body, string key)
+    {
+        var match = Regex.Match(
+            body,
+            $@"[""']?{Regex.Escape(key)}[""']?\s*:\s*[""'](?<value>[^""']+)[""']",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success ? match.Groups["value"].Value : null;
     }
 
     private static void AddOpenCodeNumberMetric(
@@ -3292,11 +3560,16 @@ internal static class UsageJsonParser
                 "currentIntervalRemainingPercent",
                 "current_interval_remaining_percent",
                 "currentWeeklyRemainingPercent",
-                "current_weekly_remaining_percent");
+                "current_weekly_remaining_percent",
+                "remainingValue",
+                "remaining_value",
+                "availableToken",
+                "available_token");
             var limit = FindNumber(
                 properties,
                 "limit",
                 "limitValue",
+                "limit_value",
                 "quota",
                 "max",
                 "maximum",
@@ -3323,6 +3596,8 @@ internal static class UsageJsonParser
                 "used_amount",
                 "total_used",
                 "currentValue",
+                "usedValue",
+                "used_value",
                 "usedToken",
                 "consumedToken",
                 "weeklyUsed",
@@ -3364,6 +3639,8 @@ internal static class UsageJsonParser
                 "weeklyEndTime",
                 "weekly_end_time",
                 "currentPeriodEnd",
+                "billingCycleEnd",
+                "billing_cycle_end",
                 "dailyQuotaResetAtUnix",
                 "weeklyQuotaResetAtUnix",
                 "quotaResetDate");
