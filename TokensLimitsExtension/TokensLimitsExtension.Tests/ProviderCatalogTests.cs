@@ -240,6 +240,32 @@ public sealed class ProviderCatalogTests
         Assert.Equal(40, snapshot.PrimaryWindow!.UsedPercent);
     }
 
+    [Fact]
+    public async Task CopilotUsageInheritsQuotaResetDateFromRootEnvelope()
+    {
+        var reset = DateTimeOffset.UtcNow.AddDays(4);
+        var handler = new StubHandler($$"""
+            {
+              "copilotPlan": "pro",
+              "quotaResetDate": "{{reset:O}}",
+              "quotaSnapshots": {
+                "premiumInteractions": { "percentRemaining": 82, "creditsUsed": 18 },
+                "chat": { "percentRemaining": 91, "creditsUsed": 9 }
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "copilot"),
+            new TestConfiguration(("copilot", "oauthToken", "github-token")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(18, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(9, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("token github-token", handler.Requests[0].Headers.Authorization!.ToString());
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {

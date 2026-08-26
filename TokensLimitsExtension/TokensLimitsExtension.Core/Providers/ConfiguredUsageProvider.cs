@@ -1119,7 +1119,8 @@ internal static class UsageJsonParser
         string path,
         List<UsageWindowCandidate> candidates,
         DateTimeOffset fetchedAt,
-        int depth)
+        int depth,
+        DateTimeOffset? inheritedReset = null)
     {
         if (depth > 8)
         {
@@ -1159,7 +1160,9 @@ internal static class UsageJsonParser
                 "nextResetTime",
                 "resetTime",
                 "dailyQuotaResetAtUnix",
-                "weeklyQuotaResetAtUnix");
+                "weeklyQuotaResetAtUnix",
+                "quotaResetDate");
+            var effectiveReset = reset ?? inheritedReset;
             var t3FourHour = FindNumber(properties, "usageFourHourPercentage");
             var t3Monthly = FindNumber(properties, "usageMonthPercentage", "usagePeriodPercentage");
             if (t3FourHour is not null)
@@ -1192,18 +1195,22 @@ internal static class UsageJsonParser
                 var seconds = FindNumber(properties, "window_seconds", "windowSeconds", "period_seconds", "periodSeconds")
                     ?? FindQuotaWindowSeconds(properties)
                     ?? GuessWindowSeconds(classificationPath);
-                if (reset is not null && seconds is not null)
+                if (effectiveReset is not null)
                 {
-                    var kind = ClassifyWindow(classificationPath, seconds.Value);
+                    var resolvedSeconds = seconds ?? 0;
+                    var kind = ClassifyWindow(classificationPath, resolvedSeconds);
                     candidates.Add(new UsageWindowCandidate(
-                        new UsageWindow(Math.Clamp(percentUsed, 0, 100), reset.Value, (int)Math.Clamp(seconds.Value, 1, int.MaxValue)),
+                        new UsageWindow(
+                            Math.Clamp(percentUsed, 0, 100),
+                            effectiveReset.Value,
+                            (int)Math.Clamp(resolvedSeconds, 0, int.MaxValue)),
                         kind));
                 }
             }
 
             foreach (var property in properties)
             {
-                CollectObjects(property.Value, Join(path, property.Name), candidates, fetchedAt, depth + 1);
+                CollectObjects(property.Value, Join(path, property.Name), candidates, fetchedAt, depth + 1, effectiveReset);
             }
         }
         else if (element.ValueKind == JsonValueKind.Array)
@@ -1211,7 +1218,7 @@ internal static class UsageJsonParser
             var index = 0;
             foreach (var item in element.EnumerateArray())
             {
-                CollectObjects(item, Join(path, index.ToString(CultureInfo.InvariantCulture)), candidates, fetchedAt, depth + 1);
+                CollectObjects(item, Join(path, index.ToString(CultureInfo.InvariantCulture)), candidates, fetchedAt, depth + 1, inheritedReset);
                 index++;
             }
         }

@@ -83,7 +83,22 @@ public static class UsageProviderEndpointCatalog
             ["clinepass"] = [Get("usage", "https://api.cline.bot/api/v1/users/me/plan/usage-limits")],
             ["codebuff"] = [new UsageProviderEndpoint("usage", "https://www.codebuff.com/api/v1/usage", "POST", "Authorization", "Bearer ", RequiresApiKey: true, UseConfiguredBaseUrl: true, RequestBody: "{\"fingerprintId\":\"tokens-limits\"}")],
             ["commandcode"] = [Get("credits", "https://api.commandcode.ai/internal/billing/credits", cookie: true, apiKey: false)],
-            ["copilot"] = [Get("budget", "https://github.com/settings/billing/budgets", cookie: true, apiKey: false)],
+            ["copilot"] =
+            [
+                Get(
+                    "usage",
+                    "https://api.github.com/copilot_internal/user",
+                    header: "Authorization",
+                    prefix: "token ",
+                    headers: new Dictionary<string, string>
+                    {
+                        ["Editor-Version"] = "vscode/1.96.2",
+                        ["Editor-Plugin-Version"] = "copilot-chat/0.26.7",
+                        ["User-Agent"] = "GitHubCopilotChat/0.26.7",
+                        ["X-Github-Api-Version"] = "2025-04-01",
+                    }),
+                Get("budget", "https://github.com/settings/billing/budgets", cookie: true, apiKey: false),
+            ],
             ["crof"] = [Get("usage", "https://crof.ai/usage_api/", baseUrl: true)],
             ["cursor"] = [Get("usage-summary", "https://cursor.com/api/usage-summary", cookie: true, apiKey: false)],
             ["deepgram"] = [Get("projects", "https://api.deepgram.com/v1/projects", prefix: "Token ", baseUrl: true)],
