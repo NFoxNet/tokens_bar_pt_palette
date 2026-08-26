@@ -46,6 +46,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
 
         _logger = logger ?? LogMessage;
         _refreshSettings = refreshSettings;
+        Id = "com.tokenslimits.overview";
         Title = "Tokens Limits";
         Name = "Show enabled provider limits";
         PlaceholderText = "Enabled providers";
