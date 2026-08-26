@@ -65,6 +65,25 @@ public sealed class ProviderCatalogTests
         Assert.Null(handler.LastRequest);
     }
 
+    [Fact]
+    public async Task ProviderSpecificEndpointUsesConfiguredAccountAndBaseUrl()
+    {
+        var handler = new StubHandler("{\"total\":{\"val\":\"-1250\"},\"canConsume\":true}");
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "xai"),
+            new TestConfiguration(
+                ("xai", "apiKey", "management-key"),
+                ("xai", "accountId", "team-123"),
+                ("xai", "baseUrl", "https://management.example.test")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "val" && metric.Value == "-1250");
+        Assert.Contains("/v1/billing/teams/team-123/prepaid/balance", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("Bearer management-key", handler.LastRequest.Headers.Authorization!.ToString());
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {
