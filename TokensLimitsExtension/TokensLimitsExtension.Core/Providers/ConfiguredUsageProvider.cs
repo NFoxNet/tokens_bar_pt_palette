@@ -351,13 +351,14 @@ internal static class UsageJsonParser
         {
             var properties = element.EnumerateObject().ToArray();
             var used = FindNumber(properties, "used_percent", "usedPercent", "usage_percent", "usagePercent", "percentage_used");
+            var utilization = FindNumber(properties, "utilization", "utilization_percent");
             var remaining = FindNumber(properties, "remaining_percent", "remainingPercent", "percentage_remaining");
             var limit = FindNumber(properties, "limit", "quota", "max", "maximum");
             var amountUsed = FindNumber(properties, "used", "usage", "consumed", "current");
             var reset = FindDate(properties, "reset_at", "resetAt", "reset", "next_reset", "nextReset", "refill_at", "refillAt");
-            if (used is not null || remaining is not null || (limit is not null && amountUsed is not null))
+            if (used is not null || utilization is not null || remaining is not null || (limit is not null && amountUsed is not null))
             {
-                var percentUsed = used
+                var percentUsed = used ?? NormalizeUtilization(utilization)
                     ?? (remaining is not null ? 100d - remaining.Value : 100d * amountUsed!.Value / limit!.Value);
                 var seconds = FindNumber(properties, "window_seconds", "windowSeconds", "period_seconds", "periodSeconds")
                     ?? GuessWindowSeconds(path);
@@ -547,6 +548,18 @@ internal static class UsageJsonParser
 
     private static string Join(string path, string part)
         => string.IsNullOrWhiteSpace(path) ? part : $"{path}.{part}";
+
+    private static double? NormalizeUtilization(double? utilization)
+    {
+        if (utilization is null)
+        {
+            return null;
+        }
+
+        return utilization.Value is >= 0 and <= 1
+            ? utilization.Value * 100
+            : utilization.Value;
+    }
 
     private sealed record UsageWindowCandidate(UsageWindow Window, WindowKind Kind);
 

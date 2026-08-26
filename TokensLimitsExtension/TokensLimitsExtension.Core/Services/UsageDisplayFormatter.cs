@@ -14,6 +14,16 @@ public static class UsageDisplayFormatter
     public static string FormatDockBandSubtitle(UsageSnapshot snapshot)
     {
         var estimatePrefix = snapshot.IsEstimate ? "Оценка: " : string.Empty;
+        if (snapshot.PrimaryWindow is null
+            && snapshot.SecondaryWindow is null
+            && snapshot.Metrics.Count > 0)
+        {
+            var metrics = snapshot.Metrics
+                .Take(2)
+                .Select(metric => $"{metric.Name}: {TrimMetricValue(metric.Value)}");
+            return estimatePrefix + string.Join(", ", metrics);
+        }
+
         return string.Create(
             CultureInfo.InvariantCulture,
             $"{estimatePrefix}5ч\\{FormatDockPercent(snapshot.PrimaryWindow)}, 7д\\{FormatDockPercent(snapshot.SecondaryWindow)}");
@@ -80,6 +90,9 @@ public static class UsageDisplayFormatter
 
         return $"{Math.Max(1, seconds / 60)}м";
     }
+
+    private static string TrimMetricValue(string value)
+        => value.Length <= 24 ? value : value[..24] + "…";
 
     private static int GetRemainingPercent(double usedPercent)
     {
