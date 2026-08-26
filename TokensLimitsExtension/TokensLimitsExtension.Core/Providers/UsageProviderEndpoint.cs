@@ -81,7 +81,7 @@ public static class UsageProviderEndpointCatalog
             ["copilot"] = [Get("budget", "https://github.com/settings/billing/budgets", cookie: true, apiKey: false)],
             ["crof"] = [Get("usage", "https://crof.ai/usage_api/", baseUrl: true)],
             ["cursor"] = [Get("usage-summary", "https://cursor.com/api/usage-summary", cookie: true, apiKey: false)],
-            ["deepgram"] = [Get("projects", "https://api.deepgram.com/v1/projects", prefix: "Token ")],
+            ["deepgram"] = [Get("projects", "https://api.deepgram.com/v1/projects", prefix: "Token ", baseUrl: true)],
             ["deepinfra"] =
             [
                 Get("checklist", "https://api.deepinfra.com/payment/checklist?compute_owed=true"),

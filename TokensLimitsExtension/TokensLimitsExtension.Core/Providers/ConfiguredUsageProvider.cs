@@ -552,6 +552,12 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         var apiSetting = Descriptor.Settings.FirstOrDefault(setting => setting.Key.Equals("apiKey", StringComparison.OrdinalIgnoreCase));
         var apiKey = _configuration.GetValue(Descriptor.Id, "apiKey")
             ?? (apiSetting?.EnvironmentVariable is null ? null : Environment.GetEnvironmentVariable(apiSetting.EnvironmentVariable));
+        if (Descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(apiKey))
+        {
+            apiKey = _configuration.GetValue(Descriptor.Id, "adminApiKey")
+                ?? Environment.GetEnvironmentVariable("OPENAI_ADMIN_KEY");
+        }
         var oauthToken = _configuration.GetValue(Descriptor.Id, "oauthToken")
             ?? Environment.GetEnvironmentVariable(GetOAuthEnvironmentVariable());
         if (string.IsNullOrWhiteSpace(oauthToken)
@@ -755,21 +761,23 @@ internal static class UsageJsonParser
         if (element.ValueKind == JsonValueKind.Object)
         {
             var properties = element.EnumerateObject().ToArray();
-            var used = FindNumber(properties, "used_percent", "usedPercent", "usage_percent", "usagePercent", "percentage_used");
+            var used = FindNumber(properties, "used_percent", "usedPercent", "usage_percent", "usagePercent", "percentage_used", "percentUsed");
             var utilization = FindNumber(properties, "utilization", "utilization_percent", "usage_percentage", "usagePercentage");
-            var remaining = FindNumber(properties, "remaining_percent", "remainingPercent", "percentage_remaining");
-            var limit = FindNumber(properties, "limit", "quota", "max", "maximum");
-            var amountUsed = FindNumber(properties, "used", "usage", "consumed", "current");
-            var reset = FindDate(properties, "reset_at", "resetAt", "reset", "next_reset", "nextReset", "refill_at", "refillAt");
+            var remaining = FindNumber(properties, "remaining_percent", "remainingPercent", "percentage_remaining", "percentRemaining");
+            var limit = FindNumber(properties, "limit", "quota", "max", "maximum", "total", "capacity", "allowance", "grant_amount", "total_granted");
+            var amountUsed = FindNumber(properties, "used", "usage", "consumed", "current", "used_amount", "total_used", "currentValue");
+            var reset = FindDate(properties, "reset_at", "resetAt", "reset", "next_reset", "nextReset", "refill_at", "refillAt", "resetsAt", "expires_at", "expiration", "nextRefreshTime");
             if (used is not null || utilization is not null || remaining is not null || (limit is not null && amountUsed is not null))
             {
                 var percentUsed = used ?? NormalizeUtilization(utilization)
                     ?? (remaining is not null ? 100d - remaining.Value : 100d * amountUsed!.Value / limit!.Value);
+                var windowName = FindString(properties, "type", "period", "window", "name", "limit_name");
+                var classificationPath = string.IsNullOrWhiteSpace(windowName) ? path : $"{path}.{windowName}";
                 var seconds = FindNumber(properties, "window_seconds", "windowSeconds", "period_seconds", "periodSeconds")
-                    ?? GuessWindowSeconds(path);
+                    ?? GuessWindowSeconds(classificationPath);
                 if (reset is not null && seconds is not null)
                 {
-                    var kind = ClassifyWindow(path, seconds.Value);
+                    var kind = ClassifyWindow(classificationPath, seconds.Value);
                     candidates.Add(new UsageWindowCandidate(
                         new UsageWindow(Math.Clamp(percentUsed, 0, 100), reset.Value, (int)Math.Clamp(seconds.Value, 1, int.MaxValue)),
                         kind));
@@ -867,6 +875,21 @@ internal static class UsageJsonParser
                 && double.TryParse(property.Value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number))
             {
                 return number;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindString(JsonProperty[] properties, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var property = properties.FirstOrDefault(property => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (property.Value.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(property.Value.GetString()))
+            {
+                return property.Value.GetString();
             }
         }
 

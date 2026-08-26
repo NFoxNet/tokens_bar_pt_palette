@@ -10,6 +10,12 @@ public static class UsageProviderDescriptorRegistry
     private static UsageProviderSettingDescriptor ApiKey(string environmentVariable, string label = "API-ключ")
         => new("apiKey", label, $"Ключ провайдера. Также можно задать переменную {environmentVariable}.", true, environmentVariable);
 
+    private static UsageProviderSettingDescriptor ApiKeyField(
+        string key,
+        string environmentVariable,
+        string label)
+        => new(key, label, $"Ключ провайдера. Также можно задать переменную {environmentVariable}.", true, environmentVariable);
+
     private static UsageProviderSettingDescriptor Cookie()
         => new("cookieHeader", "Cookie-заголовок", "Необязательный Cookie-заголовок для личного веб-кабинета.", true);
 
@@ -121,7 +127,7 @@ public static class UsageProviderDescriptorRegistry
             sourceDescription: "Проверка доступности указанного Azure OpenAI deployment через официальный chat completions API; Azure не публикует общий процент квоты этим endpoint.") ,
         Api("bedrock", "AWS Bedrock", "https://console.aws.amazon.com/bedrock", "AWS_ACCESS_KEY_ID", withBaseUrl: true, withRegion: true),
         Api("chutes", "Chutes", "https://chutes.ai", "CHUTES_API_KEY", withBaseUrl: true),
-        new("claude", "Claude", UsageProviderAuthKind.OAuthOrCookie, "https://claude.ai/settings/usage", settings: [ApiKey("ANTHROPIC_API_KEY"), Cookie(), Account("Организация")]),
+        new("claude", "Claude", UsageProviderAuthKind.OAuthOrCookie, "https://claude.ai/settings/usage", settings: [ApiKey("ANTHROPIC_API_KEY", "Admin API-ключ"), Cookie(), Account("Организация")]),
         Api("clawrouter", "ClawRouter", "https://clawrouter.openclaw.ai/dashboard/access", "CLAWROUTER_API_KEY", withBaseUrl: true),
         Api("clinepass", "ClinePass", "https://app.cline.bot/dashboard/subscription", "CLINE_API_KEY"),
         Api("codebuff", "Codebuff", "https://www.codebuff.com/usage", "CODEBUFF_API_KEY", withBaseUrl: true),
@@ -156,7 +162,20 @@ public static class UsageProviderDescriptorRegistry
         Api("neuralwatt", "Neuralwatt", "https://portal.neuralwatt.com/dashboard", "NEURALWATT_API_KEY", withBaseUrl: true),
         CookieProvider("notion", "Notion AI", "https://app.notion.com/"),
         Local("ollama", "Ollama", "https://ollama.com/settings"),
-        Api("openai", "OpenAI", "https://platform.openai.com/usage", "OPENAI_API_KEY", withBaseUrl: true, withAccount: true, withProject: true),
+        new(
+            "openai",
+            "OpenAI",
+            UsageProviderAuthKind.ApiKey,
+            "https://platform.openai.com/usage",
+            settings:
+            [
+                ApiKey("OPENAI_API_KEY"),
+                ApiKeyField("adminApiKey", "OPENAI_ADMIN_KEY", "Admin API-ключ"),
+                BaseUrl(),
+                Account(),
+                Project(),
+            ],
+            sourceDescription: "Официальные OpenAI Usage/Costs API; для организации обычно требуется Admin API-ключ.") ,
         CookieProvider("opencode", "OpenCode", "https://opencode.ai/auth"),
         CookieProvider("opencodego", "OpenCode Go", "https://opencode.ai/auth"),
         Api("openrouter", "OpenRouter", "https://openrouter.ai/settings/credits", "OPENROUTER_API_KEY", withBaseUrl: true),

@@ -84,6 +84,33 @@ public sealed class ProviderCatalogTests
         Assert.Equal("Bearer management-key", handler.LastRequest.Headers.Authorization!.ToString());
     }
 
+    [Fact]
+    public async Task ClinePassResponseProducesFiveHourAndWeeklyWindows()
+    {
+        var reset = DateTimeOffset.UtcNow.AddHours(2);
+        var handler = new StubHandler($$"""
+            {
+              "success": true,
+              "data": {
+                "limits": [
+                  { "type": "five_hour", "percentUsed": 12, "resetsAt": "{{reset:O}}" },
+                  { "type": "weekly", "percentUsed": 31, "resetsAt": "{{reset.AddDays(5):O}}" }
+                ]
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "clinepass"),
+            new TestConfiguration(("clinepass", "apiKey", "cline-key")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(12, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(31, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("Bearer cline-key", handler.LastRequest!.Headers.Authorization!.ToString());
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {
