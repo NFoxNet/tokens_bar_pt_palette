@@ -63,6 +63,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetAlibabaGatewaySnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("t3chat", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GetT3ChatSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var endpoints = UsageProviderEndpointCatalog.For(_descriptor.Id);
         if (endpoints.Count == 0)
         {
@@ -137,6 +142,23 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         if (!string.IsNullOrWhiteSpace(credential.CookieHeader))
         {
             request.Headers.TryAddWithoutValidation("Cookie", credential.CookieHeader);
+        }
+
+        if (Descriptor.Id.Equals("manus", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(credential.CookieHeader))
+        {
+            var session = Regex.Match(
+                credential.CookieHeader,
+                @"(?:^|;\s*)session_id=([^;]+)",
+                RegexOptions.IgnoreCase);
+            if (session.Success)
+            {
+                request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {session.Groups[1].Value}");
+            }
+
+            request.Headers.TryAddWithoutValidation("Origin", "https://manus.im");
+            request.Headers.TryAddWithoutValidation("Referer", "https://manus.im/");
+            request.Headers.TryAddWithoutValidation("Connect-Protocol-Version", "1");
         }
 
         if (endpoint.RequiresApiKey && !string.IsNullOrWhiteSpace(credential.ApiKey))
@@ -381,7 +403,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         }
 
         var projectId = _configuration.GetValue(Descriptor.Id, "projectId");
-        IReadOnlyList<(string Id, string Name)> projects;
+        (string Id, string Name)[] projects;
         if (!string.IsNullOrWhiteSpace(projectId))
         {
             projects = [(projectId, projectId)];
@@ -608,6 +630,50 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         var snapshot = UsageJsonParser.Parse(Descriptor, "token-plan/usage", document.RootElement, DateTimeOffset.UtcNow);
         _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from token-plan gateway.");
         return snapshot;
+    }
+
+    private async Task<UsageSnapshot> GetT3ChatSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var endpoint = UsageProviderEndpointCatalog.For(Descriptor.Id).Single();
+        var credential = ResolveCredential();
+        if (string.IsNullOrWhiteSpace(credential.CookieHeader))
+        {
+            throw new UsageProviderConfigurationException("Для T3 Chat укажите Cookie-заголовок авторизованной сессии.");
+        }
+
+        using var request = CreateRequest(endpoint, credential);
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"T3 Chat: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var line in body.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                try
+                {
+                    return UsageJsonParser.Parse(Descriptor, "customer-jsonl", document.RootElement, DateTimeOffset.UtcNow);
+                }
+                catch (UsageProviderRequestException)
+                {
+                    // The tRPC stream contains several envelopes. Continue until the
+                    // customer object with usageFourHourPercentage is encountered.
+                }
+            }
+            catch (JsonException)
+            {
+                // JSONL may contain an empty/diagnostic line; ignore that line only.
+            }
+        }
+
+        throw new UsageProviderRequestException("Ответ T3 Chat не содержит данных customer usage.");
     }
 
     private static string? ExtractSecToken(string value)
@@ -895,6 +961,29 @@ internal static class UsageJsonParser
             }
 
             var reset = FindDate(properties, "reset_at", "resetAt", "reset", "next_reset", "nextReset", "refill_at", "refillAt", "resetsAt", "expires_at", "expiration", "nextRefreshTime", "nextResetTime");
+            var t3FourHour = FindNumber(properties, "usageFourHourPercentage");
+            var t3Monthly = FindNumber(properties, "usageMonthPercentage", "usagePeriodPercentage");
+            if (t3FourHour is not null)
+            {
+                var t3Reset = FindDate(properties, "usageFourHourNextResetAt", "usageWindowNextResetAt");
+                if (t3Reset is not null)
+                {
+                    candidates.Add(new UsageWindowCandidate(
+                        new UsageWindow(Math.Clamp(t3FourHour.Value, 0, 100), t3Reset.Value, 4 * 60 * 60),
+                        WindowKind.Primary));
+                }
+            }
+
+            if (t3Monthly is not null)
+            {
+                var t3Reset = FindDate(properties, "currentPeriodEnd");
+                if (t3Reset is not null)
+                {
+                    candidates.Add(new UsageWindowCandidate(
+                        new UsageWindow(Math.Clamp(t3Monthly.Value, 0, 100), t3Reset.Value, 30 * 24 * 60 * 60),
+                        WindowKind.Secondary));
+                }
+            }
             if (used is not null || utilization is not null || remaining is not null || (limit is not null && amountUsed is not null))
             {
                 var percentUsed = used ?? NormalizeUtilization(utilization)

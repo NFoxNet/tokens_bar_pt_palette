@@ -133,7 +133,12 @@ public static class UsageProviderEndpointCatalog
             ["litellm"] = [Get("key-info", "/key/info", baseUrl: true, requiresBaseUrl: true)],
             ["llmproxy"] = [Get("usage", "/usage", baseUrl: true, requiresBaseUrl: true)],
             ["longcat"] = [Get("token-usage", "https://longcat.chat/api/lc-platform/v1/tokenUsage", cookie: true, apiKey: false)],
-            ["manus"] = [Get("credits", "https://api.manus.im/user.v1.UserService/GetAvailableCredits", cookie: true, apiKey: false)],
+            ["manus"] = [new UsageProviderEndpoint(
+                "credits",
+                "https://api.manus.im/user.v1.UserService/GetAvailableCredits",
+                "POST",
+                RequiresCookie: true,
+                RequestBody: "{}")],
             ["mimo"] =
             [
                 Get("balance", "https://platform.xiaomimimo.com/api/v1/balance", cookie: true, apiKey: false),
