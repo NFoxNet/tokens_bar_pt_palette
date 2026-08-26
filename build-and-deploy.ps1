@@ -8,8 +8,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = (Get-Location).Path
-$projectFullPath = [IO.Path]::GetFullPath((Join-Path $repoRoot $ProjectPath))
+$repoRoot = $PSScriptRoot
+$projectFullPath = if ([IO.Path]::IsPathRooted($ProjectPath)) {
+    [IO.Path]::GetFullPath($ProjectPath)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repoRoot $ProjectPath))
+}
 $projectDirectory = Split-Path -Parent $projectFullPath
 
 if (-not (Test-Path -LiteralPath $projectFullPath -PathType Leaf)) {
@@ -19,9 +23,25 @@ if (-not (Test-Path -LiteralPath $projectFullPath -PathType Leaf)) {
 $existingPackages = @(Get-AppxPackage -Name "TokensLimitsExtension" -ErrorAction SilentlyContinue)
 if ($existingPackages.Count -gt 0) {
     Write-Host "Removing previous TokensLimitsExtension registration(s)..."
-    Get-Process -Name "TokensLimitsExtension","Microsoft.CmdPal.UI","Microsoft.CmdPal.Ext.PowerToys" -ErrorAction SilentlyContinue |
-        Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 750
+    $processesToStop = @(Get-Process -Name "TokensLimitsExtension","Microsoft.CmdPal.UI","Microsoft.CmdPal.Ext.PowerToys" -ErrorAction SilentlyContinue)
+    foreach ($process in $processesToStop) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
+
+    $stopDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $runningProcesses = @(Get-Process -Name "TokensLimitsExtension","Microsoft.CmdPal.UI","Microsoft.CmdPal.Ext.PowerToys" -ErrorAction SilentlyContinue)
+        if ($runningProcesses.Count -eq 0) {
+            break
+        }
+
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $stopDeadline)
+
+    if ($runningProcesses.Count -gt 0) {
+        throw "Unable to stop the Command Palette processes before deployment."
+    }
+
     foreach ($existingPackage in $existingPackages) {
         Remove-AppxPackage -Package $existingPackage.PackageFullName
     }
@@ -33,22 +53,21 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet msbuild failed with exit code $LASTEXITCODE"
 }
 
-$manifestCandidates = @(Get-ChildItem -LiteralPath (Join-Path $projectDirectory "bin") -Filter AppxManifest.xml -File -Recurse -ErrorAction SilentlyContinue)
-$manifest = $manifestCandidates |
-    Where-Object { $_.FullName -match "\\publish\\AppxManifest\.xml$" } |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-if ($null -eq $manifest) {
-    $manifest = $manifestCandidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$runtimeIdentifier = "win-$($Platform.ToLowerInvariant())"
+$configurationBin = Join-Path $projectDirectory "bin\$Platform\$Configuration"
+$manifestCandidates = @(Get-ChildItem -LiteralPath $configurationBin -Filter AppxManifest.xml -File -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.DirectoryName -like "*\$runtimeIdentifier" })
+if ($manifestCandidates.Count -ne 1) {
+    throw "Expected exactly one published AppxManifest.xml for $Configuration/$runtimeIdentifier below $configurationBin, found $($manifestCandidates.Count)."
 }
-if ($null -eq $manifest) {
-    throw "Publish succeeded, but no AppxManifest.xml was found below $projectDirectory\bin"
-}
+$manifest = $manifestCandidates[0]
 
 Write-Host "Registering package manifest: $($manifest.FullName)"
 Add-AppxPackage -Register $manifest.FullName -ForceUpdateFromAnyVersion
-if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
-    throw "Add-AppxPackage failed with exit code $LASTEXITCODE"
+$registeredPackage = @(Get-AppxPackage -Name "TokensLimitsExtension" -ErrorAction SilentlyContinue |
+    Where-Object { $_.InstallLocation -eq $manifest.DirectoryName })
+if ($registeredPackage.Count -eq 0) {
+    throw "Package registration completed without a discoverable TokensLimitsExtension package at $($manifest.DirectoryName)."
 }
 
 Write-Host "TokensLimitsExtension was published and registered successfully."
