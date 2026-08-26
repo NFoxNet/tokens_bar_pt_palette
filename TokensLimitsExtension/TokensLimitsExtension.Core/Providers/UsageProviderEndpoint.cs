@@ -204,8 +204,28 @@ public static class UsageProviderEndpointCatalog
             ["sakana"] = [Get("billing", "https://console.sakana.ai/billing", cookie: true, apiKey: false)],
             ["stepfun"] =
             [
-                Get("rate-limit", "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/QueryStepPlanRateLimit", cookie: true, apiKey: false),
-                Get("plan-status", "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/GetStepPlanStatus", cookie: true, apiKey: false),
+                Get(
+                    "rate-limit",
+                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/QueryStepPlanRateLimit",
+                    header: "oasis-token",
+                    prefix: "",
+                    headers: new Dictionary<string, string>
+                    {
+                        ["oasis-appid"] = "10300",
+                        ["oasis-platform"] = "web",
+                        ["oasis-webid"] = "c8a1002d2c457e758785a9979832217c7c0b884c",
+                    }),
+                Get(
+                    "plan-status",
+                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/GetStepPlanStatus",
+                    header: "oasis-token",
+                    prefix: "",
+                    headers: new Dictionary<string, string>
+                    {
+                        ["oasis-appid"] = "10300",
+                        ["oasis-platform"] = "web",
+                        ["oasis-webid"] = "c8a1002d2c457e758785a9979832217c7c0b884c",
+                    }),
             ],
             ["sub2api"] = [Get("usage", "/v1/usage", baseUrl: true, requiresBaseUrl: true)],
             ["synthetic"] = [Get("usage", "https://api.synthetic.new/v2/quotas", baseUrl: true)],

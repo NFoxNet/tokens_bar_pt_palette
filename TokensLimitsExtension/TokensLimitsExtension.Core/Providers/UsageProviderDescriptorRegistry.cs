@@ -197,7 +197,16 @@ public static class UsageProviderDescriptorRegistry
         CookieProvider("qoder", "Qoder", "https://qoder.com/account/usage"),
         CookieProvider("qwencloud", "Qwen Cloud", "https://bailian.console.aliyun.com"),
         CookieProvider("sakana", "Sakana AI", "https://console.sakana.ai/billing"),
-        CookieProvider("stepfun", "StepFun", "https://platform.stepfun.com/plan-usage"),
+        new(
+            "stepfun",
+            "StepFun",
+            UsageProviderAuthKind.ApiKey,
+            "https://platform.stepfun.com/plan-usage",
+            settings:
+            [
+                ApiKeyField("apiKey", "STEPFUN_TOKEN", "Oasis-Token"),
+            ],
+            sourceDescription: "Официальный StepFun Dashboard API; нужен действующий Oasis-Token."),
         Api("sub2api", "sub2api", "", "SUB2API_API_KEY", withBaseUrl: true),
         Api("synthetic", "Synthetic", "", "SYNTHETIC_API_KEY", withBaseUrl: true),
         CookieProvider("t3chat", "T3 Chat", "https://t3.chat/settings/subscription"),

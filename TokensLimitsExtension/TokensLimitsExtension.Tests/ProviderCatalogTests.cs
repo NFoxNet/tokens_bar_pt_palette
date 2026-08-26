@@ -182,13 +182,14 @@ public sealed class ProviderCatalogTests
             """);
         using var provider = new ConfiguredUsageProvider(
             UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "stepfun"),
-            new TestConfiguration(("stepfun", "cookieHeader", "session=test")),
+            new TestConfiguration(("stepfun", "apiKey", "oasis-token")),
             new HttpClient(handler));
 
         var snapshot = await provider.GetUsageSnapshotAsync();
 
         Assert.Equal(15, snapshot.PrimaryWindow!.UsedPercent);
         Assert.Equal(31, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.All(handler.Requests, request => Assert.Equal("oasis-token", request.Headers.GetValues("oasis-token").Single()));
     }
 
     [Fact]
