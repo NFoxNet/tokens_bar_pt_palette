@@ -45,14 +45,26 @@ public sealed class CodexUsageClientTests
         Assert.Equal("https://chatgpt.com/backend-api/codex/usage", handler.Request.RequestUri!.ToString());
     }
 
-    private sealed class StubHandler(string responseBody) : HttpMessageHandler
+    [Fact]
+    public async Task RejectsUnauthorizedResponses()
+    {
+        var handler = new StubHandler("{\"error\":\"unauthorized\"}", HttpStatusCode.Unauthorized);
+        var client = new CodexUsageClient(handler);
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.FetchUsageAsync("secret-token", CancellationToken.None));
+
+        Assert.Contains("401", exception.Message, StringComparison.Ordinal);
+    }
+
+    private sealed class StubHandler(string responseBody, HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
     {
         public HttpRequestMessage? Request { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Request = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return Task.FromResult(new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
             });

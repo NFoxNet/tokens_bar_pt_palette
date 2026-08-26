@@ -65,6 +65,24 @@ public sealed class CodexFileAuthTokenProviderTests
         }
     }
 
+    [Fact]
+    public async Task RejectsExpiredTokenWithoutRefreshToken()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(authPath, "{\"access_token\":\"expired\",\"expires_at\":0}");
+            var provider = new CodexFileAuthTokenProvider(authPath);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                provider.GetValidAccessTokenAsync(CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(authPath);
+        }
+    }
+
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
     {
         public HttpRequestMessage? Request { get; private set; }
