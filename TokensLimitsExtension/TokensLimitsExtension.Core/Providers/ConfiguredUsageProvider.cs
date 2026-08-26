@@ -146,7 +146,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             && !string.Equals(endpoint.HttpMethod, "HEAD", StringComparison.OrdinalIgnoreCase))
         {
             request.Content = new StringContent(
-                endpoint.RequestBody ?? "{}",
+                ResolveRequestBody(endpoint),
                 Encoding.UTF8,
                 "application/json");
         }
@@ -160,6 +160,18 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         return request;
     }
 
+    private static string ResolveRequestBody(UsageProviderEndpoint endpoint)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var start = now.AddDays(-30);
+        return (endpoint.RequestBody ?? "{}")
+            .Replace("{startTime}", FormatAnalyticsTimestamp(start), StringComparison.Ordinal)
+            .Replace("{endTime}", FormatAnalyticsTimestamp(now), StringComparison.Ordinal);
+    }
+
+    private static string FormatAnalyticsTimestamp(DateTimeOffset value)
+        => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+
     private Uri ResolveUrl(UsageProviderEndpoint endpoint)
     {
         var endpointUrl = endpoint.Url;
@@ -171,6 +183,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
         var accountId = _configuration.GetValue(Descriptor.Id, "accountId");
         var projectId = _configuration.GetValue(Descriptor.Id, "projectId");
+        var deploymentName = _configuration.GetValue(Descriptor.Id, "deploymentName");
+        var apiVersion = _configuration.GetValue(Descriptor.Id, "apiVersion");
         if (endpointUrl.Contains("{accountId}", StringComparison.OrdinalIgnoreCase)
             && string.IsNullOrWhiteSpace(accountId))
         {
@@ -185,12 +199,32 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Для {Descriptor.DisplayName} укажите идентификатор проекта.");
         }
 
+        if (endpointUrl.Contains("{deploymentName}", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(deploymentName))
+        {
+            throw new UsageProviderConfigurationException(
+                $"Для {Descriptor.DisplayName} укажите имя deployment.");
+        }
+
+        if (endpointUrl.Contains("{apiVersion}", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(apiVersion))
+        {
+            throw new UsageProviderConfigurationException(
+                $"Для {Descriptor.DisplayName} укажите версию API.");
+        }
+
         var replaced = endpointUrl.Replace(
             "{accountId}",
             Uri.EscapeDataString(accountId ?? string.Empty),
             StringComparison.OrdinalIgnoreCase).Replace(
             "{projectId}",
             Uri.EscapeDataString(projectId ?? string.Empty),
+            StringComparison.OrdinalIgnoreCase).Replace(
+            "{deploymentName}",
+            Uri.EscapeDataString(deploymentName ?? string.Empty),
+            StringComparison.OrdinalIgnoreCase).Replace(
+            "{apiVersion}",
+            Uri.EscapeDataString(apiVersion ?? string.Empty),
             StringComparison.OrdinalIgnoreCase);
         var baseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl");
         if (string.IsNullOrWhiteSpace(baseUrl) && endpoint.RequiresBaseUrl)
@@ -385,6 +419,7 @@ internal static class UsageJsonParser
     [
         "usage", "used", "limit", "remaining", "quota", "credit", "balance", "token", "cost",
         "spend", "request", "character", "point", "plan", "reset", "refill", "budget", "amount",
+        "total", "model",
     ];
 
     public static UsageSnapshot Parse(
@@ -413,6 +448,15 @@ internal static class UsageJsonParser
             if (metrics.Count >= 32)
             {
                 break;
+            }
+        }
+
+        if (descriptor.Id.Equals("azureopenai", StringComparison.OrdinalIgnoreCase))
+        {
+            var model = FindString(root, "model");
+            if (!string.IsNullOrWhiteSpace(model))
+            {
+                metrics.Add(new UsageMetric("Model", model));
             }
         }
 

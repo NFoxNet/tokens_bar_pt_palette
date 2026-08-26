@@ -56,7 +56,15 @@ public static class UsageProviderEndpointCatalog
                 Get("credits", "https://app.augmentcode.com/api/credits", cookie: true, apiKey: false),
                 Get("subscription", "https://app.augmentcode.com/api/subscription", cookie: true, apiKey: false),
             ],
-            ["azureopenai"] = [Get("usage", "/openai/usage", header: "api-key", prefix: "", baseUrl: true)],
+            ["azureopenai"] = [new UsageProviderEndpoint(
+                "validation",
+                "/openai/deployments/{deploymentName}/chat/completions?api-version={apiVersion}",
+                "POST",
+                "api-key",
+                "",
+                RequiresApiKey: true,
+                UseConfiguredBaseUrl: true,
+                RequestBody: "{\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}")],
             ["bedrock"] = [Get("usage", "/usage", header: "Authorization", prefix: "Bearer ", baseUrl: true)],
             ["chutes"] = [Get("subscription-usage", "https://api.chutes.ai/users/me/subscription_usage", baseUrl: true)],
             ["claude"] =
@@ -170,7 +178,7 @@ public static class UsageProviderEndpointCatalog
             ["sub2api"] = [Get("usage", "/v1/usage", baseUrl: true, requiresBaseUrl: true)],
             ["synthetic"] = [Get("usage", "/v1/usage", baseUrl: true, requiresBaseUrl: true)],
             ["t3chat"] = [Get("customer", "https://t3.chat/api/trpc/getCustomerData", cookie: true, apiKey: false)],
-            ["venice"] = [Get("usage", "https://api.venice.ai/api/v1/usage", baseUrl: true)],
+            ["venice"] = [Get("balance", "https://api.venice.ai/api/v1/billing/balance", baseUrl: true)],
             ["vertexai"] = [Get("quota", "https://monitoring.googleapis.com/v3/projects/{projectId}/timeSeries")],
             ["warp"] = [new UsageProviderEndpoint(
                 "request-limit",
@@ -190,7 +198,19 @@ public static class UsageProviderEndpointCatalog
                 })],
             ["wayfinder"] = [Get("usage", "/v1/usage", apiKey: false, baseUrl: true, requiresBaseUrl: true)],
             ["windsurf"] = [Get("plan-status", "https://windsurf.com/_backend/exa.seat_management_pb.SeatManagementService/GetPlanStatus", cookie: true, apiKey: false)],
-            ["xai"] = [Get("usage", "https://api.x.ai/v1/usage", baseUrl: true)],
+            ["xai"] =
+            [
+                Get("prepaid-balance", "https://management-api.x.ai/v1/billing/teams/{accountId}/prepaid/balance", baseUrl: true),
+                new UsageProviderEndpoint(
+                    "usage",
+                    "https://management-api.x.ai/v1/billing/teams/{accountId}/usage",
+                    "POST",
+                    "Authorization",
+                    "Bearer ",
+                    RequiresApiKey: true,
+                    UseConfiguredBaseUrl: true,
+                    RequestBody: "{\"analyticsRequest\":{\"timeRange\":{\"startTime\":\"{startTime}\",\"endTime\":\"{endTime}\",\"timezone\":\"Etc/GMT\"},\"timeUnit\":\"TIME_UNIT_DAY\",\"values\":[{\"name\":\"usd\",\"aggregation\":\"AGGREGATION_SUM\"}],\"groupBy\":[],\"filters\":[]}}")
+            ],
             ["zai"] = [Get("quota", "https://api.z.ai/api/monitor/usage/quota", baseUrl: true)],
             ["zed"] = [Get("profile", "https://cloud.zed.dev/client/users/me", apiKey: false)],
             ["zenmux"] = [Get("subscription", "https://zenmux.ai/api/v1/management/subscription/detail", baseUrl: true)],

@@ -66,9 +66,21 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        return _providerFields.TryGetValue(FieldKey(providerId, key), out var setting)
-            ? Normalize(setting.Value)
-            : null;
+        if (_providerFields.TryGetValue(FieldKey(providerId, key), out var setting))
+        {
+            var configured = Normalize(setting.Value);
+            if (configured is not null)
+            {
+                return configured;
+            }
+        }
+
+        var descriptor = UsageProviderDescriptorRegistry.All
+            .FirstOrDefault(candidate => candidate.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase));
+        var field = descriptor?.Settings.FirstOrDefault(candidate => candidate.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        return field?.EnvironmentVariable is null
+            ? null
+            : Normalize(Environment.GetEnvironmentVariable(field.EnvironmentVariable));
     }
 
     public IReadOnlyList<UsageProviderDescriptor> EnabledDescriptors
