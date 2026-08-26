@@ -167,7 +167,13 @@ public static class UsageProviderDescriptorRegistry
             settingKey: "dataPath",
             settingLabel: "Путь к quota-файлу",
             settingDescription: "Необязательный путь к AIAssistantQuotaManager2.xml. Если пусто, расширение найдёт последний профиль JetBrains автоматически."),
-        Api("kilo", "Kilo", "https://app.kilo.ai/usage", "KILO_API_KEY", withBaseUrl: true),
+        new(
+            "kilo",
+            "Kilo",
+            UsageProviderAuthKind.ApiKey,
+            "https://app.kilo.ai/usage",
+            settings: [ApiKey("KILO_API_KEY"), BaseUrl(), Account("Организация")],
+            sourceDescription: "Официальный Kilo tRPC API; показывает credit blocks и Kilo Pass без подмены квоты."),
         new("kimi", "Kimi Code", UsageProviderAuthKind.ApiKeyOrCookie, "https://www.kimi.com/code/console", settings: [ApiKey("KIMI_API_KEY"), Cookie(), BaseUrl()]),
         Local(
             "kiro",

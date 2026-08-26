@@ -135,8 +135,14 @@ public static class UsageProviderEndpointCatalog
             ["jetbrains"] = [Get("local", null, apiKey: false)],
             ["kilo"] =
             [
-                Get("organizations", "https://app.kilo.ai/api/trpc/user.getOrganizations", cookie: true, apiKey: false, baseUrl: true),
-                Get("profile", "https://api.kilo.ai/api/profile", cookie: true, apiKey: false),
+                new UsageProviderEndpoint(
+                    "usage",
+                    "https://app.kilo.ai/api/trpc/user.getCreditBlocks,kiloPass.getState,user.getAutoTopUpPaymentMethod",
+                    "GET",
+                    "Authorization",
+                    "Bearer ",
+                    RequiresApiKey: true,
+                    UseConfiguredBaseUrl: true),
             ],
             ["kimi"] =
             [

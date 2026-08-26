@@ -347,6 +347,48 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task KiloTrpcBatchMapsCreditsPassAndAutoTopUp()
+    {
+        var reset = DateTimeOffset.UtcNow.AddDays(30);
+        var handler = new StubHandler($$"""
+            [
+              { "result": { "data": { "json": { "creditBlocks": [
+                { "amount_mUsd": 1000000, "balance_mUsd": 750000 }
+              ] } } } },
+              { "result": { "data": { "json": {
+                "tier": "pro",
+                "currentPeriodBaseCreditsUsd": 20,
+                "currentPeriodBonusCreditsUsd": 5,
+                "currentPeriodUsageUsd": 10,
+                "nextBillingAt": "{{reset:O}}"
+              } } } },
+              { "result": { "data": { "json": { "enabled": true, "paymentMethod": "card" } } } }
+            ]
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "kilo"),
+            new TestConfiguration(
+                ("kilo", "apiKey", "kilo-key"),
+                ("kilo", "accountId", "org-123"),
+                ("kilo", "baseUrl", "https://kilo.example.test/api/trpc/")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(40, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal("pro", snapshot.Plan);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Credits total" && metric.Value == "1");
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Kilo Pass" && metric.Value == "10");
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Auto top-up" && metric.Value == "enabled");
+        Assert.Equal("Bearer kilo-key", handler.LastRequest!.Headers.Authorization!.ToString());
+        Assert.Equal("org-123", handler.LastRequest.Headers.GetValues("X-KILOCODE-ORGANIZATIONID").Single());
+        Assert.Contains(
+            "user.getCreditBlocks,kiloPass.getState,user.getAutoTopUpPaymentMethod",
+            handler.LastRequest.RequestUri!.AbsoluteUri,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task JetBrainsQuotaFileIsDetectedFromTheOfficialLocalFormat()
     {
         var reset = DateTimeOffset.UtcNow.AddDays(12);

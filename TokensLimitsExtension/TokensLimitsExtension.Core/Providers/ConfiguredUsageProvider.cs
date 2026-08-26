@@ -64,6 +64,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetOllamaSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("kilo", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GetKiloSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (_descriptor.AuthKind == UsageProviderAuthKind.Local)
         {
             return await GetLocalSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -470,6 +475,284 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             Query = string.Join("&", query),
         };
         return builder.Uri;
+    }
+
+    private async Task<UsageSnapshot> GetKiloSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var credential = ResolveCredential();
+        var apiKey = credential.ApiKey
+            ?? ReadKiloAuthToken();
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new UsageProviderConfigurationException(
+                "Для Kilo нужен API-ключ или локальная авторизация Kilo CLI.");
+        }
+
+        var configuredBaseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl");
+        var baseUrl = string.IsNullOrWhiteSpace(configuredBaseUrl)
+            ? new Uri("https://app.kilo.ai/api/trpc/", UriKind.Absolute)
+            : ParseBaseUrl(configuredBaseUrl.TrimEnd('/') + "/", Descriptor.DisplayName);
+        var procedures = new[]
+        {
+            "user.getCreditBlocks",
+            "kiloPass.getState",
+            "user.getAutoTopUpPaymentMethod",
+        };
+        var procedurePath = string.Join(',', procedures);
+        var input = "{" + string.Join(',', procedures.Select((_, index) => $"\"{index}\":{{\"json\":null}}")) + "}";
+        var builder = new UriBuilder(new Uri(baseUrl, procedurePath))
+        {
+            Query = $"batch=1&input={Uri.EscapeDataString(input)}",
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, builder.Uri);
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        var organization = _configuration.GetValue(Descriptor.Id, "accountId");
+        if (!string.IsNullOrWhiteSpace(organization))
+        {
+            request.Headers.TryAddWithoutValidation("X-KILOCODE-ORGANIZATIONID", organization);
+        }
+
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"Kilo tRPC: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
+        var creditObjects = EnumerateJsonObjects(root)
+            .Where(item => item.TryGetProperty("amount_mUsd", out _)
+                || item.TryGetProperty("balance_mUsd", out _))
+            .ToArray();
+        var total = creditObjects
+            .Select(item => TryGetJsonDouble(item, "amount_mUsd", out var value) ? value / 1_000_000 : 0)
+            .Where(value => value >= 0)
+            .Sum();
+        var remaining = creditObjects
+            .Select(item => TryGetJsonDouble(item, "balance_mUsd", out var value) ? value / 1_000_000 : 0)
+            .Where(value => value >= 0)
+            .Sum();
+        var hasCreditValues = creditObjects.Any(item => item.TryGetProperty("amount_mUsd", out _)
+            || item.TryGetProperty("balance_mUsd", out _));
+
+        if (!hasCreditValues)
+        {
+            var creditContext = EnumerateJsonObjects(root).FirstOrDefault(item =>
+                HasAnyJsonProperty(item, "creditsTotal", "totalCredits", "creditsRemaining", "remainingCredits", "creditsUsed"));
+            if (creditContext.ValueKind == JsonValueKind.Object)
+            {
+                var hasTotal = TryGetJsonDoubleAny(creditContext, out var fallbackTotal, "creditsTotal", "totalCredits", "total", "limit");
+                var hasRemaining = TryGetJsonDoubleAny(creditContext, out var fallbackRemaining, "creditsRemaining", "remainingCredits", "remaining", "balance");
+                var hasUsed = TryGetJsonDoubleAny(creditContext, out var fallbackUsed, "creditsUsed", "usedCredits", "used", "spent");
+                total = hasTotal ? fallbackTotal : hasUsed && hasRemaining ? fallbackUsed + fallbackRemaining : 0;
+                remaining = hasRemaining ? fallbackRemaining : hasTotal && hasUsed ? fallbackTotal - fallbackUsed : 0;
+                hasCreditValues = hasTotal || hasRemaining || hasUsed;
+            }
+        }
+
+        var passObject = EnumerateJsonObjects(root).FirstOrDefault(item =>
+            HasAnyJsonProperty(item, "currentPeriodBaseCreditsUsd", "currentPeriodBonusCreditsUsd", "currentPeriodUsageUsd"));
+        var hasPass = passObject.ValueKind == JsonValueKind.Object;
+        var passBase = hasPass && TryGetJsonDouble(passObject, "currentPeriodBaseCreditsUsd", out var baseCredits)
+            ? Math.Max(0, baseCredits)
+            : 0;
+        var passBonus = hasPass && TryGetJsonDouble(passObject, "currentPeriodBonusCreditsUsd", out var bonusCredits)
+            ? Math.Max(0, bonusCredits)
+            : 0;
+        var passUsed = hasPass && TryGetJsonDouble(passObject, "currentPeriodUsageUsd", out var usedCredits)
+            ? Math.Max(0, usedCredits)
+            : (double?)null;
+        var passTotal = hasPass ? passBase + passBonus : (double?)null;
+        var passReset = hasPass
+            ? TryGetJsonDateAny(passObject, "nextBillingAt", "nextRenewalAt", "renewsAt", "renewAt")
+            : null;
+        var plan = hasPass
+            ? TryGetJsonStringAny(passObject, "tier", "planName", "passName", "subscriptionName")
+            : null;
+
+        var metrics = new List<UsageMetric>();
+        if (hasCreditValues)
+        {
+            total = Math.Max(0, total);
+            remaining = Math.Max(0, remaining);
+            metrics.Add(new UsageMetric("Credits total", FormatNumber(total), "USD", Limit: total, Remaining: remaining));
+            metrics.Add(new UsageMetric("Credits used", FormatNumber(Math.Max(0, total - remaining)), "USD", Used: Math.Max(0, total - remaining)));
+            metrics.Add(new UsageMetric("Credits remaining", FormatNumber(remaining), "USD", Remaining: remaining));
+        }
+
+        UsageWindow? primary = null;
+        if (hasPass && passTotal is > 0 && passUsed is not null && passReset is not null)
+        {
+            primary = new UsageWindow(
+                Math.Clamp(passUsed.Value / passTotal.Value * 100, 0, 100),
+                passReset.Value,
+                30 * 24 * 60 * 60);
+            metrics.Add(new UsageMetric("Kilo Pass", FormatNumber(passUsed.Value), "USD", Used: passUsed, Limit: passTotal, ResetAt: passReset));
+        }
+
+        if (passBonus > 0)
+        {
+            metrics.Add(new UsageMetric("Pass bonus", FormatNumber(passBonus), "USD", Remaining: passBonus));
+        }
+
+        var autoTopUp = EnumerateJsonObjects(root).FirstOrDefault(item =>
+            HasAnyJsonProperty(item, "autoTopUpEnabled", "isEnabled", "enabled", "paymentMethod"));
+        if (autoTopUp.ValueKind == JsonValueKind.Object
+            && TryGetJsonBoolAny(autoTopUp, out var autoTopUpEnabled, "autoTopUpEnabled", "isEnabled", "enabled"))
+        {
+            metrics.Add(new UsageMetric("Auto top-up", autoTopUpEnabled ? "enabled" : "disabled"));
+        }
+
+        if (!hasCreditValues && !hasPass && metrics.Count == 0)
+        {
+            throw new UsageProviderRequestException("Kilo tRPC не вернул credit blocks или Kilo Pass.");
+        }
+
+        _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from Kilo tRPC batch.");
+        return new UsageSnapshot(
+            Descriptor.Id,
+            Descriptor.DisplayName,
+            primary,
+            null,
+            string.IsNullOrWhiteSpace(plan) ? "Kilo" : plan,
+            false)
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Source = "app.kilo.ai/api/trpc/user.getCreditBlocks,kiloPass.getState,user.getAutoTopUpPaymentMethod",
+            Metrics = metrics,
+        };
+    }
+
+    private string? ReadKiloAuthToken()
+    {
+        var configuredPath = _configuration.GetValue(Descriptor.Id, "dataPath");
+        var path = string.IsNullOrWhiteSpace(configuredPath)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "kilo", "auth.json")
+            : configuredPath;
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            return document.RootElement.TryGetProperty("kilo", out var kilo)
+                && kilo.ValueKind == JsonValueKind.Object
+                && TryGetJsonString(kilo, "access", out var access)
+                ? access
+                : null;
+        }
+        catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<JsonElement> EnumerateJsonObjects(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            yield return element;
+            foreach (var property in element.EnumerateObject())
+            {
+                foreach (var nested in EnumerateJsonObjects(property.Value))
+                {
+                    yield return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                foreach (var nested in EnumerateJsonObjects(item))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
+    private static bool HasAnyJsonProperty(JsonElement objectElement, params string[] names)
+        => objectElement.ValueKind == JsonValueKind.Object
+            && names.Any(name => objectElement.TryGetProperty(name, out _));
+
+    private static bool TryGetJsonDoubleAny(JsonElement objectElement, out double value, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (TryGetJsonDouble(objectElement, name, out value))
+            {
+                return true;
+            }
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static bool TryGetJsonBoolAny(JsonElement objectElement, out bool value, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (objectElement.TryGetProperty(name, out var property)
+                && property.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                value = property.GetBoolean();
+                return true;
+            }
+        }
+
+        value = false;
+        return false;
+    }
+
+    private static string? TryGetJsonStringAny(JsonElement objectElement, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (TryGetJsonString(objectElement, name, out var value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryGetJsonString(JsonElement objectElement, string propertyName, out string value)
+    {
+        if (objectElement.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(property.GetString()))
+        {
+            value = property.GetString()!;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static DateTimeOffset? TryGetJsonDateAny(JsonElement objectElement, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = TryGetJsonDate(objectElement, name);
+            if (value is not null)
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     private async Task<UsageSnapshot> GetOllamaSnapshotAsync(CancellationToken cancellationToken)
