@@ -44,7 +44,12 @@ public static class UsageProviderEndpointCatalog
             ],
             ["aiand"] = [Get("logs", "https://api.aiand.com/logs", apiKey: true)],
             ["alibaba"] = [new UsageProviderEndpoint("usage", "https://modelstudio.console.alibabacloud.com/data/api.json?action=zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2&product=broadscope-bailian&api=queryCodingPlanInstanceInfoV2&currentRegionId=ap-southeast-1", "POST", "x-api-key", "", RequiresApiKey: true, UseConfiguredBaseUrl: true, RequestBody: "{}")],
-            ["alibabatokenplan"] = [Get("usage", "https://bailian.console.aliyun.com/", cookie: true, apiKey: false)],
+            ["alibabatokenplan"] = [new UsageProviderEndpoint(
+                "usage",
+                "https://bailian-singapore-cs.alibabacloud.com/data/api.json",
+                "POST",
+                RequiresCookie: true,
+                RequestBody: "{}")],
             ["amp"] =
             [
                 new UsageProviderEndpoint("balance-api", "https://ampcode.com/api/internal?userDisplayBalanceInfo", "POST", "Authorization", "Bearer ", RequiresApiKey: true, RequestBody: "{\"method\":\"userDisplayBalanceInfo\"}"),
@@ -180,8 +185,12 @@ public static class UsageProviderEndpointCatalog
             ],
             ["qwencloud"] =
             [
-                Get("token-plan", "https://home.qwencloud.com/billing/subscription/token-plan-individual", cookie: true, apiKey: false),
-                Get("data-token-plan", "https://cs-data.qwencloud.com/billing/subscription/token-plan-individual", cookie: true, apiKey: false),
+                new UsageProviderEndpoint(
+                    "token-plan",
+                    "https://cs-data.qwencloud.com/data/api.json",
+                    "POST",
+                    RequiresCookie: true,
+                    RequestBody: "{}"),
             ],
             ["sakana"] = [Get("billing", "https://console.sakana.ai/billing", cookie: true, apiKey: false)],
             ["stepfun"] =

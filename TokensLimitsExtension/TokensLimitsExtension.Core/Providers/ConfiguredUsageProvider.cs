@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using TokensLimitsExtension.Core.Models;
@@ -54,6 +55,12 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         if (_descriptor.Id.Equals("deepgram", StringComparison.OrdinalIgnoreCase))
         {
             return await GetDeepgramSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_descriptor.Id.Equals("qwencloud", StringComparison.OrdinalIgnoreCase)
+            || _descriptor.Id.Equals("alibabatokenplan", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GetAlibabaGatewaySnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
         var endpoints = UsageProviderEndpointCatalog.For(_descriptor.Id);
@@ -502,6 +509,120 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             Source = "projects/*/usage/breakdown",
             Metrics = metrics,
         };
+    }
+
+    private async Task<UsageSnapshot> GetAlibabaGatewaySnapshotAsync(CancellationToken cancellationToken)
+    {
+        var credential = ResolveCredential();
+        if (string.IsNullOrWhiteSpace(credential.CookieHeader))
+        {
+            throw new UsageProviderConfigurationException(
+                $"Для {Descriptor.DisplayName} укажите Cookie-заголовок авторизованной сессии.");
+        }
+
+        var isQwen = Descriptor.Id.Equals("qwencloud", StringComparison.OrdinalIgnoreCase);
+        var dashboardUrl = isQwen
+            ? new Uri("https://home.qwencloud.com/billing/subscription/token-plan-individual")
+            : new Uri("https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=plan#/efm/subscription/token-plan/personal");
+        var apiUrl = isQwen
+            ? new Uri("https://cs-data.qwencloud.com/data/api.json")
+            : new Uri("https://bailian-singapore-cs.alibabacloud.com/data/api.json");
+
+        var secToken = ExtractSecToken(credential.CookieHeader);
+        if (string.IsNullOrWhiteSpace(secToken))
+        {
+            using var pageRequest = new HttpRequestMessage(HttpMethod.Get, dashboardUrl);
+            pageRequest.Headers.TryAddWithoutValidation("Cookie", credential.CookieHeader);
+            pageRequest.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml");
+            using var pageResponse = await _httpClient
+                .SendAsync(pageRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+            if (!pageResponse.IsSuccessStatusCode)
+            {
+                throw new UsageProviderRequestException(
+                    $"Не удалось открыть консоль {Descriptor.DisplayName}: HTTP {(int)pageResponse.StatusCode}.");
+            }
+
+            var page = await pageResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            secToken = ExtractSecToken(page);
+        }
+
+        if (string.IsNullOrWhiteSpace(secToken))
+        {
+            throw new UsageProviderConfigurationException(
+                $"В Cookie/консоли {Descriptor.DisplayName} не найден sec_token. Обновите Cookie после входа в консоль.");
+        }
+
+        var action = isQwen ? "IntlBroadScopeAspnGateway" : "IntlBroadScopeAspnGateway";
+        var apiName = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage";
+        var cornerstone = new Dictionary<string, object?>
+        {
+            ["feTraceId"] = Guid.NewGuid().ToString().ToLowerInvariant(),
+            ["feURL"] = dashboardUrl.AbsoluteUri,
+            ["protocol"] = "V2",
+            ["console"] = "ONE_CONSOLE",
+            ["productCode"] = "p_efm",
+            ["domain"] = dashboardUrl.Host,
+            ["consoleSite"] = isQwen ? "QWENCLOUD" : "MODELSTUDIO_ALBABACLOUD",
+            ["userNickName"] = "",
+            ["userPrincipalName"] = "",
+            ["xsp_lang"] = "en-US",
+        };
+        var parameters = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["Api"] = apiName,
+            ["V"] = "1.0",
+            ["Data"] = new Dictionary<string, object?> { ["cornerstoneParam"] = cornerstone },
+        });
+        var form = new Dictionary<string, string>
+        {
+            ["product"] = "sfm_bailian",
+            ["action"] = action,
+            ["sec_token"] = secToken,
+            ["region"] = "ap-southeast-1",
+            ["language"] = "en-US",
+            ["params"] = parameters,
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, apiUrl);
+        request.Headers.TryAddWithoutValidation("Cookie", credential.CookieHeader);
+        request.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+        request.Headers.TryAddWithoutValidation("Origin", dashboardUrl.GetLeftPart(UriPartial.Authority));
+        request.Headers.TryAddWithoutValidation("Referer", dashboardUrl.AbsoluteUri);
+        request.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
+        request.Content = new StringContent(
+            string.Join("&", form.Select(pair => $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}")),
+            Encoding.UTF8,
+            "application/x-www-form-urlencoded");
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"{Descriptor.DisplayName} gateway: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var snapshot = UsageJsonParser.Parse(Descriptor, "token-plan/usage", document.RootElement, DateTimeOffset.UtcNow);
+        _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from token-plan gateway.");
+        return snapshot;
+    }
+
+    private static string? ExtractSecToken(string value)
+    {
+        var cookieMatch = Regex.Match(value, @"(?:^|;\s*)sec_token=([^;]+)", RegexOptions.IgnoreCase);
+        if (cookieMatch.Success)
+        {
+            return cookieMatch.Groups[1].Value;
+        }
+
+        var pageMatch = Regex.Match(
+            value,
+            @"(?:secToken|sec_token)\s*[:=]\s*[""']([^""']+)",
+            RegexOptions.IgnoreCase);
+        return pageMatch.Success ? pageMatch.Groups[1].Value : null;
     }
 
     private async Task<JsonElement> GetJsonRootAsync(
