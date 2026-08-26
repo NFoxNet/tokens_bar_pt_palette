@@ -19,4 +19,8 @@ public sealed record CodexUsageSnapshot(
     bool IsEstimate)
 {
     public IReadOnlyList<CodexAdditionalRateLimit> AdditionalRateLimits { get; init; } = [];
+
+    public bool HasPrimaryWindow { get; init; } = true;
+
+    public bool HasSecondaryWindow { get; init; } = true;
 }

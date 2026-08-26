@@ -16,7 +16,7 @@ public static class UsageDisplayFormatter
         var estimatePrefix = snapshot.IsEstimate ? "Оценка: " : string.Empty;
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"{estimatePrefix}5ч\\{GetRemainingPercent(snapshot.PrimaryWindow.UsedPercent)}%, 7д\\{GetRemainingPercent(snapshot.SecondaryWindow.UsedPercent)}%");
+            $"{estimatePrefix}5ч\\{FormatDockPercent(snapshot.PrimaryWindow)}, 7д\\{FormatDockPercent(snapshot.SecondaryWindow)}");
     }
 
     public static string FormatTimeUntilReset(DateTimeOffset resetAt, DateTimeOffset now)
@@ -42,15 +42,29 @@ public static class UsageDisplayFormatter
     public static string FormatCompactBandSubtitle(UsageSnapshot snapshot, DateTimeOffset now)
     {
         var estimatePrefix = snapshot.IsEstimate ? "Оценка: " : string.Empty;
-        return $"{estimatePrefix}5ч: {FormatRemainingPercent(snapshot.PrimaryWindow.UsedPercent)} · "
-            + $"нед: {FormatRemainingPercent(snapshot.SecondaryWindow.UsedPercent)} · "
-            + $"сброс {FormatTimeUntilReset(snapshot.PrimaryWindow.ResetAt, now)} / "
-            + FormatTimeUntilReset(snapshot.SecondaryWindow.ResetAt, now);
+        return $"{estimatePrefix}5ч: {FormatRemainingWindow(snapshot.PrimaryWindow, now)} · "
+            + $"нед: {FormatRemainingWindow(snapshot.SecondaryWindow, now)}";
     }
+
+    public static string FormatRemainingWindow(UsageWindow? window, DateTimeOffset now)
+        => window is null
+            ? "данные недоступны"
+            : $"{FormatRemainingPercent(window.UsedPercent)} · {FormatTimeUntilReset(window.ResetAt, now)}";
 
     private static int GetRemainingPercent(double usedPercent)
     {
         var remaining = Math.Clamp(100d - usedPercent, 0d, 100d);
         return (int)Math.Round(remaining, MidpointRounding.AwayFromZero);
+    }
+
+    private static string FormatDockPercent(UsageWindow? window)
+    {
+        if (window is null)
+        {
+            return "—";
+        }
+
+        var remaining = Math.Clamp(100d - window.UsedPercent, 0d, 100d);
+        return string.Create(CultureInfo.InvariantCulture, $"{(int)Math.Round(remaining, MidpointRounding.AwayFromZero)}%");
     }
 }

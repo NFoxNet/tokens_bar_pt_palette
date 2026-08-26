@@ -26,14 +26,18 @@ public sealed class CodexUsageProviderAdapter : IUsageProvider
         return new UsageSnapshot(
             Descriptor.Id,
             Descriptor.DisplayName,
-            new UsageWindow(
-                snapshot.PrimaryUsedPercent,
-                snapshot.PrimaryResetAt,
-                PrimaryWindowSeconds),
-            new UsageWindow(
-                snapshot.SecondaryUsedPercent,
-                snapshot.SecondaryResetAt,
-                SecondaryWindowSeconds),
+            snapshot.HasPrimaryWindow
+                ? new UsageWindow(
+                    snapshot.PrimaryUsedPercent,
+                    snapshot.PrimaryResetAt,
+                    PrimaryWindowSeconds)
+                : null,
+            snapshot.HasSecondaryWindow
+                ? new UsageWindow(
+                    snapshot.SecondaryUsedPercent,
+                    snapshot.SecondaryResetAt,
+                    SecondaryWindowSeconds)
+                : null,
             snapshot.Plan,
             snapshot.IsEstimate)
         {

@@ -13,10 +13,12 @@ public sealed record AdditionalUsageLimit(
 public sealed record UsageSnapshot(
     string ProviderId,
     string ProviderDisplayName,
-    UsageWindow PrimaryWindow,
-    UsageWindow SecondaryWindow,
+    UsageWindow? PrimaryWindow,
+    UsageWindow? SecondaryWindow,
     string? Plan,
     bool IsEstimate)
 {
     public IReadOnlyList<AdditionalUsageLimit> AdditionalRateLimits { get; init; } = [];
+
+    public DateTimeOffset? FetchedAt { get; init; }
 }
