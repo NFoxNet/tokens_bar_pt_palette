@@ -25,6 +25,8 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
     private readonly ConcurrentDictionary<string, CachedSessionFile> _fileCache = new(StringComparer.OrdinalIgnoreCase);
     private int _disposed;
 
+    public CodexFallbackOptions Limits { get; }
+
     public CodexLocalSessionFallback(
         string? codexHome = null,
         long fiveHourLimitTokens = 100_000,
@@ -38,10 +40,25 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         _codexHomes = (codexHome ?? Environment.GetEnvironmentVariable("CODEX_HOME")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"))
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        _fiveHourLimitTokens = fiveHourLimitTokens;
-        _weeklyLimitTokens = weeklyLimitTokens;
+        Limits = new CodexFallbackOptions(fiveHourLimitTokens, weeklyLimitTokens);
+        _fiveHourLimitTokens = Limits.FiveHourLimitTokens;
+        _weeklyLimitTokens = Limits.WeeklyLimitTokens;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger;
+    }
+
+    public CodexLocalSessionFallback(
+        string? codexHome,
+        CodexFallbackOptions limits,
+        TimeProvider? timeProvider = null,
+        Action<string>? logger = null)
+        : this(
+            codexHome,
+            limits?.FiveHourLimitTokens ?? throw new ArgumentNullException(nameof(limits)),
+            limits.WeeklyLimitTokens,
+            timeProvider,
+            logger)
+    {
     }
 
     public async Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken)

@@ -8,11 +8,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Linq;
 using System.Threading;
 using TokensLimitsExtension.Core.Providers;
 using TokensLimitsExtension.Core.Services;
 using TokensLimitsExtension.Providers;
+using TokensLimitsExtension.Settings;
 
 namespace TokensLimitsExtension;
 
@@ -20,8 +22,13 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 {
     private readonly ICommandItem[] _commands;
     private readonly ICommandItem[] _dockBands;
-    private readonly TokensLimitsPage _limitsPage;
+    private readonly TokensLimitsSettings _settings;
+    private readonly UsageProviderRegistry _providerRegistry;
+    private readonly bool _ownsProviderRegistry;
+    private readonly TokensLimitsPage[] _pages;
+    private readonly UsageSnapshotCache[] _snapshotCaches;
     private readonly UsageDockBandItem[] _dockBandItems;
+    private readonly IDisposable? _ownedUsageService;
     private int _disposed;
 
     public TokensLimitsExtensionCommandsProvider(
@@ -31,16 +38,30 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         DisplayName = "Tokens Limits";
         Id = "com.tokenslimits.extension";
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
+        _settings = new TokensLimitsSettings();
+        Settings = _settings.Settings;
+        var ownsUsageService = usageService is null;
         usageService ??= CreateDefaultService();
-        _limitsPage = new TokensLimitsPage(usageService, LogMessage);
-        _commands = [
-            new CommandItem(_limitsPage) { Title = DisplayName },
-        ];
+        _ownedUsageService = ownsUsageService ? usageService as IDisposable : null;
 
-        providerRegistry ??= UsageProviderRegistryFactory.CreateDefault(usageService);
-        var providers = providerRegistry.Providers;
+        _ownsProviderRegistry = providerRegistry is null;
+        _providerRegistry = providerRegistry ?? UsageProviderRegistryFactory.CreateDefault(usageService);
+        var providers = _providerRegistry.Providers;
+        _snapshotCaches = providers
+            .Select(provider => new UsageSnapshotCache(provider, _settings))
+            .ToArray();
+        _pages = _snapshotCaches
+            .Select(provider => new TokensLimitsPage(provider, LogMessage, _settings))
+            .ToArray();
+        _commands = _pages
+            .Select((page, index) => new CommandItem(page)
+            {
+                Title = _snapshotCaches[index].Descriptor.DisplayName,
+            })
+            .ToArray();
         var dockBands = providers
-            .Select(provider => CreateDockBand(provider, LogMessage, _limitsPage))
+            .Zip(_snapshotCaches, (provider, cache) => (provider, cache))
+            .Zip(_pages, (pair, page) => CreateDockBand(pair.cache, LogMessage, page, _settings))
             .ToArray();
         _dockBandItems = dockBands.Select(pair => pair.Item).ToArray();
         _dockBands = dockBands.Select(pair => pair.Band).ToArray();
@@ -68,17 +89,34 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             dockBandItem.Dispose();
         }
 
-        _limitsPage.Dispose();
+        foreach (var page in _pages)
+        {
+            page.Dispose();
+        }
+
+        foreach (var cache in _snapshotCaches)
+        {
+            cache.Dispose();
+        }
+
+        _settings.Dispose();
+        if (_ownsProviderRegistry)
+        {
+            _providerRegistry.Dispose();
+        }
+
+        _ownedUsageService?.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();
     }
 
     private static (UsageDockBandItem Item, ICommandItem Band) CreateDockBand(
-        IUsageProvider provider,
+        UsageSnapshotCache provider,
         Action<string> logger,
-        ICommand detailsCommand)
+        ICommand detailsCommand,
+        IUsageRefreshSettings refreshSettings)
     {
-        var item = new UsageDockBandItem(provider, logger, detailsCommand);
+        var item = new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings);
         var wrappedBand = new WrappedDockItem(
             [item],
             $"com.tokenslimits.provider.{provider.Descriptor.Id}.band",
@@ -97,12 +135,17 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             .FirstOrDefault();
         codexHome ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
         var logger = LogMessage;
-        var auth = new CodexFileAuthTokenProvider(Path.Combine(codexHome, "auth.json"));
+        var httpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(15),
+        };
+        var auth = new CodexFileAuthTokenProvider(Path.Combine(codexHome, "auth.json"), httpClient);
         return new CodexUsageService(
             auth,
-            new CodexUsageClient(logger: logger, accountIdProvider: () => auth.AccountId),
+            new CodexUsageClient(httpClient, logger, () => auth.AccountId),
             new CodexLocalSessionFallback(codexHome, logger: logger),
-            logger);
+            logger,
+            httpClient);
     }
 
     private static void LogMessage(string message)

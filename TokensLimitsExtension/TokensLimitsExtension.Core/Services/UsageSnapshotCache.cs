@@ -112,7 +112,10 @@ public sealed class UsageSnapshotCache : IUsageProvider, IDisposable
         }
 
         _refreshSettings?.Changed -= RefreshSettingsOnChanged;
-        _refreshGate.Dispose();
+        // Do not dispose the gate here: a refresh that already passed WaitAsync
+        // still has to execute its finally block and release it. The cache is
+        // owned by the extension lifetime, so the managed semaphore can be
+        // reclaimed together with the cache after that task completes.
         GC.SuppressFinalize(this);
     }
 

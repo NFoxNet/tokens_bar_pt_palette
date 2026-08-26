@@ -96,7 +96,9 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         var tokenObject = TryGetObject(root, "tokens") ?? root;
 
         var accessToken = GetString(tokenObject, "access_token") ?? GetString(tokenObject, "accessToken");
-        var refreshToken = GetString(tokenObject, "refresh_token") ?? GetString(tokenObject, "refreshToken");
+        var refreshToken = GetString(tokenObject, "refresh_token")
+            ?? GetString(tokenObject, "refreshToken")
+            ?? _cachedRefreshToken;
         var accountId = GetString(tokenObject, "account_id")
             ?? GetString(tokenObject, "accountId")
             ?? GetString(root, "account_id")
@@ -122,12 +124,17 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
             throw new InvalidOperationException("Codex access token has expired and no refresh_token is available.");
         }
 
-        var refreshedToken = await RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
-        CacheToken(refreshedToken, GetJwtExpiry(refreshedToken) ?? now.AddMinutes(5));
-        return refreshedToken;
+        var refreshed = await RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(refreshed.RefreshToken))
+        {
+            _cachedRefreshToken = refreshed.RefreshToken;
+        }
+
+        CacheToken(refreshed.AccessToken, refreshed.ExpiresAt ?? GetJwtExpiry(refreshed.AccessToken) ?? now.AddMinutes(5));
+        return refreshed.AccessToken;
     }
 
-    private async Task<string> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
+    private async Task<RefreshedToken> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
     {
         var payload = JsonSerializer.Serialize(new
         {
@@ -172,7 +179,17 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
             throw new InvalidDataException("Codex token refresh response does not contain access_token.");
         }
 
-        return refreshedToken;
+        var expiresAt = GetDateTimeOffset(document.RootElement, "expires_at")
+            ?? GetDateTimeOffset(document.RootElement, "expiresAt");
+        if (expiresAt is null && TryGetInt64(document.RootElement, "expires_in", out var expiresInSeconds))
+        {
+            expiresAt = _timeProvider.GetUtcNow().AddSeconds(Math.Max(0, expiresInSeconds));
+        }
+
+        return new RefreshedToken(
+            refreshedToken,
+            GetString(document.RootElement, "refresh_token") ?? GetString(document.RootElement, "refreshToken"),
+            expiresAt);
         }
     }
 
@@ -198,6 +215,23 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
             && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+    }
+
+    private static bool TryGetInt64(JsonElement element, string propertyName, out long value)
+    {
+        value = 0;
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(propertyName, out var property))
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out value))
+        {
+            return true;
+        }
+
+        return property.ValueKind == JsonValueKind.String
+            && long.TryParse(property.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
     }
 
     private static DateTimeOffset? GetDateTimeOffset(JsonElement element, string propertyName)
@@ -276,4 +310,9 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
     }
+
+    private sealed record RefreshedToken(
+        string AccessToken,
+        string? RefreshToken,
+        DateTimeOffset? ExpiresAt);
 }
