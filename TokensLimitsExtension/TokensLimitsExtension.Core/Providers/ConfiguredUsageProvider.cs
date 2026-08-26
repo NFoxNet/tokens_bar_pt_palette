@@ -100,7 +100,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 _logger($"[TokensLimits] Provider {_descriptor.Id}: snapshot fetched from {endpoint.Name}.");
                 return snapshot;
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UsageProviderRequestException)
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UsageProviderRequestException or UsageProviderConfigurationException)
             {
                 failures.Add(ex);
             }
@@ -134,6 +134,14 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 endpoint.ApiKeyPrefix + credential.ApiKey);
         }
 
+        if (endpoint.Headers is not null)
+        {
+            foreach (var header in endpoint.Headers)
+            {
+                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+        }
+
         if (!string.Equals(endpoint.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(endpoint.HttpMethod, "HEAD", StringComparison.OrdinalIgnoreCase))
         {
@@ -161,12 +169,28 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Для {Descriptor.DisplayName} не задан URL источника данных.");
         }
 
+        var accountId = _configuration.GetValue(Descriptor.Id, "accountId");
+        var projectId = _configuration.GetValue(Descriptor.Id, "projectId");
+        if (endpointUrl.Contains("{accountId}", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(accountId))
+        {
+            throw new UsageProviderConfigurationException(
+                $"Для {Descriptor.DisplayName} укажите идентификатор организации или аккаунта.");
+        }
+
+        if (endpointUrl.Contains("{projectId}", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(projectId))
+        {
+            throw new UsageProviderConfigurationException(
+                $"Для {Descriptor.DisplayName} укажите идентификатор проекта.");
+        }
+
         var replaced = endpointUrl.Replace(
             "{accountId}",
-            Uri.EscapeDataString(_configuration.GetValue(Descriptor.Id, "accountId") ?? string.Empty),
+            Uri.EscapeDataString(accountId ?? string.Empty),
             StringComparison.OrdinalIgnoreCase).Replace(
             "{projectId}",
-            Uri.EscapeDataString(_configuration.GetValue(Descriptor.Id, "projectId") ?? string.Empty),
+            Uri.EscapeDataString(projectId ?? string.Empty),
             StringComparison.OrdinalIgnoreCase);
         var baseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl");
         if (string.IsNullOrWhiteSpace(baseUrl) && endpoint.RequiresBaseUrl)
@@ -187,15 +211,15 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         {
             if (Uri.TryCreate(replaced, UriKind.Absolute, out var overriddenPath))
             {
-                return new Uri(configuredBaseUri, overriddenPath.PathAndQuery);
+                return AddProviderQuery(new Uri(configuredBaseUri, overriddenPath.PathAndQuery), endpoint);
             }
 
-            return new Uri(configuredBaseUri, replaced);
+            return AddProviderQuery(new Uri(configuredBaseUri, replaced), endpoint);
         }
 
         if (Uri.TryCreate(replaced, UriKind.Absolute, out var absolute))
         {
-            return absolute;
+            return AddProviderQuery(absolute, endpoint);
         }
 
         if (configuredBaseUri is null)
@@ -204,7 +228,46 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Для {Descriptor.DisplayName} не задан базовый URL API.");
         }
 
-        return new Uri(configuredBaseUri, replaced);
+        return AddProviderQuery(new Uri(configuredBaseUri, replaced), endpoint);
+    }
+
+    private Uri AddProviderQuery(Uri uri, UsageProviderEndpoint endpoint)
+    {
+        var query = new List<string>();
+        if (!string.IsNullOrWhiteSpace(uri.Query))
+        {
+            query.Add(uri.Query.TrimStart('?'));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (Descriptor.Id.Equals("claude", StringComparison.OrdinalIgnoreCase)
+            && endpoint.Name.StartsWith("organization-", StringComparison.OrdinalIgnoreCase))
+        {
+            query.Add($"starting_at={Uri.EscapeDataString(now.AddDays(-30).ToString("O", CultureInfo.InvariantCulture))}");
+            query.Add($"ending_at={Uri.EscapeDataString(now.ToString("O", CultureInfo.InvariantCulture))}");
+            query.Add("bucket_width=1d");
+            query.Add($"group_by%5B%5D={(endpoint.Name.EndsWith("cost", StringComparison.OrdinalIgnoreCase) ? "description" : "model")}");
+        }
+        else if (Descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)
+            && (endpoint.Name.Equals("costs", StringComparison.OrdinalIgnoreCase)
+                || endpoint.Name.Equals("usage", StringComparison.OrdinalIgnoreCase)))
+        {
+            query.Add($"start_time={now.AddDays(-30).ToUnixTimeSeconds()}");
+            query.Add($"end_time={now.ToUnixTimeSeconds()}");
+            query.Add("bucket_width=1d");
+            query.Add($"group_by={(endpoint.Name.Equals("costs", StringComparison.OrdinalIgnoreCase) ? "line_item" : "model")}");
+            var projectId = _configuration.GetValue(Descriptor.Id, "projectId");
+            if (!string.IsNullOrWhiteSpace(projectId))
+            {
+                query.Add($"project_ids%5B%5D={Uri.EscapeDataString(projectId)}");
+            }
+        }
+
+        var builder = new UriBuilder(uri)
+        {
+            Query = string.Join("&", query),
+        };
+        return builder.Uri;
     }
 
     private async Task<UsageSnapshot> GetLocalSnapshotAsync(CancellationToken cancellationToken)
