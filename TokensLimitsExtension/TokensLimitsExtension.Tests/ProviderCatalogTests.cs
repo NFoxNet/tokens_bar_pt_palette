@@ -139,6 +139,106 @@ public sealed class ProviderCatalogTests
         Assert.Equal(40, snapshot.SecondaryWindow!.UsedPercent);
     }
 
+    [Fact]
+    public async Task QwenGatewayResponseMapsRollingWindows()
+    {
+        var fiveHourReset = DateTimeOffset.UtcNow.AddHours(2);
+        var weeklyReset = DateTimeOffset.UtcNow.AddDays(5);
+        var handler = new StubHandler($$"""
+            {
+              "data": {
+                "per5HourPercentage": 0.15,
+                "per5HourResetTime": "{{fiveHourReset:O}}",
+                "per1WeekPercentage": 0.31,
+                "per1WeekResetTime": "{{weeklyReset:O}}"
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "qwencloud"),
+            new TestConfiguration(("qwencloud", "cookieHeader", "sec_token=test")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(15, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(31, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("token-plan/usage", snapshot.Source);
+    }
+
+    [Fact]
+    public async Task StepFunResponseMapsRemainingRatesToUsageWindows()
+    {
+        var fiveHourReset = DateTimeOffset.UtcNow.AddHours(2).ToUnixTimeSeconds();
+        var weeklyReset = DateTimeOffset.UtcNow.AddDays(5).ToUnixTimeSeconds();
+        var handler = new StubHandler($$"""
+            {
+              "status": 1,
+              "five_hour_usage_left_rate": 0.85,
+              "weekly_usage_left_rate": 0.69,
+              "five_hour_usage_reset_time": "{{fiveHourReset}}",
+              "weekly_usage_reset_time": "{{weeklyReset}}"
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "stepfun"),
+            new TestConfiguration(("stepfun", "cookieHeader", "session=test")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(15, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(31, snapshot.SecondaryWindow!.UsedPercent);
+    }
+
+    [Fact]
+    public async Task WindsurfResponseMapsDailyAndWeeklyRemainingPercent()
+    {
+        var dailyReset = DateTimeOffset.UtcNow.AddHours(3).ToUnixTimeSeconds();
+        var weeklyReset = DateTimeOffset.UtcNow.AddDays(4).ToUnixTimeSeconds();
+        var handler = new StubHandler($$"""
+            {
+              "planStatus": {
+                "dailyQuotaRemainingPercent": 85,
+                "weeklyQuotaRemainingPercent": 67,
+                "dailyQuotaResetAtUnix": {{dailyReset}},
+                "weeklyQuotaResetAtUnix": {{weeklyReset}}
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "windsurf"),
+            new TestConfiguration(("windsurf", "cookieHeader", "session=test")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(15, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(33, snapshot.SecondaryWindow!.UsedPercent);
+    }
+
+    [Fact]
+    public async Task AntigravityResponseUsesMostConstrainedRemainingFraction()
+    {
+        var reset = DateTimeOffset.UtcNow.AddHours(1).ToString("O");
+        var handler = new StubHandler($$"""
+            {
+              "quotas": [
+                { "model": "fast", "remainingFraction": 0.9, "resetTime": "{{reset}}" },
+                { "model": "pro", "remainingFraction": 0.6, "resetTime": "{{reset}}" }
+              ]
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "antigravity"),
+            new TestConfiguration(("antigravity", "oauthToken", "oauth-token")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(40, snapshot.PrimaryWindow!.UsedPercent);
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {

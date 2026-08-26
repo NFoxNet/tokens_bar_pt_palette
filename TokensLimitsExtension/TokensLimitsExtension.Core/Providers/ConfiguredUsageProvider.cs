@@ -918,7 +918,7 @@ internal static class UsageJsonParser
             }
         }
 
-        var windows = FindWindows(root, fetchedAt);
+        var windows = FindWindows(descriptor, root, fetchedAt);
         var plan = FindString(root, "plan", "planName", "tier", "subscription", "product");
         if (windows.Primary is null && windows.Secondary is null && metrics.Count == 0)
         {
@@ -1094,8 +1094,17 @@ internal static class UsageJsonParser
         };
     }
 
-    private static (UsageWindow? Primary, UsageWindow? Secondary) FindWindows(JsonElement root, DateTimeOffset fetchedAt)
+    private static (UsageWindow? Primary, UsageWindow? Secondary) FindWindows(
+        UsageProviderDescriptor descriptor,
+        JsonElement root,
+        DateTimeOffset fetchedAt)
     {
+        var special = FindProviderSpecificWindows(descriptor.Id, root);
+        if (special.Found)
+        {
+            return (special.Primary, special.Secondary);
+        }
+
         var candidates = new List<UsageWindowCandidate>();
         CollectObjects(root, string.Empty, candidates, fetchedAt, 0);
         return (
@@ -1132,7 +1141,25 @@ internal static class UsageJsonParser
                 amountUsed = zAiCurrent;
             }
 
-            var reset = FindDate(properties, "reset_at", "resetAt", "reset", "next_reset", "nextReset", "refill_at", "refillAt", "resetsAt", "expires_at", "expiration", "nextRefreshTime", "nextResetTime");
+            var reset = FindDate(
+                properties,
+                "reset_at",
+                "resetAt",
+                "reset",
+                "next_reset",
+                "nextReset",
+                "next_reset_at",
+                "nextResetAt",
+                "refill_at",
+                "refillAt",
+                "resetsAt",
+                "expires_at",
+                "expiration",
+                "nextRefreshTime",
+                "nextResetTime",
+                "resetTime",
+                "dailyQuotaResetAtUnix",
+                "weeklyQuotaResetAtUnix");
             var t3FourHour = FindNumber(properties, "usageFourHourPercentage");
             var t3Monthly = FindNumber(properties, "usageMonthPercentage", "usagePeriodPercentage");
             if (t3FourHour is not null)
@@ -1316,6 +1343,13 @@ internal static class UsageJsonParser
             {
                 return parsed;
             }
+            if (property.Value.ValueKind == JsonValueKind.String
+                && double.TryParse(property.Value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var stringNumber))
+            {
+                return stringNumber > 10_000_000_000
+                    ? DateTimeOffset.FromUnixTimeMilliseconds((long)stringNumber)
+                    : DateTimeOffset.FromUnixTimeSeconds((long)stringNumber);
+            }
             if (property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetDouble(out var number))
             {
                 return number > 10_000_000_000
@@ -1387,6 +1421,185 @@ internal static class UsageJsonParser
     private static string Join(string path, string part)
         => string.IsNullOrWhiteSpace(path) ? part : $"{path}.{part}";
 
+    private static ProviderSpecificWindows FindProviderSpecificWindows(string providerId, JsonElement root)
+    {
+        UsageWindow? primary = null;
+        UsageWindow? secondary = null;
+        var found = false;
+        foreach (var properties in EnumerateObjectProperties(root, 0))
+        {
+            if (providerId.Equals("qwencloud", StringComparison.OrdinalIgnoreCase)
+                || providerId.Equals("alibabatokenplan", StringComparison.OrdinalIgnoreCase))
+            {
+                if (TryCreateWindow(
+                        FindNumber(properties, "per5HourPercentage"),
+                        FindDate(properties, "per5HourResetTime"),
+                        5 * 60 * 60,
+                        out var fiveHour))
+                {
+                    primary ??= fiveHour;
+                    found = true;
+                }
+
+                if (TryCreateWindow(
+                        FindNumber(properties, "per1WeekPercentage"),
+                        FindDate(properties, "per1WeekResetTime"),
+                        7 * 24 * 60 * 60,
+                        out var weekly))
+                {
+                    secondary ??= weekly;
+                    found = true;
+                }
+            }
+
+            if (providerId.Equals("stepfun", StringComparison.OrdinalIgnoreCase))
+            {
+                if (TryCreateRemainingWindow(
+                        FindNumber(properties, "five_hour_usage_left_rate"),
+                        FindDate(properties, "five_hour_usage_reset_time"),
+                        5 * 60 * 60,
+                        out var fiveHour))
+                {
+                    primary ??= fiveHour;
+                    found = true;
+                }
+
+                if (TryCreateRemainingWindow(
+                        FindNumber(properties, "weekly_usage_left_rate"),
+                        FindDate(properties, "weekly_usage_reset_time"),
+                        7 * 24 * 60 * 60,
+                        out var weekly))
+                {
+                    secondary ??= weekly;
+                    found = true;
+                }
+
+                if (primary is null
+                    && TryCreateRemainingWindow(
+                        FindNumber(properties, "subscription_credit_left_rate", "topup_credit_left_rate"),
+                        FindDate(properties, "subscription_credit_reset_time", "next_reset_at"),
+                        30 * 24 * 60 * 60,
+                        out var credits))
+                {
+                    primary = credits;
+                    found = true;
+                }
+            }
+
+            if (providerId.Equals("windsurf", StringComparison.OrdinalIgnoreCase))
+            {
+                if (TryCreateRemainingWindow(
+                        FindNumber(properties, "dailyQuotaRemainingPercent", "daily_remaining_percent"),
+                        FindDate(properties, "dailyQuotaResetAtUnix", "daily_reset_at_unix"),
+                        24 * 60 * 60,
+                        out var daily))
+                {
+                    primary ??= daily;
+                    found = true;
+                }
+
+                if (TryCreateRemainingWindow(
+                        FindNumber(properties, "weeklyQuotaRemainingPercent", "weekly_remaining_percent"),
+                        FindDate(properties, "weeklyQuotaResetAtUnix", "weekly_reset_at_unix"),
+                        7 * 24 * 60 * 60,
+                        out var weekly))
+                {
+                    secondary ??= weekly;
+                    found = true;
+                }
+            }
+
+            if (providerId.Equals("antigravity", StringComparison.OrdinalIgnoreCase)
+                && TryCreateRemainingWindow(
+                    FindNumber(properties, "remainingFraction"),
+                    FindDate(properties, "resetTime"),
+                    0,
+                    out var antigravity))
+            {
+                if (primary is null || antigravity.UsedPercent > primary.UsedPercent)
+                {
+                    primary = antigravity;
+                }
+
+                found = true;
+            }
+        }
+
+        return new ProviderSpecificWindows(found, primary, secondary);
+    }
+
+    private static bool TryCreateWindow(
+        double? directPercent,
+        DateTimeOffset? resetAt,
+        int windowSeconds,
+        out UsageWindow window)
+    {
+        if (directPercent is not null && resetAt is not null)
+        {
+            window = new UsageWindow(
+                Math.Clamp(NormalizeDirectPercent(directPercent.Value), 0, 100),
+                resetAt.Value,
+                windowSeconds);
+            return true;
+        }
+
+        window = null!;
+        return false;
+    }
+
+    private static bool TryCreateRemainingWindow(
+        double? remaining,
+        DateTimeOffset? resetAt,
+        int windowSeconds,
+        out UsageWindow window)
+    {
+        if (remaining is not null && resetAt is not null)
+        {
+            var remainingPercent = NormalizeDirectPercent(remaining.Value);
+            window = new UsageWindow(
+                Math.Clamp(100 - remainingPercent, 0, 100),
+                resetAt.Value,
+                windowSeconds);
+            return true;
+        }
+
+        window = null!;
+        return false;
+    }
+
+    private static double NormalizeDirectPercent(double value)
+        => value is >= 0 and <= 1 ? value * 100 : value;
+
+    private static IEnumerable<JsonProperty[]> EnumerateObjectProperties(JsonElement element, int depth)
+    {
+        if (depth > 8)
+        {
+            yield break;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            yield return element.EnumerateObject().ToArray();
+            foreach (var property in element.EnumerateObject())
+            {
+                foreach (var nested in EnumerateObjectProperties(property.Value, depth + 1))
+                {
+                    yield return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                foreach (var nested in EnumerateObjectProperties(item, depth + 1))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
     private static double? NormalizeUtilization(double? utilization)
     {
         if (utilization is null)
@@ -1398,6 +1611,8 @@ internal static class UsageJsonParser
             ? utilization.Value * 100
             : utilization.Value;
     }
+
+    private sealed record ProviderSpecificWindows(bool Found, UsageWindow? Primary, UsageWindow? Secondary);
 
     private sealed record UsageWindowCandidate(UsageWindow Window, WindowKind Kind);
 
