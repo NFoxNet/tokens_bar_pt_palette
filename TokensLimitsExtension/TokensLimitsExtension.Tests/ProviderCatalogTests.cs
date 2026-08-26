@@ -111,6 +111,32 @@ public sealed class ProviderCatalogTests
         Assert.Equal("Bearer cline-key", handler.LastRequest!.Headers.Authorization!.ToString());
     }
 
+    [Fact]
+    public async Task ZaiQuotaResponseMapsUnitAndRemainingValuesToWindows()
+    {
+        var reset = DateTimeOffset.UtcNow.AddHours(3).ToUnixTimeMilliseconds();
+        var handler = new StubHandler($$"""
+            {
+              "success": true,
+              "data": {
+                "limits": [
+                  { "type": "TOKENS_LIMIT", "unit": 5, "number": 300, "usage": 1000, "currentValue": 250, "remaining": 750, "nextResetTime": {{reset}} },
+                  { "type": "TOKENS_LIMIT", "unit": 6, "number": 1, "usage": 10000, "currentValue": 4000, "remaining": 6000, "nextResetTime": {{reset + TimeSpan.FromDays(4).TotalMilliseconds}} }
+                ]
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "zai"),
+            new TestConfiguration(("zai", "apiKey", "zai-key")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(25, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(40, snapshot.SecondaryWindow!.UsedPercent);
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {

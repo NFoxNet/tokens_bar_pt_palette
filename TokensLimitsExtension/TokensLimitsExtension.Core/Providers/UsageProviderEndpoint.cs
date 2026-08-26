@@ -146,7 +146,7 @@ public static class UsageProviderEndpointCatalog
                 Get("vibe-usage", "https://console.mistral.ai/api-ui/trpc/billing.vibeUsage?batch=1&input=%7B%220%22%3A%7B%22json%22%3Anull%2C%22meta%22%3A%7B%22values%22%3A%5B%22undefined%22%5D%2C%22v%22%3A1%7D%7D%7D", cookie: true, apiKey: false),
             ],
             ["moonshot"] = [Get("balance", "https://api.moonshot.ai/v1/users/me/balance", baseUrl: true)],
-            ["neuralwatt"] = [Get("usage", "https://api.neuralwatt.com/v1/usage", baseUrl: true)],
+            ["neuralwatt"] = [Get("quota", "https://api.neuralwatt.com/v1/quota", baseUrl: true)],
             ["notion"] = [Get("credit-rate-limit", "https://app.notion.com/api/v3/getCreditRateLimitStatus", cookie: true, apiKey: false)],
             ["ollama"] = [Get("models", "http://127.0.0.1:11434/api/tags", apiKey: false)],
             ["openai"] =
@@ -246,7 +246,12 @@ public static class UsageProviderEndpointCatalog
                     UseConfiguredBaseUrl: true,
                     RequestBody: "{\"analyticsRequest\":{\"timeRange\":{\"startTime\":\"{startTime}\",\"endTime\":\"{endTime}\",\"timezone\":\"Etc/GMT\"},\"timeUnit\":\"TIME_UNIT_DAY\",\"values\":[{\"name\":\"usd\",\"aggregation\":\"AGGREGATION_SUM\"}],\"groupBy\":[],\"filters\":[]}}")
             ],
-            ["zai"] = [Get("quota", "https://api.z.ai/api/monitor/usage/quota", baseUrl: true)],
+            ["zai"] =
+            [
+                Get("quota", "https://api.z.ai/api/monitor/usage/quota/limit", baseUrl: true),
+                Get("model-usage", "https://api.z.ai/api/monitor/usage/model-usage", baseUrl: true),
+                Get("balance-cn", "https://www.bigmodel.cn/api/biz/account/query-customer-account-report", baseUrl: true),
+            ],
             ["zed"] = [Get("profile", "https://cloud.zed.dev/client/users/me", apiKey: false)],
             ["zenmux"] = [Get("subscription", "https://zenmux.ai/api/v1/management/subscription/detail", baseUrl: true)],
             ["zoommate"] = [Get("credits", "https://ai.zoom.us/ai-computer/api/v1/credits/status", cookie: true, apiKey: false)],

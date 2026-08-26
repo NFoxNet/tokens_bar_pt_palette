@@ -882,12 +882,19 @@ internal static class UsageJsonParser
         if (element.ValueKind == JsonValueKind.Object)
         {
             var properties = element.EnumerateObject().ToArray();
-            var used = FindNumber(properties, "used_percent", "usedPercent", "usage_percent", "usagePercent", "percentage_used", "percentUsed");
+            var used = FindNumber(properties, "used_percent", "usedPercent", "usage_percent", "usagePercent", "percentage_used", "percentUsed", "percentage");
             var utilization = FindNumber(properties, "utilization", "utilization_percent", "usage_percentage", "usagePercentage");
             var remaining = FindNumber(properties, "remaining_percent", "remainingPercent", "percentage_remaining", "percentRemaining");
             var limit = FindNumber(properties, "limit", "quota", "max", "maximum", "total", "capacity", "allowance", "grant_amount", "total_granted");
             var amountUsed = FindNumber(properties, "used", "usage", "consumed", "current", "used_amount", "total_used", "currentValue");
-            var reset = FindDate(properties, "reset_at", "resetAt", "reset", "next_reset", "nextReset", "refill_at", "refillAt", "resetsAt", "expires_at", "expiration", "nextRefreshTime");
+            if (FindNumber(properties, "currentValue") is { } zAiCurrent
+                && FindNumber(properties, "usage") is { } zAiUsage)
+            {
+                limit = zAiUsage;
+                amountUsed = zAiCurrent;
+            }
+
+            var reset = FindDate(properties, "reset_at", "resetAt", "reset", "next_reset", "nextReset", "refill_at", "refillAt", "resetsAt", "expires_at", "expiration", "nextRefreshTime", "nextResetTime");
             if (used is not null || utilization is not null || remaining is not null || (limit is not null && amountUsed is not null))
             {
                 var percentUsed = used ?? NormalizeUtilization(utilization)
@@ -895,6 +902,7 @@ internal static class UsageJsonParser
                 var windowName = FindString(properties, "type", "period", "window", "name", "limit_name");
                 var classificationPath = string.IsNullOrWhiteSpace(windowName) ? path : $"{path}.{windowName}";
                 var seconds = FindNumber(properties, "window_seconds", "windowSeconds", "period_seconds", "periodSeconds")
+                    ?? FindQuotaWindowSeconds(properties)
                     ?? GuessWindowSeconds(classificationPath);
                 if (reset is not null && seconds is not null)
                 {
@@ -1000,6 +1008,26 @@ internal static class UsageJsonParser
         }
 
         return null;
+    }
+
+    private static double? FindQuotaWindowSeconds(JsonProperty[] properties)
+    {
+        var unit = FindNumber(properties, "unit");
+        var count = FindNumber(properties, "number");
+        if (unit is null || count is null || count <= 0)
+        {
+            return null;
+        }
+
+        var multiplier = unit.Value switch
+        {
+            1 => 24 * 60 * 60,
+            3 => 60 * 60,
+            5 => 60,
+            6 => 7 * 24 * 60 * 60,
+            _ => 0,
+        };
+        return multiplier > 0 ? count.Value * multiplier : null;
     }
 
     private static string? FindString(JsonProperty[] properties, params string[] names)
