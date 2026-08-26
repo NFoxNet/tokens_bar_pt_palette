@@ -19,8 +19,9 @@ namespace TokensLimitsExtension;
 /// </summary>
 public sealed partial class UsageOverviewPage : ListPage, IDisposable
 {
-    private readonly IReadOnlyList<UsageSnapshotCache> _caches;
-    private readonly IReadOnlyList<TokensLimitsPage> _pages;
+    private IReadOnlyList<UsageSnapshotCache> _caches;
+    private IReadOnlyList<TokensLimitsPage> _pages;
+    private readonly object _providerGate = new();
     private readonly Action<string> _logger;
     private readonly IUsageRefreshSettings? _refreshSettings;
     private readonly Timer _refreshTimer;
@@ -84,14 +85,22 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         var token = cancellationToken.CanBeCanceled ? cancellationToken : _lifetimeCts.Token;
         try
         {
-            var results = await Task.WhenAll(_caches.Select(cache => ReadProviderAsync(cache, token))).ConfigureAwait(false);
+            IReadOnlyList<UsageSnapshotCache> caches;
+            IReadOnlyList<TokensLimitsPage> pages;
+            lock (_providerGate)
+            {
+                caches = _caches;
+                pages = _pages;
+            }
+
+            var results = await Task.WhenAll(caches.Select(cache => ReadProviderAsync(cache, token))).ConfigureAwait(false);
             var items = new List<IListItem>();
             for (var index = 0; index < results.Length; index++)
             {
                 var result = results[index];
-                items.Add(new ListItem(_pages[index])
+                items.Add(new ListItem(pages[index])
                 {
-                    Title = _caches[index].Descriptor.DisplayName,
+                    Title = caches[index].Descriptor.DisplayName,
                     Subtitle = result.Error is null
                         ? UsageDisplayFormatter.FormatDockBandSubtitle(result.Snapshot!)
                         : result.Error,
@@ -115,6 +124,30 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         finally
         {
             Volatile.Write(ref _refreshInProgress, 0);
+        }
+    }
+
+    public void UpdateProviders(
+        IReadOnlyList<UsageSnapshotCache> caches,
+        IReadOnlyList<TokensLimitsPage> pages)
+    {
+        ArgumentNullException.ThrowIfNull(caches);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (caches.Count != pages.Count)
+        {
+            throw new ArgumentException("Provider caches and pages must have the same length.");
+        }
+
+        lock (_providerGate)
+        {
+            _caches = caches;
+            _pages = pages;
+        }
+
+        Volatile.Write(ref _hasLoaded, 0);
+        if (!_disposed)
+        {
+            _ = RefreshAsync();
         }
     }
 
