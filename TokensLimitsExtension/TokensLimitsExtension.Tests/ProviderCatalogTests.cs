@@ -266,6 +266,43 @@ public sealed class ProviderCatalogTests
         Assert.Equal("token github-token", handler.Requests[0].Headers.Authorization!.ToString());
     }
 
+    [Fact]
+    public async Task ClawRouterBudgetLedgerMapsMonthlyUsageAndTokenMetrics()
+    {
+        var handler = new StubHandler("""
+            {
+              "budget": {
+                "configured": true,
+                "ledger": "monthly",
+                "limitMicros": 1000000,
+                "spentMicros": 250000,
+                "remainingMicros": 750000,
+                "windowKey": "2026-08"
+              },
+              "usage": {
+                "summary": {
+                  "requestCount": 4,
+                  "inputTokens": 120,
+                  "outputTokens": 80,
+                  "totalTokens": 200,
+                  "actualCostMicros": 250000
+                },
+                "providers": []
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "clawrouter"),
+            new TestConfiguration(("clawrouter", "apiKey", "claw-key")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(25, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero), snapshot.PrimaryWindow.ResetAt);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name.Equals("input Tokens", StringComparison.OrdinalIgnoreCase) && metric.Value == "120");
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {

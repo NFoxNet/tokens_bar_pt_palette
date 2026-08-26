@@ -1188,8 +1188,12 @@ internal static class UsageJsonParser
             }
             if (used is not null || utilization is not null || remaining is not null || (limit is not null && amountUsed is not null))
             {
-                var percentUsed = used ?? NormalizeUtilization(utilization)
-                    ?? (remaining is not null ? 100d - remaining.Value : 100d * amountUsed!.Value / limit!.Value);
+                var percentUsed = used is not null
+                    ? NormalizeDirectPercent(used.Value)
+                    : NormalizeUtilization(utilization)
+                        ?? (remaining is not null
+                            ? 100d - NormalizeDirectPercent(remaining.Value)
+                            : 100d * amountUsed!.Value / limit!.Value);
                 var windowName = FindString(properties, "type", "period", "window", "name", "limit_name");
                 var classificationPath = string.IsNullOrWhiteSpace(windowName) ? path : $"{path}.{windowName}";
                 var seconds = FindNumber(properties, "window_seconds", "windowSeconds", "period_seconds", "periodSeconds")
@@ -1530,6 +1534,17 @@ internal static class UsageJsonParser
 
                 found = true;
             }
+
+            if (providerId.Equals("clawrouter", StringComparison.OrdinalIgnoreCase)
+                && TryCreateBudgetWindow(properties, out var budget))
+            {
+                if (primary is null || budget.UsedPercent > primary.UsedPercent)
+                {
+                    primary = budget;
+                }
+
+                found = true;
+            }
         }
 
         return new ProviderSpecificWindows(found, primary, secondary);
@@ -1576,6 +1591,52 @@ internal static class UsageJsonParser
 
     private static double NormalizeDirectPercent(double value)
         => value is >= 0 and <= 1 ? value * 100 : value;
+
+    private static bool TryCreateBudgetWindow(JsonProperty[] properties, out UsageWindow window)
+    {
+        var limit = FindNumber(properties, "limitMicros");
+        var spent = FindNumber(properties, "spentMicros");
+        var windowKey = FindString(properties, "windowKey");
+        if (limit is null || spent is null || limit <= 0 || !TryGetNextMonthReset(windowKey, out var resetAt))
+        {
+            window = null!;
+            return false;
+        }
+
+        window = new UsageWindow(Math.Clamp(spent.Value / limit.Value * 100, 0, 100), resetAt, 0);
+        return true;
+    }
+
+    private static bool TryGetNextMonthReset(string? windowKey, out DateTimeOffset resetAt)
+    {
+        resetAt = default;
+        if (string.IsNullOrWhiteSpace(windowKey)
+            || !Regex.IsMatch(windowKey, @"^\d{4}-\d{2}$", RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        var parts = windowKey.Split('-');
+        if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var year)
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var month)
+            || month is < 1 or > 12)
+        {
+            return false;
+        }
+
+        if (month == 12)
+        {
+            year++;
+            month = 1;
+        }
+        else
+        {
+            month++;
+        }
+
+        resetAt = new DateTimeOffset(year, month, 1, 0, 0, 0, TimeSpan.Zero);
+        return true;
+    }
 
     private static IEnumerable<JsonProperty[]> EnumerateObjectProperties(JsonElement element, int depth)
     {
