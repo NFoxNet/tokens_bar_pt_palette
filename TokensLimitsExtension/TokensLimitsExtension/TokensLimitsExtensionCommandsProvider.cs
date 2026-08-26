@@ -28,7 +28,9 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private readonly TokensLimitsPage[] _pages;
     private readonly UsageSnapshotCache[] _snapshotCaches;
     private readonly UsageDockBandItem[] _dockBandItems;
+    private readonly UsageOverviewPage _overviewPage;
     private readonly IDisposable? _ownedUsageService;
+    private readonly HttpClient? _ownedProviderHttpClient;
     private int _disposed;
 
     public TokensLimitsExtensionCommandsProvider(
@@ -45,7 +47,14 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         _ownedUsageService = ownsUsageService ? usageService as IDisposable : null;
 
         _ownsProviderRegistry = providerRegistry is null;
-        _providerRegistry = providerRegistry ?? UsageProviderRegistryFactory.CreateDefault(usageService);
+        _ownedProviderHttpClient = providerRegistry is null
+            ? new HttpClient { Timeout = TimeSpan.FromSeconds(20) }
+            : null;
+        _providerRegistry = providerRegistry ?? UsageProviderRegistryFactory.CreateDefault(
+            usageService,
+            _settings,
+            _ownedProviderHttpClient!,
+            LogMessage);
         var providers = _providerRegistry.Providers;
         _snapshotCaches = providers
             .Select(provider => new UsageSnapshotCache(provider, _settings))
@@ -53,12 +62,15 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         _pages = _snapshotCaches
             .Select(provider => new TokensLimitsPage(provider, LogMessage, _settings))
             .ToArray();
-        _commands = _pages
-            .Select((page, index) => new CommandItem(page)
+        _overviewPage = new UsageOverviewPage(_snapshotCaches, _pages, LogMessage, _settings);
+        _commands =
+        [
+            new CommandItem(_overviewPage)
             {
-                Title = _snapshotCaches[index].Descriptor.DisplayName,
-            })
-            .ToArray();
+                Title = "Провайдеры",
+                Subtitle = "Лимиты и расход включённых провайдеров",
+            },
+        ];
         var dockBands = providers
             .Zip(_snapshotCaches, (provider, cache) => (provider, cache))
             .Zip(_pages, (pair, page) => CreateDockBand(pair.cache, LogMessage, page, _settings))
@@ -89,6 +101,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             dockBandItem.Dispose();
         }
 
+        _overviewPage.Dispose();
+
         foreach (var page in _pages)
         {
             page.Dispose();
@@ -106,6 +120,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         }
 
         _ownedUsageService?.Dispose();
+        _ownedProviderHttpClient?.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();
     }

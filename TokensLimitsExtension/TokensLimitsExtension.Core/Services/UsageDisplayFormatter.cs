@@ -51,6 +51,36 @@ public static class UsageDisplayFormatter
             ? "данные недоступны"
             : $"{FormatRemainingPercent(window.UsedPercent)} · {FormatTimeUntilReset(window.ResetAt, now)}";
 
+    public static string GetWindowLabel(UsageWindow? window, string fallback)
+        => window is null ? fallback : GetWindowShortLabel(window, fallback);
+
+    private static string GetWindowShortLabel(UsageWindow? window, string fallback)
+    {
+        if (window is null || window.LimitWindowSeconds <= 0)
+        {
+            return fallback;
+        }
+
+        var seconds = window.LimitWindowSeconds;
+        if (seconds % (7 * 24 * 60 * 60) == 0)
+        {
+            var weeks = seconds / (7 * 24 * 60 * 60);
+            return weeks == 1 ? "7д" : $"{weeks}н";
+        }
+
+        if (seconds % (24 * 60 * 60) == 0)
+        {
+            return $"{seconds / (24 * 60 * 60)}д";
+        }
+
+        if (seconds % (60 * 60) == 0)
+        {
+            return $"{seconds / (60 * 60)}ч";
+        }
+
+        return $"{Math.Max(1, seconds / 60)}м";
+    }
+
     private static int GetRemainingPercent(double usedPercent)
     {
         var remaining = Math.Clamp(100d - usedPercent, 0d, 100d);
