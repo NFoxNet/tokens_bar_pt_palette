@@ -220,7 +220,13 @@ public static class UsageProviderDescriptorRegistry
                 Plain("historyDays", "Дней истории", "Сколько последних дней запрашивать в Usage API OpenAI (1–365).", "OPENAI_HISTORY_DAYS", "30"),
             ],
             sourceDescription: "Официальные OpenAI Usage/Costs API; для организации обычно требуется Admin API-ключ.") ,
-        CookieProvider("opencode", "OpenCode", "https://opencode.ai/auth"),
+        new(
+            "opencode",
+            "OpenCode",
+            UsageProviderAuthKind.Cookie,
+            "https://opencode.ai/auth",
+            settings: [Cookie(), Plain("workspaceId", "Рабочее пространство", "Необязательный workspace ID OpenCode; если пусто, он определяется из аккаунта.")],
+            sourceDescription: "OpenCode server-function usage; rolling и weekly читаются из авторизованного workspace payload."),
         new(
             "opencodego",
             "OpenCode Go",

@@ -509,6 +509,29 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task OpenCodeServerFunctionMapsRollingAndWeeklyUsage()
+    {
+        var handler = new RoutingStubHandler(_ => """
+            {"rollingUsage":{"usagePercent":15,"resetInSec":1200},"weeklyUsage":{"usagePercent":31,"resetInSec":12000}}
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "opencode"),
+            new TestConfiguration(
+                ("opencode", "cookieHeader", "session=open-code-session"),
+                ("opencode", "workspaceId", "wrk_test")),
+            new HttpClient(handler));
+
+        var before = DateTimeOffset.UtcNow;
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(15, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(31, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.InRange(snapshot.PrimaryWindow.ResetAt, before.AddSeconds(1190), before.AddSeconds(1210));
+        Assert.Equal("7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4", handler.LastRequest!.Headers.GetValues("X-Server-Id").Single());
+        Assert.Contains("wrk_test", handler.LastRequest.RequestUri!.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task JetBrainsQuotaFileIsDetectedFromTheOfficialLocalFormat()
     {
         var reset = DateTimeOffset.UtcNow.AddDays(12);
@@ -666,11 +689,13 @@ public sealed class ProviderCatalogTests
 
     private sealed class RoutingStubHandler(Func<HttpRequestMessage, string> responseFactory) : HttpMessageHandler
     {
+        public HttpRequestMessage? LastRequest { get; private set; }
         public List<HttpRequestMessage> Requests { get; } = [];
         public List<string?> RequestBodies { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            LastRequest = request;
             Requests.Add(request);
             RequestBodies.Add(request.Content is null
                 ? null

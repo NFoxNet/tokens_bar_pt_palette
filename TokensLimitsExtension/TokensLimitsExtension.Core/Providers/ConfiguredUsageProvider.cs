@@ -64,6 +64,13 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetOllamaSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("opencode", StringComparison.OrdinalIgnoreCase)
+            || (_descriptor.Id.Equals("opencodego", StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrWhiteSpace(ResolveCredential().ApiKey)))
+        {
+            return await GetOpenCodeSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (_descriptor.Id.Equals("kilo", StringComparison.OrdinalIgnoreCase))
         {
             return await GetKiloSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -488,6 +495,199 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             Query = string.Join("&", query),
         };
         return builder.Uri;
+    }
+
+    private async Task<UsageSnapshot> GetOpenCodeSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var credential = ResolveCredential();
+        if (string.IsNullOrWhiteSpace(credential.CookieHeader))
+        {
+            throw new UsageProviderConfigurationException(
+                $"Для {Descriptor.DisplayName} нужен Cookie-заголовок авторизованной сессии.");
+        }
+
+        var workspaceId = _configuration.GetValue(Descriptor.Id, "workspaceId")
+            ?? _configuration.GetValue(Descriptor.Id, "accountId");
+        if (string.IsNullOrWhiteSpace(workspaceId))
+        {
+            var workspaceText = await GetOpenCodeServerTextAsync(
+                "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f",
+                null,
+                credential.CookieHeader,
+                new Uri("https://opencode.ai/"),
+                cancellationToken).ConfigureAwait(false);
+            workspaceId = Regex.Match(workspaceText, @"wrk_[A-Za-z0-9]+", RegexOptions.CultureInvariant).Value;
+        }
+
+        if (string.IsNullOrWhiteSpace(workspaceId))
+        {
+            throw new UsageProviderRequestException(
+                $"{Descriptor.DisplayName}: workspace ID не найден в авторизованном аккаунте.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var source = "https://opencode.ai";
+        string raw;
+        if (Descriptor.Id.Equals("opencodego", StringComparison.OrdinalIgnoreCase))
+        {
+            var pageUri = new Uri($"https://opencode.ai/workspace/{Uri.EscapeDataString(workspaceId)}/go");
+            raw = await GetOpenCodePageTextAsync(pageUri, credential.CookieHeader, cancellationToken).ConfigureAwait(false);
+            source = pageUri.AbsoluteUri;
+        }
+        else
+        {
+            raw = await GetOpenCodeServerTextAsync(
+                "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4",
+                workspaceId,
+                credential.CookieHeader,
+                new Uri($"https://opencode.ai/workspace/{Uri.EscapeDataString(workspaceId)}/billing"),
+                cancellationToken).ConfigureAwait(false);
+            source = "https://opencode.ai/_server";
+        }
+
+        var primary = ParseOpenCodeWindow(raw, "rollingUsage", now, 5 * 60 * 60);
+        var secondary = ParseOpenCodeWindow(raw, "weeklyUsage", now, 7 * 24 * 60 * 60);
+        var metrics = new List<UsageMetric>
+        {
+            new("Workspace", workspaceId),
+        };
+        AddOpenCodeNumberMetric(raw, metrics, "monthlyUsageUSD", "Monthly usage", "USD");
+        AddOpenCodeNumberMetric(raw, metrics, "monthlyLimitUSD", "Monthly limit", "USD");
+        AddOpenCodeNumberMetric(raw, metrics, "balanceUSD", "Balance", "USD");
+
+        if (primary is null && secondary is null)
+        {
+            try
+            {
+                var parsed = UsageJsonParser.ParseText(Descriptor, source, raw, now);
+                if (parsed.PrimaryWindow is not null || parsed.SecondaryWindow is not null || parsed.Metrics.Count > 0)
+                {
+                    _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from OpenCode payload.");
+                    return parsed with { Source = source };
+                }
+            }
+            catch (UsageProviderRequestException)
+            {
+                // OpenCode server functions commonly return JavaScript-like payloads;
+                // the locked rolling/weekly fields are parsed below when it is not JSON.
+            }
+        }
+
+        if (primary is null && secondary is null && metrics.Count == 1)
+        {
+            throw new UsageProviderRequestException(
+                $"{Descriptor.DisplayName}: payload не содержит rolling/weekly usage данных.");
+        }
+
+        _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from OpenCode usage payload.");
+        return new UsageSnapshot(
+            Descriptor.Id,
+            Descriptor.DisplayName,
+            primary,
+            secondary,
+            null,
+            false)
+        {
+            FetchedAt = now,
+            Source = source,
+            Metrics = metrics,
+        };
+    }
+
+    private async Task<string> GetOpenCodeServerTextAsync(
+        string serverId,
+        string? workspaceId,
+        string cookieHeader,
+        Uri referer,
+        CancellationToken cancellationToken)
+    {
+        var builder = new UriBuilder("https://opencode.ai/_server");
+        var query = new List<string> { $"id={Uri.EscapeDataString(serverId)}" };
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+        {
+            query.Add($"args={Uri.EscapeDataString($"[\"{workspaceId}\"]")}");
+        }
+
+        builder.Query = string.Join('&', query);
+        using var request = new HttpRequestMessage(HttpMethod.Get, builder.Uri);
+        request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+        request.Headers.TryAddWithoutValidation("X-Server-Id", serverId);
+        request.Headers.TryAddWithoutValidation("X-Server-Instance", $"server-fn:{Guid.NewGuid():D}");
+        request.Headers.TryAddWithoutValidation("Origin", "https://opencode.ai");
+        request.Headers.TryAddWithoutValidation("Referer", referer.AbsoluteUri);
+        request.Headers.TryAddWithoutValidation("Accept", "text/javascript, application/json;q=0.9, */*;q=0.8");
+        request.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36");
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"OpenCode server function: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<string> GetOpenCodePageTextAsync(
+        Uri uri,
+        string cookieHeader,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+        request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        request.Headers.TryAddWithoutValidation("Origin", "https://opencode.ai");
+        request.Headers.TryAddWithoutValidation("Referer", "https://opencode.ai/");
+        request.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36");
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"OpenCode page: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static UsageWindow? ParseOpenCodeWindow(
+        string raw,
+        string key,
+        DateTimeOffset now,
+        int fallbackWindowSeconds)
+    {
+        var match = Regex.Match(
+            raw,
+            $@"(?is)[""']?{Regex.Escape(key)}[""']?\s*[:=].*?[""']?(?:usagePercent|usedPercent|percentUsed|percent)[""']?\s*[:=]\s*(?<percent>[0-9]+(?:\.[0-9]+)?).*?[""']?(?:resetInSec|resetInSeconds|resetSeconds|reset_sec|reset_in_sec)[""']?\s*[:=]\s*(?<reset>[0-9]+)",
+            RegexOptions.CultureInvariant);
+        if (!match.Success
+            || !double.TryParse(match.Groups["percent"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var percent)
+            || !int.TryParse(match.Groups["reset"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var resetSeconds)
+            || resetSeconds < 0)
+        {
+            return null;
+        }
+
+        return new UsageWindow(Math.Clamp(percent, 0, 100), now.AddSeconds(resetSeconds), fallbackWindowSeconds);
+    }
+
+    private static void AddOpenCodeNumberMetric(
+        string raw,
+        List<UsageMetric> metrics,
+        string key,
+        string name,
+        string unit)
+    {
+        var match = Regex.Match(
+            raw,
+            $@"(?is)[""']?{Regex.Escape(key)}[""']?\s*[:=]\s*[""']?(?<value>-?[0-9]+(?:\.[0-9]+)?)[""']?",
+            RegexOptions.CultureInvariant);
+        if (match.Success)
+        {
+            metrics.Add(new UsageMetric(name, match.Groups["value"].Value, unit));
+        }
     }
 
     private async Task<UsageSnapshot> GetKiloSnapshotAsync(CancellationToken cancellationToken)
