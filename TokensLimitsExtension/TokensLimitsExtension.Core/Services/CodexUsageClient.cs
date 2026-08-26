@@ -6,18 +6,26 @@ namespace TokensLimitsExtension.Core.Services;
 
 public sealed class CodexUsageClient : ICodexUsageClient
 {
-    private static readonly Uri UsageEndpoint = new("https://chatgpt.com/backend-api/codex/usage");
+    private static readonly Uri UsageEndpoint = new("https://chatgpt.com/backend-api/wham/usage");
     private readonly HttpClient _httpClient;
     private readonly Action<string>? _logger;
+    private readonly Func<string?>? _accountIdProvider;
 
-    public CodexUsageClient(HttpClient? httpClient = null, Action<string>? logger = null)
+    public CodexUsageClient(
+        HttpClient? httpClient = null,
+        Action<string>? logger = null,
+        Func<string?>? accountIdProvider = null)
     {
         _httpClient = httpClient ?? new HttpClient();
         _logger = logger;
+        _accountIdProvider = accountIdProvider;
     }
 
-    public CodexUsageClient(HttpMessageHandler handler, Action<string>? logger = null)
-        : this(new HttpClient(handler, disposeHandler: false), logger)
+    public CodexUsageClient(
+        HttpMessageHandler handler,
+        Action<string>? logger = null,
+        Func<string?>? accountIdProvider = null)
+        : this(new HttpClient(handler, disposeHandler: false), logger, accountIdProvider)
     {
     }
 
@@ -31,7 +39,12 @@ public sealed class CodexUsageClient : ICodexUsageClient
         using var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.UserAgent.ParseAdd("TokensLimitsExtension/1.0");
+        request.Headers.UserAgent.ParseAdd("codex-cli");
+        var accountId = _accountIdProvider?.Invoke();
+        if (!string.IsNullOrWhiteSpace(accountId))
+        {
+            request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", accountId);
+        }
 
         using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);

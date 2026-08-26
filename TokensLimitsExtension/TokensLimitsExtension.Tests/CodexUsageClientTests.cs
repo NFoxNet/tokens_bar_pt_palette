@@ -29,7 +29,7 @@ public sealed class CodexUsageClientTests
         }
         """;
         var handler = new StubHandler(json);
-        var client = new CodexUsageClient(handler);
+        var client = new CodexUsageClient(handler, accountIdProvider: () => "account-id");
 
         var snapshot = await client.FetchUsageAsync("test-token", CancellationToken.None);
 
@@ -42,7 +42,9 @@ public sealed class CodexUsageClientTests
         Assert.Equal(20, snapshot.AdditionalRateLimits[0].PrimaryWindow!.UsedPercent);
         Assert.Equal(HttpMethod.Get, handler.Request!.Method);
         Assert.Equal("Bearer test-token", handler.Request.Headers.Authorization!.ToString());
-        Assert.Equal("https://chatgpt.com/backend-api/codex/usage", handler.Request.RequestUri!.ToString());
+        Assert.Equal("https://chatgpt.com/backend-api/wham/usage", handler.Request.RequestUri!.ToString());
+        Assert.Equal("account-id", handler.Request.Headers.GetValues("ChatGPT-Account-Id").Single());
+        Assert.Equal("codex-cli", handler.Request.Headers.UserAgent.Single().Product!.Name);
     }
 
     [Fact]

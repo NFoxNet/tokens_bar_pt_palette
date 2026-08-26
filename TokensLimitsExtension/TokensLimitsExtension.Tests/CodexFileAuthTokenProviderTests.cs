@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using TokensLimitsExtension.Core.Services;
 
@@ -76,6 +77,42 @@ public sealed class CodexFileAuthTokenProviderTests
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 provider.GetValidAccessTokenAsync(CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(authPath);
+        }
+    }
+
+    [Fact]
+    public async Task ReadsAccountIdAndRefreshesJwtExpiredToken()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { access_token = "refreshed-token" }),
+        });
+        var expiredPayload = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+            $"{{\"exp\":{DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeSeconds()}}}"))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        try
+        {
+            await File.WriteAllTextAsync(authPath, JsonSerializer.Serialize(new
+            {
+                tokens = new
+                {
+                    access_token = $"header.{expiredPayload}.signature",
+                    refresh_token = "refresh-token",
+                    account_id = "account-id",
+                },
+            }));
+
+            var provider = new CodexFileAuthTokenProvider(authPath, handler);
+
+            Assert.Equal("refreshed-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
+            Assert.Equal("account-id", provider.AccountId);
         }
         finally
         {

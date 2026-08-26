@@ -39,10 +39,11 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             .FirstOrDefault();
         codexHome ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
         var logger = LogMessage;
+        var auth = new CodexFileAuthTokenProvider(Path.Combine(codexHome, "auth.json"));
         return new CodexUsageService(
-            new CodexFileAuthTokenProvider(Path.Combine(codexHome, "auth.json")),
-            new CodexUsageClient(logger: logger),
-            new CodexLocalSessionFallback(codexHome),
+            auth,
+            new CodexUsageClient(logger: logger, accountIdProvider: () => auth.AccountId),
+            new CodexLocalSessionFallback(codexHome, logger: logger),
             logger);
     }
 

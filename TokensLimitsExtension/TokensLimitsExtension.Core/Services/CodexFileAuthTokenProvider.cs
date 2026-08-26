@@ -4,13 +4,15 @@ using System.Text.Json;
 
 namespace TokensLimitsExtension.Core.Services;
 
-public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
+public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodexAccountIdentityProvider
 {
     private const string RefreshEndpoint = "https://auth.openai.com/oauth/token";
     private const string ClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
     private readonly string _authFilePath;
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
+
+    public string? AccountId { get; private set; }
 
     public CodexFileAuthTokenProvider(
         string authFilePath,
@@ -44,6 +46,10 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
 
         var accessToken = GetString(tokenObject, "access_token") ?? GetString(tokenObject, "accessToken");
         var refreshToken = GetString(tokenObject, "refresh_token") ?? GetString(tokenObject, "refreshToken");
+        AccountId = GetString(tokenObject, "account_id")
+            ?? GetString(tokenObject, "accountId")
+            ?? GetString(root, "account_id")
+            ?? GetString(root, "accountId");
         var expiresAt = GetDateTimeOffset(tokenObject, "expires_at") ?? GetDateTimeOffset(tokenObject, "expiresAt");
 
         if (string.IsNullOrWhiteSpace(accessToken))
@@ -52,6 +58,7 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
         }
 
         var now = _timeProvider.GetUtcNow();
+        expiresAt ??= GetJwtExpiry(accessToken);
         if (expiresAt is null || expiresAt > now.AddMinutes(1))
         {
             return accessToken;
@@ -146,5 +153,30 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
         }
 
         return null;
+    }
+
+    private static DateTimeOffset? GetJwtExpiry(string accessToken)
+    {
+        var segments = accessToken.Split('.');
+        if (segments.Length < 2)
+        {
+            return null;
+        }
+
+        try
+        {
+            var payload = segments[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '=');
+            using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
+            return GetDateTimeOffset(document.RootElement, "exp");
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 }

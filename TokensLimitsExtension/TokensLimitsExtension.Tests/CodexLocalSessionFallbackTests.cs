@@ -34,6 +34,35 @@ public sealed class CodexLocalSessionFallbackTests
         }
     }
 
+    [Fact]
+    public async Task SkipsLockedSessionFileAndReadsOtherSessions()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions", "project-alpha");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var lockedFile = Path.Combine(sessions, "active.jsonl");
+        var readableFile = Path.Combine(sessions, "completed.jsonl");
+        await File.WriteAllTextAsync(lockedFile, "not readable while locked");
+        await File.WriteAllTextAsync(readableFile,
+            $"{{\"timestamp\":\"{now.AddHours(-1):O}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"total_tokens\":1000}}}}}}}}\n");
+        using var lockHandle = new FileStream(lockedFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, 10_000, 100_000, new FixedTimeProvider(now));
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(10, snapshot.PrimaryUsedPercent);
+        }
+        finally
+        {
+            lockHandle.Dispose();
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;

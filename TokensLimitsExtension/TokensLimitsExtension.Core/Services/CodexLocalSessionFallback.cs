@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using TokensLimitsExtension.Core.Models;
 
@@ -15,12 +16,14 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback
     private readonly long _fiveHourLimitTokens;
     private readonly long _weeklyLimitTokens;
     private readonly TimeProvider _timeProvider;
+    private readonly Action<string>? _logger;
 
     public CodexLocalSessionFallback(
         string? codexHome = null,
         long fiveHourLimitTokens = 100_000,
         long weeklyLimitTokens = 500_000,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Action<string>? logger = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(fiveHourLimitTokens);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(weeklyLimitTokens);
@@ -31,6 +34,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback
         _fiveHourLimitTokens = fiveHourLimitTokens;
         _weeklyLimitTokens = weeklyLimitTokens;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _logger = logger;
     }
 
     public async Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken)
@@ -46,22 +50,33 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback
             foreach (var file in EnumerateSessionFiles(home))
             {
                 var previousCumulative = 0L;
-                await foreach (var line in File.ReadLinesAsync(file, cancellationToken).ConfigureAwait(false))
+                try
                 {
-                    if (!TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
+                    await foreach (var line in ReadLinesSharedAsync(file, cancellationToken).ConfigureAwait(false))
                     {
-                        continue;
-                    }
+                        if (!TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
+                        {
+                            continue;
+                        }
 
-                    if (timestamp >= weeklyCutoff && timestamp <= now)
-                    {
-                        weeklyTokens += delta;
-                    }
+                        if (timestamp >= weeklyCutoff && timestamp <= now)
+                        {
+                            weeklyTokens += delta;
+                        }
 
-                    if (timestamp >= fiveHourCutoff && timestamp <= now)
-                    {
-                        fiveHourTokens += delta;
+                        if (timestamp >= fiveHourCutoff && timestamp <= now)
+                        {
+                            fiveHourTokens += delta;
+                        }
                     }
+                }
+                catch (IOException ex)
+                {
+                    _logger?.Invoke($"[TokensLimits] Skipping unreadable session file '{file}': {ex.Message}");
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    _logger?.Invoke($"[TokensLimits] Skipping inaccessible session file '{file}': {ex.Message}");
                 }
             }
         }
@@ -108,6 +123,30 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback
             {
                 yield return file;
             }
+        }
+    }
+
+    private static async IAsyncEnumerable<string> ReadLinesSharedAsync(
+        string file,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            file,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var reader = new StreamReader(stream);
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            if (line is null)
+            {
+                yield break;
+            }
+
+            yield return line;
         }
     }
 
