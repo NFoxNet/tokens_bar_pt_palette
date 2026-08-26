@@ -179,7 +179,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
     private async Task<UsageSnapshot> GetLocalSnapshotAsync(CancellationToken cancellationToken)
     {
-        var endpoint = UsageProviderEndpointCatalog.For(Descriptor.Id).FirstOrDefault();
+        var endpoints = UsageProviderEndpointCatalog.For(Descriptor.Id);
+        var endpoint = endpoints.Count == 0 ? null : endpoints[0];
         if (Descriptor.Id.Equals("ollama", StringComparison.OrdinalIgnoreCase)
             && endpoint?.Url is not null)
         {
