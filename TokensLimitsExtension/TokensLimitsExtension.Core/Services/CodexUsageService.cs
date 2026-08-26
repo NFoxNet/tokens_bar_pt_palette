@@ -3,7 +3,7 @@ using TokensLimitsExtension.Core.Models;
 
 namespace TokensLimitsExtension.Core.Services;
 
-public sealed class CodexUsageService
+public sealed class CodexUsageService : ICodexUsageProvider
 {
     private readonly ICodexAuthTokenProvider _authTokenProvider;
     private readonly ICodexUsageClient _usageClient;
