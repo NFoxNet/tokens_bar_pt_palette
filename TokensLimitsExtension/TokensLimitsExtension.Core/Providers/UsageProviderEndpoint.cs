@@ -296,7 +296,7 @@ public static class UsageProviderEndpointCatalog
                 Get("model-usage", "https://api.z.ai/api/monitor/usage/model-usage", baseUrl: true),
                 Get("balance-cn", "https://www.bigmodel.cn/api/biz/account/query-customer-account-report", baseUrl: true),
             ],
-            ["zed"] = [Get("profile", "https://cloud.zed.dev/client/users/me", apiKey: false)],
+            ["zed"] = [Get("profile", "https://cloud.zed.dev/client/users/me", header: "Authorization", prefix: "", apiKey: true)],
             ["zenmux"] = [Get("subscription", "https://zenmux.ai/api/v1/management/subscription/detail", baseUrl: true)],
             ["zoommate"] = [Get("credits", "https://ai.zoom.us/ai-computer/api/v1/credits/status", cookie: true, apiKey: false)],
         };

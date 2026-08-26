@@ -385,6 +385,31 @@ public sealed class ProviderCatalogTests
         Assert.Contains("\"params\":{}", handler.LastRequestBody, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ZedProfileMapsEditPredictionLimitAndUserAuthorization()
+    {
+        var reset = DateTimeOffset.UtcNow.AddDays(12);
+        var handler = new StubHandler($$"""
+            {
+              "plan": {
+                "plan_v3": "zed pro",
+                "subscription_period": { "ended_at": "{{reset:O}}" },
+                "usage": { "edit_predictions": { "used": 250, "limit": 1000 } }
+              }
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "zed"),
+            new TestConfiguration(("zed", "apiKey", "zed-token"), ("zed", "userId", "42")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(25, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Edit predictions" && metric.Value == "250");
+        Assert.Equal("42 zed-token", handler.LastRequest!.Headers.Authorization!.ToString());
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {

@@ -255,7 +255,17 @@ public static class UsageProviderDescriptorRegistry
                 Plain("balanceEndpoint", "Balance endpoint", "Необязательный URL balance endpoint.", "Z_AI_BALANCE_ENDPOINT"),
             ],
             sourceDescription: "Официальный z.ai quota/model-usage API с поддержкой global и BigModel CN.") ,
-        Local("zed", "Zed"),
+        new(
+            "zed",
+            "Zed",
+            UsageProviderAuthKind.ApiKey,
+            "https://cloud.zed.dev/client/users/me",
+            settings:
+            [
+                ApiKeyField("apiKey", "ZED_ACCESS_TOKEN", "Zed access token"),
+                Plain("userId", "Zed user ID", "Числовой GitHub/Zed user ID из локальных credentials.", "ZED_USER_ID"),
+            ],
+            sourceDescription: "Официальный Zed cloud profile API; нужен user ID и access token из авторизованного клиента Zed."),
         Api("zenmux", "ZenMux", "https://zenmux.ai/platform/management", "ZENMUX_API_KEY", withBaseUrl: true),
         CookieProvider("zoommate", "ZoomMate", "https://zoommate.zoom.us/#/?settings=credit-usage"),
     ];

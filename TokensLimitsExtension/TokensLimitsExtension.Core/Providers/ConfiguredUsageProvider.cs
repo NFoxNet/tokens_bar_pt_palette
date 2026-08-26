@@ -52,6 +52,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetLocalSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("zed", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GetZedSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (_descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase))
         {
             return await GetOpenAiSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -492,6 +497,97 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         {
             return UsageJsonParser.ParseXml(Descriptor, "local", raw, DateTimeOffset.UtcNow);
         }
+    }
+
+    private async Task<UsageSnapshot> GetZedSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var credential = ResolveCredential();
+        var userId = _configuration.GetValue(Descriptor.Id, "userId")
+            ?? Environment.GetEnvironmentVariable("ZED_USER_ID");
+        if (string.IsNullOrWhiteSpace(credential.ApiKey) || string.IsNullOrWhiteSpace(userId))
+        {
+            throw new UsageProviderConfigurationException(
+                "Для Zed задайте access token и user ID авторизованного аккаунта.");
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://cloud.zed.dev/client/users/me");
+        request.Headers.TryAddWithoutValidation("Authorization", $"{userId} {credential.ApiKey}");
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new UsageProviderRequestException(
+                $"Zed profile: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+        }
+
+        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
+        var metrics = new List<UsageMetric>();
+        var plan = root.TryGetProperty("plan", out var planObject) && planObject.ValueKind == JsonValueKind.Object
+            ? planObject
+            : default;
+        var planName = plan.ValueKind == JsonValueKind.Object && plan.TryGetProperty("plan_v3", out var planValue)
+            ? planValue.GetString()
+            : null;
+        if (!string.IsNullOrWhiteSpace(planName))
+        {
+            metrics.Add(new UsageMetric("Plan", planName));
+        }
+
+        DateTimeOffset? resetAt = null;
+        if (plan.ValueKind == JsonValueKind.Object
+            && plan.TryGetProperty("subscription_period", out var subscription)
+            && subscription.ValueKind == JsonValueKind.Object
+            && subscription.TryGetProperty("ended_at", out var endedAt)
+            && endedAt.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(endedAt.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedEndedAt))
+        {
+            resetAt = parsedEndedAt;
+            metrics.Add(new UsageMetric("Billing cycle ends", parsedEndedAt.ToString("O", CultureInfo.InvariantCulture), ResetAt: parsedEndedAt));
+        }
+
+        UsageWindow? primary = null;
+        if (plan.ValueKind == JsonValueKind.Object
+            && plan.TryGetProperty("usage", out var usage)
+            && usage.ValueKind == JsonValueKind.Object
+            && usage.TryGetProperty("edit_predictions", out var editPredictions)
+            && editPredictions.ValueKind == JsonValueKind.Object
+            && TryGetJsonDouble(editPredictions, "used", out var used))
+        {
+            if (editPredictions.TryGetProperty("limit", out var limitValue)
+                && limitValue.ValueKind == JsonValueKind.Number
+                && limitValue.TryGetDouble(out var limit)
+                && limit > 0)
+            {
+                var remaining = Math.Max(0, limit - used);
+                metrics.Add(new UsageMetric("Edit predictions", FormatNumber(used), "requests", Used: used, Limit: limit, Remaining: remaining, ResetAt: resetAt));
+                if (resetAt is not null)
+                {
+                    primary = new UsageWindow(Math.Clamp(used / limit * 100, 0, 100), resetAt.Value, 0);
+                }
+            }
+            else if (limitValue.ValueKind == JsonValueKind.String
+                && limitValue.GetString()?.Equals("unlimited", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                metrics.Add(new UsageMetric("Edit predictions", FormatNumber(used), "requests", Used: used));
+            }
+        }
+
+        if (metrics.Count == 0)
+        {
+            throw new UsageProviderRequestException("Zed profile не содержит plan/usage данных.");
+        }
+
+        _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from cloud profile API.");
+        return new UsageSnapshot(Descriptor.Id, Descriptor.DisplayName, primary, null, planName, false)
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Source = "cloud.zed.dev/client/users/me",
+            Metrics = metrics,
+        };
     }
 
     private async Task<UsageSnapshot> GetOpenAiSnapshotAsync(CancellationToken cancellationToken)
@@ -1074,7 +1170,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         return new WindsurfSession(sessionToken, auth1Token, accountId, primaryOrgId);
     }
 
-    private static string? FirstSessionValue(IReadOnlyDictionary<string, string> values, params string[] keys)
+    private static string? FirstSessionValue(Dictionary<string, string> values, params string[] keys)
     {
         foreach (var key in keys)
         {
