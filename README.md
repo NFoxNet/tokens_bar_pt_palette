@@ -45,6 +45,20 @@ UI-слой создаёт для каждой включённой записи
 `AWS Bedrock`, `Grok`, `Groq`, `LLM Proxy`, `LiteLLM`, `Deepgram`, `Poe`, `Chutes`, `Neuralwatt`, `ClawRouter`, `LongCat`,
 `sub2api`, `Wayfinder`, `ZenMux`, `ai&`, `ZoomMate`, `xAI`, `Notion AI` и `IBM Bob`.
 
+Для провайдеров, у которых API-контракт отличается от обычного JSON GET, используются отдельные адаптеры:
+
+- `OpenAI` запрашивает административные `organization/costs` и `organization/usage/completions` дневными бакетами,
+  поддерживает pagination, project ID и диапазон истории 1–365 дней (`OPENAI_HISTORY_DAYS`). Для организации нужен
+  `OPENAI_ADMIN_KEY`.
+- `Alibaba Coding Plan` отправляет официальный POST с commodity code и поддерживает регионы `intl`/`cn`.
+- `Amp` поддерживает API (`AMP_API_KEY`) и веб-режим с `session` Cookie; ответ `displayText` разбирается в реальные
+  free/subscription/credit метрики.
+- `Windsurf` использует официальный protobuf `GetPlanStatus`; в настройках указывается session bundle с
+  `devin_session_token`, `devin_auth1_token`, `devin_account_id` и `devin_primary_org_id`.
+- `Zed` использует cloud profile API и требует пару `user ID` + access token (`ZED_USER_ID`/`ZED_ACCESS_TOKEN`).
+- `Ollama` обращается к локальному `/api/tags` и показывает список установленных моделей; серверная квота для локального
+  Ollama не выдумывается.
+
 Codex-путь устроен так:
 
 1. `CodexFileAuthTokenProvider` читает `%CODEX_HOME%\auth.json` и обновляет истёкший OAuth-токен штатным endpoint.
