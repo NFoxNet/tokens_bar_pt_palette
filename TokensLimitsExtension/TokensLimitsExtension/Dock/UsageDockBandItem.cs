@@ -15,11 +15,15 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
 {
     private readonly IUsageProvider _provider;
     private readonly Action<string> _logger;
+    private readonly Action<string>? _onDockSubtitleChanged;
     private readonly Timer _refreshTimer;
     private int _refreshInProgress;
     private int _disposed;
 
-    public UsageDockBandItem(IUsageProvider provider, Action<string>? logger = null)
+    public UsageDockBandItem(
+        IUsageProvider provider,
+        Action<string>? logger = null,
+        Action<string>? onDockSubtitleChanged = null)
         : base(new NoOpCommand
         {
             Id = $"com.tokenslimits.provider.{provider?.Descriptor.Id}.dock",
@@ -28,9 +32,11 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _logger = logger ?? LogMessage;
+        _onDockSubtitleChanged = onDockSubtitleChanged;
 
         Title = _provider.Descriptor.DisplayName;
         Subtitle = "Загрузка лимитов...";
+        DockSubtitle = "Загрузка лимитов...";
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
 
         _refreshTimer = new Timer(TimeSpan.FromMinutes(1))
@@ -44,6 +50,8 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     }
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+    public string DockSubtitle { get; private set => SetProperty(ref field, value); } = string.Empty;
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
@@ -61,9 +69,11 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
             }
 
             Title = snapshot.ProviderDisplayName;
+            DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot);
             Subtitle = UsageDisplayFormatter.FormatCompactBandSubtitle(
                 snapshot,
                 DateTimeOffset.UtcNow);
+            _onDockSubtitleChanged?.Invoke(DockSubtitle);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -73,6 +83,8 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
             if (!IsDisposed)
             {
                 Subtitle = "Лимиты недоступны";
+                DockSubtitle = "Лимиты недоступны";
+                _onDockSubtitleChanged?.Invoke(DockSubtitle);
                 _logger($"[TokensLimits] ERROR: {ex.Message}");
             }
         }

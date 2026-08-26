@@ -60,6 +60,7 @@ public sealed class TokensLimitsPageIntegrationTests
 
         var band = Assert.Single(bands);
         Assert.Equal("com.tokenslimits.provider.other-provider.band", band.Command!.Id);
+        Assert.Equal("5ч\\90%, 7д\\80%", band.Subtitle);
     }
 
     [Fact]

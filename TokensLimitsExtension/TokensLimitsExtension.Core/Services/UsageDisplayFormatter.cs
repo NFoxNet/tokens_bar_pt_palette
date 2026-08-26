@@ -7,9 +7,16 @@ public static class UsageDisplayFormatter
 {
     public static string FormatRemainingPercent(double usedPercent)
     {
-        var remaining = Math.Clamp(100d - usedPercent, 0d, 100d);
-        var rounded = (int)Math.Round(remaining, MidpointRounding.AwayFromZero);
+        var rounded = GetRemainingPercent(usedPercent);
         return string.Create(CultureInfo.InvariantCulture, $"{rounded}% осталось");
+    }
+
+    public static string FormatDockBandSubtitle(UsageSnapshot snapshot)
+    {
+        var estimatePrefix = snapshot.IsEstimate ? "Оценка: " : string.Empty;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{estimatePrefix}5ч\\{GetRemainingPercent(snapshot.PrimaryWindow.UsedPercent)}%, 7д\\{GetRemainingPercent(snapshot.SecondaryWindow.UsedPercent)}%");
     }
 
     public static string FormatTimeUntilReset(DateTimeOffset resetAt, DateTimeOffset now)
@@ -39,5 +46,11 @@ public static class UsageDisplayFormatter
             + $"нед: {FormatRemainingPercent(snapshot.SecondaryWindow.UsedPercent)} · "
             + $"сброс {FormatTimeUntilReset(snapshot.PrimaryWindow.ResetAt, now)} / "
             + FormatTimeUntilReset(snapshot.SecondaryWindow.ResetAt, now);
+    }
+
+    private static int GetRemainingPercent(double usedPercent)
+    {
+        var remaining = Math.Clamp(100d - usedPercent, 0d, 100d);
+        return (int)Math.Round(remaining, MidpointRounding.AwayFromZero);
     }
 }

@@ -39,19 +39,11 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 
         providerRegistry ??= UsageProviderRegistryFactory.CreateDefault(usageService);
         var providers = providerRegistry.Providers;
-        _dockBandItems = providers
-            .Select(provider => new UsageDockBandItem(provider, LogMessage))
+        var dockBands = providers
+            .Select(provider => CreateDockBand(provider, LogMessage))
             .ToArray();
-        _dockBands = providers
-            .Zip(_dockBandItems)
-            .Select(pair => (ICommandItem)new WrappedDockItem(
-                [pair.Second],
-                $"com.tokenslimits.provider.{pair.First.Descriptor.Id}.band",
-                pair.First.Descriptor.DisplayName)
-            {
-                Icon = pair.Second.Icon,
-            })
-            .ToArray();
+        _dockBandItems = dockBands.Select(pair => pair.Item).ToArray();
+        _dockBands = dockBands.Select(pair => pair.Band).ToArray();
     }
 
     public override ICommandItem[] TopLevelCommands()
@@ -79,6 +71,33 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         _limitsPage.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();
+    }
+
+    private static (UsageDockBandItem Item, ICommandItem Band) CreateDockBand(
+        IUsageProvider provider,
+        Action<string> logger)
+    {
+        WrappedDockItem? wrappedBand = null;
+        var item = new UsageDockBandItem(
+            provider,
+            logger,
+            dockSubtitle =>
+            {
+                if (wrappedBand is not null)
+                {
+                    wrappedBand.Subtitle = dockSubtitle;
+                }
+            });
+        wrappedBand = new WrappedDockItem(
+            [item],
+            $"com.tokenslimits.provider.{provider.Descriptor.Id}.band",
+            provider.Descriptor.DisplayName)
+        {
+            Icon = item.Icon,
+            Subtitle = item.DockSubtitle,
+        };
+
+        return (item, wrappedBand);
     }
 
     private static CodexUsageService CreateDefaultService()
