@@ -374,6 +374,24 @@ public sealed class ProviderCatalogTests
         Assert.Contains("sfm_codingplan_public_cn", handler.LastRequestBody, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AmpApiDisplayTextMapsFreeAndSubscriptionUsage()
+    {
+        var handler = new StubHandler("{\"ok\":true,\"result\":{\"displayText\":\"Amp Free: 85% remaining today (resets daily)\\nSubscription Pro: 69% other usage and 92% orb usage remaining - resets upon renewal in 5 days\\nIndividual credits: $12.50 remaining\"}}");
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "amp-key")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(15, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(31, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Individual credits" && metric.Value == "12.5");
+        Assert.Equal("Bearer amp-key", handler.LastRequest!.Headers.Authorization!.ToString());
+        Assert.Contains("\"params\":{}", handler.LastRequestBody, StringComparison.Ordinal);
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {

@@ -52,8 +52,8 @@ public static class UsageProviderEndpointCatalog
                 RequestBody: "{}")],
             ["amp"] =
             [
-                new UsageProviderEndpoint("balance-api", "https://ampcode.com/api/internal?userDisplayBalanceInfo", "POST", "Authorization", "Bearer ", RequiresApiKey: true, RequestBody: "{\"method\":\"userDisplayBalanceInfo\"}"),
-                Get("balance-web", "https://ampcode.com/api/internal?userDisplayBalanceInfo", cookie: true, apiKey: false),
+                new UsageProviderEndpoint("balance-api", "https://ampcode.com/api/internal?userDisplayBalanceInfo", "POST", "Authorization", "Bearer ", RequiresApiKey: true, RequestBody: "{\"method\":\"userDisplayBalanceInfo\",\"params\":{}}"),
+                Get("balance-web", "https://ampcode.com/settings", cookie: true, apiKey: false),
             ],
             ["antigravity"] = [Get("quota", "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", apiKey: true)],
             ["augment"] =

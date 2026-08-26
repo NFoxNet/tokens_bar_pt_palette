@@ -120,7 +120,7 @@ public static class UsageProviderDescriptorRegistry
             ],
             sourceDescription: "Официальный Alibaba Coding Plan API; ключ передаётся в Authorization, x-api-key и X-DashScope-API-Key."),
         CookieProvider("alibabatokenplan", "Alibaba Token Plan", "https://bailian.console.aliyun.com"),
-        Api("amp", "Amp", "https://ampcode.com/settings/usage", "AMP_API_TOKEN", withBaseUrl: true),
+        new("amp", "Amp", UsageProviderAuthKind.ApiKeyOrCookie, "https://ampcode.com/settings/usage", settings: [ApiKey("AMP_API_KEY"), Cookie(), BaseUrl()]),
         new("antigravity", "Antigravity", UsageProviderAuthKind.OAuth, "https://antigravity.google", settings: [new("credentialsJson", "OAuth credentials JSON", "OAuth credentials для Antigravity.", true)]),
         CookieProvider("augment", "Augment", "https://app.augmentcode.com/account/subscription"),
         new(
