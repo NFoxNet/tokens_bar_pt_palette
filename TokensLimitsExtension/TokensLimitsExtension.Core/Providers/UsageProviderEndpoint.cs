@@ -43,7 +43,7 @@ public static class UsageProviderEndpointCatalog
                 Get("billing-info", "https://apps.abacus.ai/api/_getBillingInfo", cookie: true, apiKey: false),
             ],
             ["aiand"] = [Get("logs", "https://api.aiand.com/logs", apiKey: true)],
-            ["alibaba"] = [new UsageProviderEndpoint("usage", "https://modelstudio.console.alibabacloud.com/data/api.json?action=zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2&product=broadscope-bailian&api=queryCodingPlanInstanceInfoV2&currentRegionId=ap-southeast-1", "POST", "x-api-key", "", RequiresApiKey: true, UseConfiguredBaseUrl: true, RequestBody: "{}")],
+            ["alibaba"] = [new UsageProviderEndpoint("usage", "https://modelstudio.console.alibabacloud.com/data/api.json?action=zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2&product=broadscope-bailian&api=queryCodingPlanInstanceInfoV2&currentRegionId=ap-southeast-1", "POST", "x-api-key", "", RequiresApiKey: true, UseConfiguredBaseUrl: true, RequestBody: "{\"queryCodingPlanInstanceInfoRequest\":{\"commodityCode\":\"{commodityCode}\"}}", Headers: new Dictionary<string, string> { ["Accept"] = "application/json", ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36" })],
             ["alibabatokenplan"] = [new UsageProviderEndpoint(
                 "usage",
                 "https://bailian-singapore-cs.alibabacloud.com/data/api.json",

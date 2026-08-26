@@ -171,6 +171,20 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             request.Headers.TryAddWithoutValidation("Connect-Protocol-Version", "1");
         }
 
+        if (Descriptor.Id.Equals("alibaba", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(credential.ApiKey))
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {credential.ApiKey}");
+            request.Headers.TryAddWithoutValidation("X-DashScope-API-Key", credential.ApiKey);
+            var region = _configuration.GetValue(Descriptor.Id, "region");
+            var isChina = region?.Equals("cn", StringComparison.OrdinalIgnoreCase) == true;
+            var origin = isChina
+                ? "https://bailian.console.aliyun.com"
+                : "https://modelstudio.console.alibabacloud.com";
+            request.Headers.TryAddWithoutValidation("Origin", origin);
+            request.Headers.TryAddWithoutValidation("Referer", origin + (isChina ? "/cn-beijing/?tab=model" : "/ap-southeast-1/?tab=coding-plan"));
+        }
+
         if (endpoint.RequiresApiKey && !string.IsNullOrWhiteSpace(credential.ApiKey))
         {
             request.Headers.TryAddWithoutValidation(
@@ -235,14 +249,20 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         return request;
     }
 
-    private static string ResolveRequestBody(UsageProviderEndpoint endpoint)
+    private string ResolveRequestBody(UsageProviderEndpoint endpoint)
     {
         var now = DateTimeOffset.UtcNow;
         var start = now.AddDays(-30);
         return (endpoint.RequestBody ?? "{}")
             .Replace("{startTime}", FormatAnalyticsTimestamp(start), StringComparison.Ordinal)
-            .Replace("{endTime}", FormatAnalyticsTimestamp(now), StringComparison.Ordinal);
+            .Replace("{endTime}", FormatAnalyticsTimestamp(now), StringComparison.Ordinal)
+            .Replace("{commodityCode}", ResolveAlibabaCommodityCode(), StringComparison.Ordinal);
     }
+
+    private string ResolveAlibabaCommodityCode()
+        => _configuration.GetValue(Descriptor.Id, "region")?.Equals("cn", StringComparison.OrdinalIgnoreCase) == true
+            ? "sfm_codingplan_public_cn"
+            : "sfm_codingplan_public_intl";
 
     private static string FormatAnalyticsTimestamp(DateTimeOffset value)
         => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
@@ -345,7 +365,18 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         var endpointUrl = endpoint.Url;
         if (!Descriptor.Id.Equals("zai", StringComparison.OrdinalIgnoreCase))
         {
-            return endpointUrl;
+            if (!Descriptor.Id.Equals("alibaba", StringComparison.OrdinalIgnoreCase)
+                || endpointUrl is null)
+            {
+                return endpointUrl;
+            }
+
+            var isChina = _configuration.GetValue(Descriptor.Id, "region")?.Equals("cn", StringComparison.OrdinalIgnoreCase) == true;
+            return isChina
+                ? endpointUrl
+                    .Replace("modelstudio.console.alibabacloud.com", "bailian.console.aliyun.com", StringComparison.OrdinalIgnoreCase)
+                    .Replace("ap-southeast-1", "cn-beijing", StringComparison.OrdinalIgnoreCase)
+                : endpointUrl;
         }
 
         var settingKey = endpoint.Name.ToLowerInvariant() switch
@@ -1110,6 +1141,13 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         var apiSetting = Descriptor.Settings.FirstOrDefault(setting => setting.Key.Equals("apiKey", StringComparison.OrdinalIgnoreCase));
         var apiKey = _configuration.GetValue(Descriptor.Id, "apiKey")
             ?? (apiSetting?.EnvironmentVariable is null ? null : Environment.GetEnvironmentVariable(apiSetting.EnvironmentVariable));
+        if (Descriptor.Id.Equals("alibaba", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(apiKey))
+        {
+            apiKey = Environment.GetEnvironmentVariable("ALIBABA_CODING_PLAN_API_KEY")
+                ?? Environment.GetEnvironmentVariable("ALIBABA_QWEN_API_KEY")
+                ?? Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY");
+        }
         if (Descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)
             && string.IsNullOrWhiteSpace(apiKey))
         {

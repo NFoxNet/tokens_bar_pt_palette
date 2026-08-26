@@ -352,6 +352,28 @@ public sealed class ProviderCatalogTests
         Assert.Contains(handler.Requests, request => request.RequestUri!.Query.Contains("page=next", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task AlibabaCodingPlanUsesOfficialPayloadHeadersAndRegion()
+    {
+        var handler = new StubHandler("{\"data\":{\"five_hour\":{\"used_percent\":12,\"reset_at\":\"2030-01-01T00:00:00Z\",\"window_seconds\":18000}}}");
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "alibaba"),
+            new TestConfiguration(
+                ("alibaba", "apiKey", "alibaba-key"),
+                ("alibaba", "region", "cn")),
+            new HttpClient(handler));
+
+        await provider.GetUsageSnapshotAsync();
+
+        var request = handler.LastRequest!;
+        Assert.Equal("Bearer alibaba-key", request.Headers.Authorization!.ToString());
+        Assert.Equal("alibaba-key", request.Headers.GetValues("x-api-key").Single());
+        Assert.Equal("alibaba-key", request.Headers.GetValues("X-DashScope-API-Key").Single());
+        Assert.Contains("bailian.console.aliyun.com", request.RequestUri!.Host, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cn-beijing", request.RequestUri.Query, StringComparison.Ordinal);
+        Assert.Contains("sfm_codingplan_public_cn", handler.LastRequestBody, StringComparison.Ordinal);
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {
@@ -366,17 +388,21 @@ public sealed class ProviderCatalogTests
     private sealed class StubHandler(string response) : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }
+        public string? LastRequestBody { get; private set; }
         public List<HttpRequestMessage> Requests { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequest = request;
+            LastRequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
             Requests.Add(request);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(response, Encoding.UTF8, "application/json"),
                 RequestMessage = request,
-            });
+            };
         }
     }
 

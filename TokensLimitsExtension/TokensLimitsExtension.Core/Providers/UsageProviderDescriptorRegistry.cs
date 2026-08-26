@@ -107,7 +107,18 @@ public static class UsageProviderDescriptorRegistry
         Codex,
         CookieProvider("abacus", "Abacus AI", "https://apps.abacus.ai/chatllm/admin/compute-points-usage"),
         Api("aiand", "ai&", "https://console.aiand.com", "AIAND_API_KEY"),
-        Api("alibaba", "Alibaba Coding Plan", "https://modelstudio.console.alibabacloud.com", "DASHSCOPE_API_KEY", withBaseUrl: true, withRegion: true),
+        new(
+            "alibaba",
+            "Alibaba Coding Plan",
+            UsageProviderAuthKind.ApiKey,
+            "https://modelstudio.console.alibabacloud.com",
+            settings:
+            [
+                ApiKey("DASHSCOPE_API_KEY"),
+                Plain("region", "API-регион", "intl для международного Model Studio или cn для материкового Китая.", "ALIBABA_CODING_PLAN_REGION", "intl"),
+                BaseUrl(),
+            ],
+            sourceDescription: "Официальный Alibaba Coding Plan API; ключ передаётся в Authorization, x-api-key и X-DashScope-API-Key."),
         CookieProvider("alibabatokenplan", "Alibaba Token Plan", "https://bailian.console.aliyun.com"),
         Api("amp", "Amp", "https://ampcode.com/settings/usage", "AMP_API_TOKEN", withBaseUrl: true),
         new("antigravity", "Antigravity", UsageProviderAuthKind.OAuth, "https://antigravity.google", settings: [new("credentialsJson", "OAuth credentials JSON", "OAuth credentials для Antigravity.", true)]),
