@@ -11,8 +11,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using TokensLimitsExtension.Core.Providers;
-using TokensLimitsExtension.Core.Providers.Codex;
 using TokensLimitsExtension.Core.Services;
+using TokensLimitsExtension.Providers;
 
 namespace TokensLimitsExtension;
 
@@ -37,7 +37,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             new CommandItem(_limitsPage) { Title = DisplayName },
         ];
 
-        providerRegistry ??= CreateDefaultProviderRegistry(usageService);
+        providerRegistry ??= UsageProviderRegistryFactory.CreateDefault(usageService);
         var providers = providerRegistry.Providers;
         _dockBandItems = providers
             .Select(provider => new UsageDockBandItem(provider, LogMessage))
@@ -80,9 +80,6 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         GC.SuppressFinalize(this);
         base.Dispose();
     }
-
-    private static UsageProviderRegistry CreateDefaultProviderRegistry(ICodexUsageProvider usageService)
-        => new([new CodexUsageProviderAdapter(usageService)]);
 
     private static CodexUsageService CreateDefaultService()
     {
