@@ -1,0 +1,106 @@
+namespace TokensLimitsExtension.Core.Providers;
+
+public sealed record UsageProviderEndpoint(
+    string Name,
+    string? Url,
+    string HttpMethod = "GET",
+    string? ApiKeyHeader = "Authorization",
+    string ApiKeyPrefix = "Bearer ",
+    bool RequiresApiKey = false,
+    bool RequiresCookie = false,
+    bool RequiresBaseUrl = false);
+
+/// <summary>
+/// Stable endpoint inventory for the providers from CodexBar's manifest.
+/// Every entry points at a provider-owned API or dashboard endpoint. If a
+/// provider changes its private endpoint, only this catalog and its parser need
+/// updating; the UI and registry remain unchanged.
+/// </summary>
+public static class UsageProviderEndpointCatalog
+{
+    private static UsageProviderEndpoint Get(
+        string name,
+        string? url,
+        string header = "Authorization",
+        string prefix = "Bearer ",
+        bool apiKey = true,
+        bool cookie = false,
+        bool baseUrl = false)
+        => new(name, url, "GET", header, prefix, apiKey, cookie, baseUrl);
+
+    public static IReadOnlyDictionary<string, IReadOnlyList<UsageProviderEndpoint>> All { get; } =
+        new Dictionary<string, IReadOnlyList<UsageProviderEndpoint>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["abacus"] = [Get("compute-points", "https://apps.abacus.ai/api/_getOrganizationComputePoints", cookie: true, apiKey: false)],
+            ["aiand"] = [Get("logs", "https://api.aiand.com/logs", apiKey: true)],
+            ["alibaba"] = [Get("usage", "/data/api.json", header: "Authorization", prefix: "Bearer ", baseUrl: true)],
+            ["alibabatokenplan"] = [Get("usage", "https://bailian.console.aliyun.com/", cookie: true, apiKey: false)],
+            ["amp"] = [Get("balance", "https://ampcode.com/api/internal?userDisplayBalanceInfo", cookie: true, apiKey: false)],
+            ["antigravity"] = [Get("quota", "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", apiKey: true)],
+            ["augment"] = [Get("subscription", "https://app.augmentcode.com/account/subscription", cookie: true, apiKey: false)],
+            ["azureopenai"] = [Get("usage", "/openai/usage", header: "api-key", prefix: "", baseUrl: true)],
+            ["bedrock"] = [Get("usage", "/usage", header: "Authorization", prefix: "Bearer ", baseUrl: true)],
+            ["chutes"] = [Get("usage", "https://api.chutes.ai/v1/usage")],
+            ["claude"] = [Get("organization-usage", "https://api.anthropic.com/v1/organizations/usage_report/messages", header: "x-api-key", prefix: "")],
+            ["clawrouter"] = [Get("usage", "/api/usage", baseUrl: true)],
+            ["clinepass"] = [Get("usage", "https://app.cline.bot/api/usage", cookie: true, apiKey: false)],
+            ["codebuff"] = [Get("usage", "https://www.codebuff.com/api/usage")],
+            ["commandcode"] = [Get("credits", "https://api.commandcode.ai/internal/billing/credits", cookie: true, apiKey: false)],
+            ["copilot"] = [Get("budget", "https://github.com/settings/billing/budgets", cookie: true, apiKey: false)],
+            ["crof"] = [Get("usage", "https://crof.ai/api/usage")],
+            ["cursor"] = [Get("usage-summary", "https://cursor.com/api/usage-summary", cookie: true, apiKey: false)],
+            ["deepgram"] = [Get("projects", "https://api.deepgram.com/v1/projects")],
+            ["deepinfra"] = [Get("usage", "https://api.deepinfra.com/payment/usage?from=current")],
+            ["deepseek"] = [Get("balance", "https://api.deepseek.com/user/balance")],
+            ["devin"] = [Get("usage", "https://app.devin.ai/api/usage", cookie: true, apiKey: false)],
+            ["doubao"] = [Get("coding-plan", "https://open.volcengineapi.com/?Action=GetCodingPlanUsage&Version=2024-01-01", header: "Authorization", prefix: "Bearer ")],
+            ["elevenlabs"] = [Get("subscription", "https://api.elevenlabs.io/v1/user/subscription")],
+            ["factory"] = [Get("usage", "https://api.factory.ai/api/usage", cookie: true, apiKey: false)],
+            ["fireworks"] = [Get("billing", "/v1/accounts/{accountId}/billing/summary", baseUrl: true)],
+            ["gemini"] = [Get("quota", "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")],
+            ["grok"] = [Get("settings", "https://cli-chat-proxy.grok.com/v1/settings", cookie: true, apiKey: false)],
+            ["groq"] = [Get("usage", "https://api.groq.com/openai/v1/usage")],
+            ["ibmbob"] = [Get("profile", "https://api.us-east.bob.ibm.com/admin/v1/profile")],
+            ["jetbrains"] = [Get("local", null, apiKey: false)],
+            ["kilo"] = [Get("organizations", "https://app.kilo.ai/api/trpc/user.getOrganizations", cookie: true, apiKey: false)],
+            ["kimi"] = [Get("usage", "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages", cookie: true, apiKey: false)],
+            ["kiro"] = [Get("local", null, apiKey: false)],
+            ["litellm"] = [Get("key-info", "/key/info", baseUrl: true)],
+            ["llmproxy"] = [Get("usage", "/usage", baseUrl: true)],
+            ["longcat"] = [Get("token-usage", "https://longcat.chat/api/lc-platform/v1/tokenUsage", cookie: true, apiKey: false)],
+            ["manus"] = [Get("credits", "https://api.manus.im/user.v1.UserService/GetAvailableCredits", cookie: true, apiKey: false)],
+            ["mimo"] = [Get("balance", "https://platform.xiaomimimo.com/api/v1/balance", cookie: true, apiKey: false)],
+            ["minimax"] = [Get("coding-plan", "https://api.minimax.io/v1/api/openplatform/coding_plan/remains")],
+            ["mistral"] = [Get("usage", "https://admin.mistral.ai/api/billing/v2/usage", cookie: true, apiKey: false)],
+            ["moonshot"] = [Get("balance", "/v1/users/me/balance", baseUrl: true)],
+            ["neuralwatt"] = [Get("usage", "https://api.neuralwatt.com/v1/usage")],
+            ["notion"] = [Get("credit-rate-limit", "https://app.notion.com/api/v3/getCreditRateLimitStatus", cookie: true, apiKey: false)],
+            ["ollama"] = [Get("models", "http://127.0.0.1:11434/api/tags", apiKey: false)],
+            ["openai"] = [Get("usage", "https://api.openai.com/v1/organization/usage/completions")],
+            ["opencode"] = [Get("billing", "https://opencode.ai/_server/usage", cookie: true, apiKey: false)],
+            ["opencodego"] = [Get("usage", "https://opencode.ai/zen/go/v1/usage", cookie: true, apiKey: false)],
+            ["openrouter"] = [Get("key", "https://openrouter.ai/api/v1/key")],
+            ["perplexity"] = [Get("credits", "https://www.perplexity.ai/rest/billing/credits?version=2.18&source=default", cookie: true, apiKey: false)],
+            ["poe"] = [Get("usage", "https://poe.com/api/account/usage")],
+            ["qoder"] = [Get("credits", "https://qoder.com/api/v2/me/usages/big_model_credits", cookie: true, apiKey: false)],
+            ["qwencloud"] = [Get("usage", "https://bailian.console.aliyun.com/", cookie: true, apiKey: false)],
+            ["sakana"] = [Get("billing", "https://console.sakana.ai/billing", cookie: true, apiKey: false)],
+            ["stepfun"] = [Get("plan-status", "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/GetStepPlanStatus", cookie: true, apiKey: false)],
+            ["sub2api"] = [Get("usage", "/v1/usage", baseUrl: true)],
+            ["synthetic"] = [Get("usage", "/v1/usage", baseUrl: true)],
+            ["t3chat"] = [Get("customer", "https://t3.chat/api/trpc/getCustomerData", cookie: true, apiKey: false)],
+            ["venice"] = [Get("usage", "https://api.venice.ai/api/v1/usage")],
+            ["vertexai"] = [Get("quota", "https://monitoring.googleapis.com/v3/projects/{projectId}/timeSeries")],
+            ["warp"] = [new UsageProviderEndpoint("request-limit", "https://app.warp.dev/graphql/v2?op=GetRequestLimitInfo", "POST", "Authorization", "Bearer ", RequiresApiKey: true)],
+            ["wayfinder"] = [Get("usage", "/v1/usage", apiKey: false, baseUrl: true)],
+            ["windsurf"] = [Get("plan-status", "https://windsurf.com/_backend/exa.seat_management_pb.SeatManagementService/GetPlanStatus", cookie: true, apiKey: false)],
+            ["xai"] = [Get("usage", "https://api.x.ai/v1/usage")],
+            ["zai"] = [Get("quota", "/api/monitor/usage/quota", baseUrl: true)],
+            ["zed"] = [Get("profile", "https://cloud.zed.dev/client/users/me", apiKey: false)],
+            ["zenmux"] = [Get("usage", "/usage", baseUrl: true)],
+            ["zoommate"] = [Get("credits", "https://ai.zoom.us/ai-computer/api/v1/credits/status", cookie: true, apiKey: false)],
+        };
+
+    public static IReadOnlyList<UsageProviderEndpoint> For(string providerId)
+        => All.TryGetValue(providerId, out var endpoints) ? endpoints : [];
+}
