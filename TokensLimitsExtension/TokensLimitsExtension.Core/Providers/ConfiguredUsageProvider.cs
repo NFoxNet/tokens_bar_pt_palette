@@ -421,7 +421,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
             await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
-            return UsageJsonParser.Parse(Descriptor, endpoint.Name, document.RootElement, DateTimeOffset.UtcNow);
+            return UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
         }
 
         var path = _configuration.GetValue(Descriptor.Id, "dataPath");
@@ -936,6 +936,46 @@ internal static class UsageJsonParser
         {
             FetchedAt = fetchedAt,
             Source = source,
+            Metrics = metrics,
+        };
+    }
+
+    public static UsageSnapshot ParseOllama(
+        UsageProviderDescriptor descriptor,
+        JsonElement root,
+        DateTimeOffset fetchedAt)
+    {
+        if (!root.TryGetProperty("models", out var models)
+            || models.ValueKind != JsonValueKind.Array)
+        {
+            throw new UsageProviderRequestException(
+                "Ответ Ollama не содержит списка локальных моделей.");
+        }
+
+        var modelNames = models
+            .EnumerateArray()
+            .Where(model => model.ValueKind == JsonValueKind.Object)
+            .Select(model => model.TryGetProperty("name", out var name) ? name.GetString() : null)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Cast<string>()
+            .ToArray();
+        var metrics = new List<UsageMetric>
+        {
+            new("Models", modelNames.Length.ToString(CultureInfo.InvariantCulture), "models"),
+        };
+        metrics.AddRange(modelNames.Take(16).Select((name, index) =>
+            new UsageMetric($"Model {index + 1}", name)));
+
+        return new UsageSnapshot(
+            descriptor.Id,
+            descriptor.DisplayName,
+            null,
+            null,
+            "Локальный Ollama",
+            false)
+        {
+            FetchedAt = fetchedAt,
+            Source = "http://127.0.0.1:11434/api/tags",
             Metrics = metrics,
         };
     }

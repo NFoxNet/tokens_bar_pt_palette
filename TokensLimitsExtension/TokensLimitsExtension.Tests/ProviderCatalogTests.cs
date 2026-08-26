@@ -303,6 +303,29 @@ public sealed class ProviderCatalogTests
         Assert.Contains(snapshot.Metrics, metric => metric.Name.Equals("input Tokens", StringComparison.OrdinalIgnoreCase) && metric.Value == "120");
     }
 
+    [Fact]
+    public async Task OllamaTagsAreShownAsLocalMetricsWithoutInventingQuota()
+    {
+        var handler = new StubHandler("""
+            {
+              "models": [
+                { "name": "qwen2.5:7b" },
+                { "name": "llama3.2:latest" }
+              ]
+            }
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "ollama"),
+            new TestConfiguration(),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Null(snapshot.PrimaryWindow);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Models" && metric.Value == "2");
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Model 1" && metric.Value == "qwen2.5:7b");
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {
