@@ -77,6 +77,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
         var credential = ResolveCredential();
         var failures = new List<Exception>();
+        var snapshots = new List<UsageSnapshot>();
         foreach (var endpoint in endpoints)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -107,20 +108,24 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                     continue;
                 }
 
-                await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
-                var snapshot = UsageJsonParser.Parse(
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var snapshot = UsageJsonParser.ParseText(
                     _descriptor,
                     endpoint.Name,
-                    document.RootElement,
+                    body,
                     DateTimeOffset.UtcNow);
+                snapshots.Add(snapshot);
                 _logger($"[TokensLimits] Provider {_descriptor.Id}: snapshot fetched from {endpoint.Name}.");
-                return snapshot;
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UsageProviderRequestException or UsageProviderConfigurationException)
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or XmlException or InvalidOperationException or UsageProviderRequestException or UsageProviderConfigurationException)
             {
                 failures.Add(ex);
             }
+        }
+
+        if (snapshots.Count > 0)
+        {
+            return UsageJsonParser.Merge(_descriptor, snapshots);
         }
 
         throw new UsageProviderRequestException(
@@ -932,6 +937,112 @@ internal static class UsageJsonParser
             FetchedAt = fetchedAt,
             Source = source,
             Metrics = metrics,
+        };
+    }
+
+    public static UsageSnapshot ParseText(
+        UsageProviderDescriptor descriptor,
+        string source,
+        string raw,
+        DateTimeOffset fetchedAt)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            throw new UsageProviderRequestException(
+                $"Ответ {descriptor.DisplayName} пуст.");
+        }
+
+        var normalized = raw.TrimStart('\uFEFF', ' ', '\t', '\r', '\n');
+        if (normalized.StartsWith(")]}'", StringComparison.Ordinal))
+        {
+            var newline = normalized.IndexOf('\n');
+            normalized = newline >= 0 ? normalized[(newline + 1)..] : normalized;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            return Parse(descriptor, source, document.RootElement, fetchedAt);
+        }
+        catch (JsonException jsonException)
+        {
+            foreach (var line in normalized.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    using var lineDocument = JsonDocument.Parse(line);
+                    return Parse(descriptor, source, lineDocument.RootElement, fetchedAt);
+                }
+                catch (JsonException)
+                {
+                }
+                catch (UsageProviderRequestException)
+                {
+                }
+            }
+
+            try
+            {
+                return ParseXml(descriptor, source, normalized, fetchedAt);
+            }
+            catch (UsageProviderRequestException)
+            {
+                throw jsonException;
+            }
+        }
+    }
+
+    public static UsageSnapshot Merge(
+        UsageProviderDescriptor descriptor,
+        IReadOnlyList<UsageSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        if (snapshots.Count == 0)
+        {
+            throw new ArgumentException("At least one snapshot is required.", nameof(snapshots));
+        }
+
+        if (snapshots.Count == 1)
+        {
+            return snapshots[0];
+        }
+
+        var metrics = snapshots
+            .SelectMany(snapshot => snapshot.Metrics)
+            .GroupBy(metric => new
+            {
+                metric.Name,
+                metric.Value,
+                metric.Unit,
+                metric.Used,
+                metric.Limit,
+                metric.Remaining,
+                metric.ResetAt,
+            })
+            .Select(group => group.First())
+            .Take(64)
+            .ToArray();
+        var additional = snapshots
+            .SelectMany(snapshot => snapshot.AdditionalRateLimits)
+            .GroupBy(limit => limit.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
+        var sources = snapshots
+            .Select(snapshot => snapshot.Source)
+            .Where(source => !string.IsNullOrWhiteSpace(source))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        return new UsageSnapshot(
+            descriptor.Id,
+            descriptor.DisplayName,
+            snapshots.Select(snapshot => snapshot.PrimaryWindow).FirstOrDefault(window => window is not null),
+            snapshots.Select(snapshot => snapshot.SecondaryWindow).FirstOrDefault(window => window is not null),
+            snapshots.Select(snapshot => snapshot.Plan).FirstOrDefault(plan => !string.IsNullOrWhiteSpace(plan)),
+            snapshots.Any(snapshot => snapshot.IsEstimate))
+        {
+            AdditionalRateLimits = additional,
+            Metrics = metrics,
+            FetchedAt = snapshots.Max(snapshot => snapshot.FetchedAt ?? DateTimeOffset.MinValue),
+            Source = string.Join(", ", sources),
         };
     }
 

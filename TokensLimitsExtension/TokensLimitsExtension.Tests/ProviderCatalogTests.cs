@@ -80,8 +80,10 @@ public sealed class ProviderCatalogTests
         var snapshot = await provider.GetUsageSnapshotAsync();
 
         Assert.Contains(snapshot.Metrics, metric => metric.Name == "val" && metric.Value == "-1250");
-        Assert.Contains("/v1/billing/teams/team-123/prepaid/balance", handler.LastRequest!.RequestUri!.PathAndQuery);
-        Assert.Equal("Bearer management-key", handler.LastRequest.Headers.Authorization!.ToString());
+        Assert.Contains(
+            handler.Requests,
+            request => request.RequestUri?.PathAndQuery == "/v1/billing/teams/team-123/prepaid/balance");
+        Assert.All(handler.Requests, request => Assert.Equal("Bearer management-key", request.Headers.Authorization!.ToString()));
     }
 
     [Fact]
@@ -151,10 +153,12 @@ public sealed class ProviderCatalogTests
     private sealed class StubHandler(string response) : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }
+        public List<HttpRequestMessage> Requests { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequest = request;
+            Requests.Add(request);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(response, Encoding.UTF8, "application/json"),
