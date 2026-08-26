@@ -3,10 +3,11 @@ namespace TokensLimitsExtension.Core.Providers;
 /// <summary>
 /// Runtime registry of instantiated usage providers, preserving registration order.
 /// </summary>
-public sealed class UsageProviderRegistry
+public sealed class UsageProviderRegistry : IDisposable
 {
     private readonly Lock _gate = new();
     private readonly List<IUsageProvider> _providers = [];
+    private int _disposed;
 
     public UsageProviderRegistry(IEnumerable<IUsageProvider> providers)
     {
@@ -31,6 +32,7 @@ public sealed class UsageProviderRegistry
 
     public void Register(IUsageProvider provider)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(provider.Descriptor);
 
@@ -61,5 +63,27 @@ public sealed class UsageProviderRegistry
                 providerId,
                 StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        IUsageProvider[] providers;
+        lock (_gate)
+        {
+            providers = _providers.ToArray();
+            _providers.Clear();
+        }
+
+        foreach (var provider in providers)
+        {
+            (provider as IDisposable)?.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
     }
 }

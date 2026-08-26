@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Collections.Concurrent;
 using TokensLimitsExtension.Core.Models;
 
 namespace TokensLimitsExtension.Core.Services;
@@ -10,13 +11,19 @@ public interface ICodexUsageFallback
     Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken);
 }
 
-public sealed class CodexLocalSessionFallback : ICodexUsageFallback
+public sealed record CodexFallbackOptions(
+    long FiveHourLimitTokens = 100_000,
+    long WeeklyLimitTokens = 500_000);
+
+public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
 {
     private readonly IReadOnlyList<string> _codexHomes;
     private readonly long _fiveHourLimitTokens;
     private readonly long _weeklyLimitTokens;
     private readonly TimeProvider _timeProvider;
     private readonly Action<string>? _logger;
+    private readonly ConcurrentDictionary<string, CachedSessionFile> _fileCache = new(StringComparer.OrdinalIgnoreCase);
+    private int _disposed;
 
     public CodexLocalSessionFallback(
         string? codexHome = null,
@@ -39,45 +46,58 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback
 
     public async Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var now = _timeProvider.GetUtcNow();
         var fiveHourCutoff = now - TimeSpan.FromHours(5);
         var weeklyCutoff = now - TimeSpan.FromDays(7);
         long fiveHourTokens = 0;
         long weeklyTokens = 0;
+        var visitedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var home in _codexHomes)
         {
-            foreach (var file in EnumerateSessionFiles(home))
+            try
             {
-                var previousCumulative = 0L;
-                try
+                foreach (var file in EnumerateSessionFiles(home))
                 {
-                    await foreach (var line in ReadLinesSharedAsync(file, cancellationToken).ConfigureAwait(false))
+                    if (!visitedFiles.Add(file))
                     {
-                        if (!TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
-                        {
-                            continue;
-                        }
+                        continue;
+                    }
 
-                        if (timestamp >= weeklyCutoff && timestamp <= now)
+                    try
+                    {
+                        var events = await ReadEventsAsync(file, cancellationToken).ConfigureAwait(false);
+                        foreach (var tokenEvent in events)
                         {
-                            weeklyTokens += delta;
-                        }
+                            if (tokenEvent.Timestamp >= weeklyCutoff && tokenEvent.Timestamp <= now)
+                            {
+                                weeklyTokens += tokenEvent.Delta;
+                            }
 
-                        if (timestamp >= fiveHourCutoff && timestamp <= now)
-                        {
-                            fiveHourTokens += delta;
+                            if (tokenEvent.Timestamp >= fiveHourCutoff && tokenEvent.Timestamp <= now)
+                            {
+                                fiveHourTokens += tokenEvent.Delta;
+                            }
                         }
                     }
+                    catch (IOException ex)
+                    {
+                        _logger?.Invoke($"[TokensLimits] Skipping unreadable session file '{file}': {ex.Message}");
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        _logger?.Invoke($"[TokensLimits] Skipping inaccessible session file '{file}': {ex.Message}");
+                    }
                 }
-                catch (IOException ex)
-                {
-                    _logger?.Invoke($"[TokensLimits] Skipping unreadable session file '{file}': {ex.Message}");
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    _logger?.Invoke($"[TokensLimits] Skipping inaccessible session file '{file}': {ex.Message}");
-                }
+            }
+            catch (IOException ex)
+            {
+                _logger?.Invoke($"[TokensLimits] Skipping unavailable Codex home '{home}': {ex.Message}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger?.Invoke($"[TokensLimits] Skipping inaccessible Codex home '{home}': {ex.Message}");
             }
         }
 
@@ -88,6 +108,45 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback
             now.AddDays(7),
             "local session estimate",
             true);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _fileCache.Clear();
+        GC.SuppressFinalize(this);
+    }
+
+    private async Task<IReadOnlyList<TokenEvent>> ReadEventsAsync(
+        string file,
+        CancellationToken cancellationToken)
+    {
+        var fileInfo = new FileInfo(file);
+        var length = fileInfo.Length;
+        var lastWriteTimeUtc = fileInfo.LastWriteTimeUtc;
+        if (_fileCache.TryGetValue(file, out var cached)
+            && cached.Length == length
+            && cached.LastWriteTimeUtc == lastWriteTimeUtc)
+        {
+            return cached.Events;
+        }
+
+        var events = new List<TokenEvent>();
+        var previousCumulative = 0L;
+        await foreach (var line in ReadLinesSharedAsync(file, cancellationToken).ConfigureAwait(false))
+        {
+            if (TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
+            {
+                events.Add(new TokenEvent(timestamp, delta));
+            }
+        }
+
+        _fileCache[file] = new CachedSessionFile(length, lastWriteTimeUtc, events);
+        return events;
     }
 
     private static IEnumerable<string> EnumerateSessionFiles(string home)
@@ -235,12 +294,26 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback
 
         if (element.ValueKind == JsonValueKind.Number && element.TryGetInt64(out var unixSeconds))
         {
-            value = unixSeconds > 100_000_000_000
-                ? DateTimeOffset.FromUnixTimeMilliseconds(unixSeconds)
-                : DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
-            return true;
+            try
+            {
+                value = unixSeconds > 100_000_000_000
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(unixSeconds)
+                    : DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+                return true;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return false;
+            }
         }
 
         return false;
     }
+
+    private sealed record CachedSessionFile(
+        long Length,
+        DateTime LastWriteTimeUtc,
+        IReadOnlyList<TokenEvent> Events);
+
+    private sealed record TokenEvent(DateTimeOffset Timestamp, long Delta);
 }

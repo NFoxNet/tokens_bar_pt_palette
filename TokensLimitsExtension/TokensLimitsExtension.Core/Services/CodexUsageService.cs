@@ -3,27 +3,32 @@ using TokensLimitsExtension.Core.Models;
 
 namespace TokensLimitsExtension.Core.Services;
 
-public sealed class CodexUsageService : ICodexUsageProvider
+public sealed class CodexUsageService : ICodexUsageProvider, IDisposable
 {
     private readonly ICodexAuthTokenProvider _authTokenProvider;
     private readonly ICodexUsageClient _usageClient;
     private readonly ICodexUsageFallback _fallback;
     private readonly Action<string>? _logger;
+    private readonly IDisposable? _ownedResource;
+    private int _disposed;
 
     public CodexUsageService(
         ICodexAuthTokenProvider authTokenProvider,
         ICodexUsageClient usageClient,
         ICodexUsageFallback fallback,
-        Action<string>? logger = null)
+        Action<string>? logger = null,
+        IDisposable? ownedResource = null)
     {
         _authTokenProvider = authTokenProvider ?? throw new ArgumentNullException(nameof(authTokenProvider));
         _usageClient = usageClient ?? throw new ArgumentNullException(nameof(usageClient));
         _fallback = fallback ?? throw new ArgumentNullException(nameof(fallback));
         _logger = logger;
+        _ownedResource = ownedResource;
     }
 
     public async Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         try
         {
             var accessToken = await _authTokenProvider.GetValidAccessTokenAsync(cancellationToken).ConfigureAwait(false);
@@ -58,5 +63,24 @@ public sealed class CodexUsageService : ICodexUsageProvider
                     fallbackException);
             }
         }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        (_authTokenProvider as IDisposable)?.Dispose();
+        (_usageClient as IDisposable)?.Dispose();
+        (_fallback as IDisposable)?.Dispose();
+        _ownedResource?.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
     }
 }
