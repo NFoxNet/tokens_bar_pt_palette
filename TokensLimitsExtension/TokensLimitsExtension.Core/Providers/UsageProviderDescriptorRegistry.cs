@@ -186,7 +186,13 @@ public static class UsageProviderDescriptorRegistry
         Api("moonshot", "Moonshot", "https://platform.moonshot.ai/console/account", "MOONSHOT_API_KEY", withBaseUrl: true),
         Api("neuralwatt", "Neuralwatt", "https://portal.neuralwatt.com/dashboard", "NEURALWATT_API_KEY", withBaseUrl: true),
         CookieProvider("notion", "Notion AI", "https://app.notion.com/"),
-        Local("ollama", "Ollama", "https://ollama.com/settings"),
+        new(
+            "ollama",
+            "Ollama",
+            UsageProviderAuthKind.ApiKeyOrCookie,
+            "https://ollama.com/settings",
+            settings: [ApiKey("OLLAMA_API_KEY"), Cookie(), BaseUrl()],
+            sourceDescription: "Локальный Ollama или облачный Ollama API/кабинет; локальные модели и опубликованные cloud-квоты показываются раздельно."),
         new(
             "openai",
             "OpenAI",

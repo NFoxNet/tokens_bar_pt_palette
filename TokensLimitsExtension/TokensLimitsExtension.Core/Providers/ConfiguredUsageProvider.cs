@@ -59,6 +59,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return await GetKiroSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (_descriptor.Id.Equals("ollama", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GetOllamaSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (_descriptor.AuthKind == UsageProviderAuthKind.Local)
         {
             return await GetLocalSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -465,6 +470,202 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             Query = string.Join("&", query),
         };
         return builder.Uri;
+    }
+
+    private async Task<UsageSnapshot> GetOllamaSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var credential = ResolveCredential();
+        var configuredBaseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl");
+        var baseUrl = string.IsNullOrWhiteSpace(configuredBaseUrl)
+            ? new Uri("https://ollama.com", UriKind.Absolute)
+            : ParseBaseUrl(configuredBaseUrl, Descriptor.DisplayName);
+
+        if (!string.IsNullOrWhiteSpace(credential.CookieHeader))
+        {
+            var settingsUri = new Uri(baseUrl, "/settings");
+            using var request = new HttpRequestMessage(HttpMethod.Get, settingsUri);
+            request.Headers.TryAddWithoutValidation("Cookie", credential.CookieHeader);
+            request.Headers.TryAddWithoutValidation("Origin", baseUrl.GetLeftPart(UriPartial.Authority));
+            request.Headers.TryAddWithoutValidation("Referer", settingsUri.AbsoluteUri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/html"));
+            using var response = await _httpClient
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var snapshot = ParseOllamaCloudHtml(html, DateTimeOffset.UtcNow, settingsUri.AbsoluteUri);
+                    _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from cloud settings.");
+                    return snapshot;
+                }
+                catch (UsageProviderRequestException) when (!string.IsNullOrWhiteSpace(credential.ApiKey))
+                {
+                    // A stale web session may coexist with a valid API key. Try the supported API
+                    // catalog before surfacing the web parser error.
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(credential.ApiKey))
+        {
+            var tagsUri = new Uri(baseUrl, "/api/tags");
+            using var request = new HttpRequestMessage(HttpMethod.Get, tagsUri);
+            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {credential.ApiKey}");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            using var response = await _httpClient
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new UsageProviderRequestException(
+                    $"Ollama API: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            }
+
+            await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var snapshot = UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
+            _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from cloud model catalog.");
+            return snapshot with { Source = tagsUri.AbsoluteUri, Plan = "Ollama Cloud" };
+        }
+
+        var localUri = new Uri("http://127.0.0.1:11434/api/tags", UriKind.Absolute);
+        using (var request = new HttpRequestMessage(HttpMethod.Get, localUri))
+        using (var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new UsageProviderRequestException(
+                    $"Локальный Ollama API: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            }
+
+            await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var snapshot = UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
+            _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from local model catalog.");
+            return snapshot with { Source = localUri.AbsoluteUri };
+        }
+    }
+
+    private static UsageSnapshot ParseOllamaCloudHtml(string html, DateTimeOffset fetchedAt, string source)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            throw new UsageProviderRequestException("Ollama cloud settings вернули пустой ответ.");
+        }
+
+        var text = WebUtility.HtmlDecode(Regex.Replace(html, "<[^>]+>", " "));
+        var primary = ParseOllamaHtmlWindow(text, ["Session usage", "Hourly usage"], 5 * 60 * 60, fetchedAt);
+        var secondary = ParseOllamaHtmlWindow(text, ["Weekly usage"], 7 * 24 * 60 * 60, fetchedAt);
+        var metrics = new List<UsageMetric>();
+        if (primary is null && secondary is null)
+        {
+            var percent = Regex.Match(text, @"(?i)(?<value>\d+(?:\.\d+)?)\s*%\s*(?:used|remaining)");
+            if (percent.Success)
+            {
+                metrics.Add(new UsageMetric("Cloud usage", percent.Groups["value"].Value, "%"));
+            }
+        }
+
+        var plan = Regex.Match(text, @"(?im)^\s*(?:plan|tier)\s*:?\s*(?<value>[A-Za-z][^\r\n]{1,80})")
+            .Groups["value"].Value.Trim();
+        if (!string.IsNullOrWhiteSpace(plan))
+        {
+            metrics.Add(new UsageMetric("Plan", plan));
+        }
+
+        if (primary is null && secondary is null && metrics.Count == 0)
+        {
+            throw new UsageProviderRequestException(
+                "Ollama cloud settings не содержат опубликованных Session/Weekly usage данных.");
+        }
+
+        return new UsageSnapshot("ollama", "Ollama", primary, secondary, plan, false)
+        {
+            FetchedAt = fetchedAt,
+            Source = source,
+            Metrics = metrics,
+        };
+    }
+
+    private static UsageWindow? ParseOllamaHtmlWindow(
+        string text,
+        IReadOnlyList<string> labels,
+        int windowSeconds,
+        DateTimeOffset fetchedAt)
+    {
+        var labelIndex = -1;
+        var labelLength = 0;
+        foreach (var label in labels)
+        {
+            var index = text.IndexOf(label, StringComparison.OrdinalIgnoreCase);
+            if (index >= 0 && (labelIndex < 0 || index < labelIndex))
+            {
+                labelIndex = index;
+                labelLength = label.Length;
+            }
+        }
+
+        if (labelIndex < 0)
+        {
+            return null;
+        }
+
+        var end = text.Length;
+        foreach (var boundary in new[] { "Session usage", "Hourly usage", "Weekly usage" })
+        {
+            var boundaryIndex = text.IndexOf(boundary, labelIndex + labelLength, StringComparison.OrdinalIgnoreCase);
+            if (boundaryIndex >= 0 && boundaryIndex < end)
+            {
+                end = boundaryIndex;
+            }
+        }
+
+        var block = text[(labelIndex + labelLength)..end];
+        var usedMatch = Regex.Match(block, @"(?i)(?<value>\d+(?:\.\d+)?)\s*%\s*used");
+        var remainingMatch = Regex.Match(block, @"(?i)(?<value>\d+(?:\.\d+)?)\s*%\s*(?:remaining|left)");
+        double? usedPercent = usedMatch.Success
+            ? ParseFlexibleNumber(usedMatch.Groups["value"].Value)
+            : remainingMatch.Success
+                ? 100 - ParseFlexibleNumber(remainingMatch.Groups["value"].Value)
+                : null;
+        if (usedPercent is null)
+        {
+            return null;
+        }
+
+        var resetMatch = Regex.Match(
+            block,
+            @"(?<date>20\d{2}-\d{2}-\d{2}(?:[T ][0-9:.+\-Z]+)?)",
+            RegexOptions.IgnoreCase);
+        var resetAt = resetMatch.Success
+            && DateTimeOffset.TryParse(
+                resetMatch.Groups["date"].Value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out var parsed)
+            ? parsed
+            : (DateTimeOffset?)null;
+        if (resetAt is null)
+        {
+            return null;
+        }
+
+        return new UsageWindow(Math.Clamp(usedPercent.Value, 0, 100), resetAt.Value, windowSeconds);
+    }
+
+    private static Uri ParseBaseUrl(string value, string displayName)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new UsageProviderConfigurationException($"Базовый URL {displayName} имеет неверный формат.");
+        }
+
+        return uri;
     }
 
     private async Task<UsageSnapshot> GetJetBrainsSnapshotAsync(CancellationToken cancellationToken)

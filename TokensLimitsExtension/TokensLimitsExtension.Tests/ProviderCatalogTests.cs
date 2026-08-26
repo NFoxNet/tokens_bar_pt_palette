@@ -320,6 +320,33 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task OllamaCloudCookieMapsSessionAndWeeklyUsage()
+    {
+        var sessionReset = DateTimeOffset.UtcNow.AddHours(2);
+        var weeklyReset = DateTimeOffset.UtcNow.AddDays(5);
+        var handler = new StubHandler($$"""
+            <html><body>
+              <h2>Session usage</h2>
+              <div>15% used · resets {{sessionReset:O}}</div>
+              <h2>Weekly usage</h2>
+              <div>31% used · resets {{weeklyReset:O}}</div>
+              <div>Plan: Pro</div>
+            </body></html>
+            """);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "ollama"),
+            new TestConfiguration(("ollama", "cookieHeader", "session=ollama-test")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(15, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(31, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("session=ollama-test", handler.LastRequest!.Headers.GetValues("Cookie").Single());
+        Assert.Equal("Pro", snapshot.Plan);
+    }
+
+    [Fact]
     public async Task JetBrainsQuotaFileIsDetectedFromTheOfficialLocalFormat()
     {
         var reset = DateTimeOffset.UtcNow.AddDays(12);
