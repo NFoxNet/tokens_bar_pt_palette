@@ -117,7 +117,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
     private HttpRequestMessage CreateRequest(UsageProviderEndpoint endpoint, ResolvedCredential credential)
     {
-        var url = ResolveUrl(endpoint.Url, endpoint.RequiresBaseUrl);
+        var url = ResolveUrl(endpoint);
         var request = new HttpRequestMessage(new HttpMethod(endpoint.HttpMethod), url);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         if (!string.IsNullOrWhiteSpace(credential.CookieHeader))
@@ -141,8 +141,9 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         return request;
     }
 
-    private Uri ResolveUrl(string? endpointUrl, bool requiresBaseUrl)
+    private Uri ResolveUrl(UsageProviderEndpoint endpoint)
     {
+        var endpointUrl = endpoint.Url;
         if (string.IsNullOrWhiteSpace(endpointUrl))
         {
             throw new UsageProviderConfigurationException(
@@ -156,25 +157,43 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             "{projectId}",
             Uri.EscapeDataString(_configuration.GetValue(Descriptor.Id, "projectId") ?? string.Empty),
             StringComparison.OrdinalIgnoreCase);
-        if (Uri.TryCreate(replaced, UriKind.Absolute, out var absolute))
-        {
-            return absolute;
-        }
-
         var baseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl");
-        if (string.IsNullOrWhiteSpace(baseUrl) && requiresBaseUrl)
+        if (string.IsNullOrWhiteSpace(baseUrl) && endpoint.RequiresBaseUrl)
         {
             throw new UsageProviderConfigurationException(
                 $"Для {Descriptor.DisplayName} необходимо задать базовый URL API.");
         }
 
-        if (!Uri.TryCreate(baseUrl ?? "http://127.0.0.1", UriKind.Absolute, out var baseUri))
+        Uri? configuredBaseUri = null;
+        if (!string.IsNullOrWhiteSpace(baseUrl)
+            && !Uri.TryCreate(baseUrl, UriKind.Absolute, out configuredBaseUri))
         {
             throw new UsageProviderConfigurationException(
                 $"Базовый URL {Descriptor.DisplayName} имеет неверный формат.");
         }
 
-        return new Uri(baseUri, replaced);
+        if (endpoint.UseConfiguredBaseUrl && configuredBaseUri is not null)
+        {
+            if (Uri.TryCreate(replaced, UriKind.Absolute, out var overriddenPath))
+            {
+                return new Uri(configuredBaseUri, overriddenPath.PathAndQuery);
+            }
+
+            return new Uri(configuredBaseUri, replaced);
+        }
+
+        if (Uri.TryCreate(replaced, UriKind.Absolute, out var absolute))
+        {
+            return absolute;
+        }
+
+        if (configuredBaseUri is null)
+        {
+            throw new UsageProviderConfigurationException(
+                $"Для {Descriptor.DisplayName} не задан базовый URL API.");
+        }
+
+        return new Uri(configuredBaseUri, replaced);
     }
 
     private async Task<UsageSnapshot> GetLocalSnapshotAsync(CancellationToken cancellationToken)
