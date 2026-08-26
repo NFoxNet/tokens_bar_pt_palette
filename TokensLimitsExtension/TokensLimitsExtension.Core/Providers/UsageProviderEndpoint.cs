@@ -81,8 +81,26 @@ public static class UsageProviderEndpointCatalog
             ],
             ["clawrouter"] = [Get("usage", "https://clawrouter.openclaw.ai/v1/usage", baseUrl: true)],
             ["clinepass"] = [Get("usage", "https://api.cline.bot/api/v1/users/me/plan/usage-limits")],
-            ["codebuff"] = [new UsageProviderEndpoint("usage", "https://www.codebuff.com/api/v1/usage", "POST", "Authorization", "Bearer ", RequiresApiKey: true, UseConfiguredBaseUrl: true, RequestBody: "{\"fingerprintId\":\"tokens-limits\"}")],
-            ["commandcode"] = [Get("credits", "https://api.commandcode.ai/internal/billing/credits", cookie: true, apiKey: false)],
+            ["codebuff"] =
+            [
+                new UsageProviderEndpoint("usage", "https://www.codebuff.com/api/v1/usage", "POST", "Authorization", "Bearer ", RequiresApiKey: true, UseConfiguredBaseUrl: true, RequestBody: "{\"fingerprintId\":\"codexbar-usage\"}"),
+                Get("subscription", "https://www.codebuff.com/api/user/subscription", cookie: false, apiKey: true),
+            ],
+            ["commandcode"] =
+            [
+                Get("credits", "https://api.commandcode.ai/internal/billing/credits", cookie: true, apiKey: false,
+                    headers: new Dictionary<string, string>
+                    {
+                        ["Origin"] = "https://commandcode.ai",
+                        ["Referer"] = "https://commandcode.ai/",
+                    }),
+                Get("subscriptions", "https://api.commandcode.ai/internal/billing/subscriptions", cookie: true, apiKey: false,
+                    headers: new Dictionary<string, string>
+                    {
+                        ["Origin"] = "https://commandcode.ai",
+                        ["Referer"] = "https://commandcode.ai/",
+                    }),
+            ],
             ["copilot"] =
             [
                 Get(
@@ -146,14 +164,57 @@ public static class UsageProviderEndpointCatalog
             ],
             ["kimi"] =
             [
-                Get("web-usage", "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages", cookie: true, apiKey: false),
-                Get("web-subscription", "https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats", cookie: true, apiKey: false),
-                Get("api-usage", "https://api.kimi.com/v1/usages", baseUrl: true),
+                new UsageProviderEndpoint(
+                    "web-usage",
+                    "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages",
+                    "POST",
+                    "Authorization",
+                    "Bearer ",
+                    RequiresCookie: true,
+                    RequestBody: "{\"scope\":[\"FEATURE_CODING\"]}",
+                    Headers: new Dictionary<string, string>
+                    {
+                        ["Origin"] = "https://www.kimi.com",
+                        ["Referer"] = "https://www.kimi.com/code/console",
+                        ["connect-protocol-version"] = "1",
+                        ["x-language"] = "en-US",
+                        ["x-msh-platform"] = "web",
+                    }),
+                new UsageProviderEndpoint(
+                    "web-subscription",
+                    "https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats",
+                    "POST",
+                    "Authorization",
+                    "Bearer ",
+                    RequiresCookie: true,
+                    RequestBody: "{}",
+                    Headers: new Dictionary<string, string>
+                    {
+                        ["Origin"] = "https://www.kimi.com",
+                        ["Referer"] = "https://www.kimi.com/code/console",
+                        ["connect-protocol-version"] = "1",
+                        ["x-language"] = "en-US",
+                        ["x-msh-platform"] = "web",
+                    }),
+                new UsageProviderEndpoint(
+                    "api-usage",
+                    "https://api.kimi.com/coding/v1/usages",
+                    "GET",
+                    "Authorization",
+                    "Bearer ",
+                    RequiresApiKey: true,
+                    UseConfiguredBaseUrl: true),
             ],
             ["kiro"] = [Get("local", null, apiKey: false)],
             ["litellm"] = [Get("key-info", "/key/info", baseUrl: true, requiresBaseUrl: true)],
             ["llmproxy"] = [Get("usage", "/usage", baseUrl: true, requiresBaseUrl: true)],
-            ["longcat"] = [Get("token-usage", "https://longcat.chat/api/lc-platform/v1/tokenUsage", cookie: true, apiKey: false)],
+            ["longcat"] =
+            [
+                Get("user-current", "https://longcat.chat/api/v1/user-current", cookie: true, apiKey: false),
+                new UsageProviderEndpoint("token-packs", "https://longcat.chat/api/pay/quota/metering/token-packs/summary", "POST", RequiresCookie: true, RequestBody: "{}"),
+                Get("token-usage", "https://longcat.chat/api/lc-platform/v1/tokenUsage", cookie: true, apiKey: false),
+                Get("pending-fuel", "https://longcat.chat/api/lc-platform/v1/pending-fuel-packages", cookie: true, apiKey: false),
+            ],
             ["manus"] = [new UsageProviderEndpoint(
                 "credits",
                 "https://api.manus.im/user.v1.UserService/GetAvailableCredits",
@@ -163,7 +224,8 @@ public static class UsageProviderEndpointCatalog
             ["mimo"] =
             [
                 Get("balance", "https://platform.xiaomimimo.com/api/v1/balance", cookie: true, apiKey: false),
-                Get("account", "https://platform.xiaomimimo.com/api/v1/account", cookie: true, apiKey: false),
+                Get("token-plan-detail", "https://platform.xiaomimimo.com/api/v1/tokenPlan/detail", cookie: true, apiKey: false),
+                Get("token-plan-usage", "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage", cookie: true, apiKey: false),
             ],
             ["minimax"] = [Get("coding-plan", "https://api.minimax.io/v1/api/openplatform/coding_plan/remains", baseUrl: true)],
             ["mistral"] =

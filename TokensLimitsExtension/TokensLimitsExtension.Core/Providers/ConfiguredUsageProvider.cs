@@ -191,6 +191,19 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             request.Headers.TryAddWithoutValidation("Cookie", credential.CookieHeader);
         }
 
+        if (Descriptor.Id.Equals("kimi", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(credential.CookieHeader))
+        {
+            var kimiAuth = Regex.Match(
+                credential.CookieHeader,
+                @"(?:^|;\s*)kimi-auth=([^;]+)",
+                RegexOptions.IgnoreCase);
+            if (kimiAuth.Success)
+            {
+                request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {kimiAuth.Groups[1].Value}");
+            }
+        }
+
         if (Descriptor.Id.Equals("manus", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(credential.CookieHeader))
         {
@@ -2804,7 +2817,7 @@ internal static class UsageJsonParser
         }
 
         var windows = FindWindows(descriptor, root, fetchedAt);
-        var plan = FindString(root, "plan", "planName", "tier", "subscription", "product");
+        var plan = FindString(root, "plan", "planName", "tier", "subscription", "product", "displayName", "planId");
         if (windows.Primary is null && windows.Secondary is null && metrics.Count == 0)
         {
             throw new UsageProviderRequestException(
@@ -3057,9 +3070,45 @@ internal static class UsageJsonParser
             var properties = element.EnumerateObject().ToArray();
             var used = FindNumber(properties, "used_percent", "usedPercent", "usage_percent", "usagePercent", "percentage_used", "percentUsed", "percentage");
             var utilization = FindNumber(properties, "utilization", "utilization_percent", "usage_percentage", "usagePercentage");
-            var remaining = FindNumber(properties, "remaining_percent", "remainingPercent", "percentage_remaining", "percentRemaining");
-            var limit = FindNumber(properties, "limit", "quota", "max", "maximum", "total", "capacity", "allowance", "grant_amount", "total_granted");
-            var amountUsed = FindNumber(properties, "used", "usage", "consumed", "current", "used_amount", "total_used", "currentValue");
+            var remaining = FindNumber(
+                properties,
+                "remaining_percent",
+                "remainingPercent",
+                "percentage_remaining",
+                "percentRemaining",
+                "currentIntervalRemainingPercent",
+                "currentWeeklyRemainingPercent");
+            var limit = FindNumber(
+                properties,
+                "limit",
+                "limitValue",
+                "quota",
+                "max",
+                "maximum",
+                "total",
+                "capacity",
+                "allowance",
+                "grant_amount",
+                "total_granted",
+                "cap",
+                "tokenLimit",
+                "weeklyLimit",
+                "currentIntervalLimit",
+                "currentWeeklyLimit");
+            var amountUsed = FindNumber(
+                properties,
+                "used",
+                "usage",
+                "consumed",
+                "current",
+                "used_amount",
+                "total_used",
+                "currentValue",
+                "usedToken",
+                "consumedToken",
+                "weeklyUsed",
+                "currentIntervalUsageCount",
+                "currentWeeklyUsageCount");
             if (FindNumber(properties, "currentValue") is { } zAiCurrent
                 && FindNumber(properties, "usage") is { } zAiUsage)
             {
@@ -3084,6 +3133,12 @@ internal static class UsageJsonParser
                 "nextRefreshTime",
                 "nextResetTime",
                 "resetTime",
+                "next_quota_reset",
+                "nextQuotaReset",
+                "currentIntervalResetAt",
+                "currentWeeklyResetAt",
+                "weeklyResetsAt",
+                "currentPeriodEnd",
                 "dailyQuotaResetAtUnix",
                 "weeklyQuotaResetAtUnix",
                 "quotaResetDate");
@@ -3121,6 +3176,10 @@ internal static class UsageJsonParser
                             : 100d * amountUsed!.Value / limit!.Value);
                 var windowName = FindString(properties, "type", "period", "window", "name", "limit_name");
                 var classificationPath = string.IsNullOrWhiteSpace(windowName) ? path : $"{path}.{windowName}";
+                if (properties.Any(property => property.Name.Contains("weekly", StringComparison.OrdinalIgnoreCase)))
+                {
+                    classificationPath += ".weekly";
+                }
                 var seconds = FindNumber(properties, "window_seconds", "windowSeconds", "period_seconds", "periodSeconds")
                     ?? FindQuotaWindowSeconds(properties)
                     ?? GuessWindowSeconds(classificationPath);
@@ -3359,6 +3418,11 @@ internal static class UsageJsonParser
 
     private static ProviderSpecificWindows FindProviderSpecificWindows(string providerId, JsonElement root)
     {
+        if (providerId.Equals("kimi", StringComparison.OrdinalIgnoreCase))
+        {
+            return FindKimiWindows(root);
+        }
+
         UsageWindow? primary = null;
         UsageWindow? secondary = null;
         var found = false;
@@ -3473,6 +3537,173 @@ internal static class UsageJsonParser
         }
 
         return new ProviderSpecificWindows(found, primary, secondary);
+    }
+
+    private static ProviderSpecificWindows FindKimiWindows(JsonElement root)
+    {
+        UsageWindow? primary = null;
+        UsageWindow? secondary = null;
+        var found = false;
+
+        foreach (var (element, path) in EnumerateObjectElements(root, string.Empty, 0))
+        {
+            if (element.TryGetProperty("detail", out var detail)
+                && detail.ValueKind == JsonValueKind.Object
+                && TryCreateKimiWindow(detail, FindKimiWindowSeconds(element, path), out var detailedWindow))
+            {
+                if (FindKimiWindowSeconds(element, path) >= 6 * 24 * 60 * 60)
+                {
+                    secondary ??= detailedWindow;
+                }
+                else
+                {
+                    primary ??= detailedWindow;
+                }
+
+                found = true;
+            }
+
+            if (TryCreateKimiWindow(
+                    element,
+                    path.Contains("limits", StringComparison.OrdinalIgnoreCase) ? 5 * 60 * 60 : 7 * 24 * 60 * 60,
+                    out var directWindow))
+            {
+                if (path.Contains("limits", StringComparison.OrdinalIgnoreCase))
+                {
+                    primary ??= directWindow;
+                }
+                else
+                {
+                    secondary ??= directWindow;
+                }
+
+                found = true;
+            }
+        }
+
+        return new ProviderSpecificWindows(found, primary, secondary);
+    }
+
+    private static bool TryCreateKimiWindow(JsonElement detail, int windowSeconds, out UsageWindow window)
+    {
+        if (detail.ValueKind != JsonValueKind.Object)
+        {
+            window = null!;
+            return false;
+        }
+
+        var properties = detail.EnumerateObject().ToArray();
+        var limit = FindNumber(properties, "limit", "limitValue", "quota", "total");
+        var used = FindNumber(properties, "used", "usage", "consumed");
+        var remaining = FindNumber(properties, "remaining", "balance");
+        var reset = FindDate(properties, "resetTime", "reset_time", "resetAt", "reset_at");
+        if (limit is null || limit <= 0 || reset is null || (used is null && remaining is null))
+        {
+            window = null!;
+            return false;
+        }
+
+        var usedPercent = used is not null
+            ? used.Value / limit.Value * 100
+            : 100 - remaining!.Value / limit.Value * 100;
+        window = new UsageWindow(Math.Clamp(usedPercent, 0, 100), reset.Value, windowSeconds);
+        return true;
+    }
+
+    private static int FindKimiWindowSeconds(JsonElement element, string path)
+    {
+        if (element.TryGetProperty("window", out var window)
+            && window.ValueKind == JsonValueKind.Object
+            && TryGetJsonInt(window, "duration", out var duration)
+            && duration > 0
+            && TryGetJsonString(window, "timeUnit", out var timeUnit))
+        {
+            var multiplier = timeUnit.ToUpperInvariant() switch
+            {
+                "TIME_UNIT_MINUTE" => 60,
+                "TIME_UNIT_HOUR" => 60 * 60,
+                "TIME_UNIT_DAY" => 24 * 60 * 60,
+                _ => 0,
+            };
+            if (multiplier > 0)
+            {
+                return (int)Math.Clamp((long)duration * multiplier, 0, int.MaxValue);
+            }
+        }
+
+        return path.Contains("limits", StringComparison.OrdinalIgnoreCase)
+            ? 5 * 60 * 60
+            : 7 * 24 * 60 * 60;
+    }
+
+    private static bool TryGetJsonInt(JsonElement objectElement, string propertyName, out int value)
+    {
+        if (objectElement.TryGetProperty(propertyName, out var property))
+        {
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out value))
+            {
+                return true;
+            }
+
+            if (property.ValueKind == JsonValueKind.String
+                && int.TryParse(property.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+            {
+                return true;
+            }
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static bool TryGetJsonString(JsonElement objectElement, string propertyName, out string value)
+    {
+        if (objectElement.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(property.GetString()))
+        {
+            value = property.GetString()!;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static IEnumerable<(JsonElement Element, string Path)> EnumerateObjectElements(
+        JsonElement element,
+        string path,
+        int depth)
+    {
+        if (depth > 8)
+        {
+            yield break;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            yield return (element, path);
+            foreach (var property in element.EnumerateObject())
+            {
+                foreach (var nested in EnumerateObjectElements(property.Value, Join(path, property.Name), depth + 1))
+                {
+                    yield return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            var index = 0;
+            foreach (var item in element.EnumerateArray())
+            {
+                foreach (var nested in EnumerateObjectElements(item, Join(path, index.ToString(CultureInfo.InvariantCulture)), depth + 1))
+                {
+                    yield return nested;
+                }
+
+                index++;
+            }
+        }
     }
 
     private static bool TryCreateWindow(

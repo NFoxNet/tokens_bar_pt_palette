@@ -389,6 +389,69 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task CodebuffUsageAndSubscriptionExposeRollingAndWeeklyLimits()
+    {
+        var fiveHourReset = DateTimeOffset.UtcNow.AddHours(2);
+        var weeklyReset = DateTimeOffset.UtcNow.AddDays(5);
+        var handler = new RoutingStubHandler(request => request.RequestUri!.AbsolutePath.Contains("subscription", StringComparison.Ordinal)
+            ? """{"displayName":"Pro","subscription":{"status":"active"},"rateLimit":{"weeklyUsed":30,"weeklyLimit":100,"weeklyResetsAt":"2030-01-05T00:00:00Z"}}"""
+            : $$"""{"usage":20,"quota":100,"remainingBalance":80,"next_quota_reset":"{{fiveHourReset:O}}","autoTopupEnabled":true}""");
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "codebuff"),
+            new TestConfiguration(("codebuff", "apiKey", "codebuff-key")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(20, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(30, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("Pro", snapshot.Plan);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.All(handler.Requests, request => Assert.Equal("Bearer codebuff-key", request.Headers.Authorization!.ToString()));
+        Assert.Contains("fingerprintId", handler.RequestBodies.Single(body => body is not null), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CommandCodeCreditsAndSubscriptionExposeBothWindows()
+    {
+        var handler = new RoutingStubHandler(request => request.RequestUri!.AbsolutePath.Contains("subscriptions", StringComparison.Ordinal)
+            ? """{"success":true,"data":{"planId":"pro","status":"active","currentPeriodEnd":"2030-02-01T00:00:00Z"}}"""
+            : """{"credits":{"monthlyCredits":70,"purchasedCredits":5,"premiumMonthlyCredits":50,"opensourceMonthlyCredits":20},"windowLimits":{"fiveHour":{"cap":100,"used":12,"resetAt":"2030-01-01T00:00:00Z"},"weekly":{"cap":200,"used":31,"resetAt":"2030-01-07T00:00:00Z"}}}""");
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "commandcode"),
+            new TestConfiguration(("commandcode", "cookieHeader", "better-auth.session_token=session")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(12, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(15.5, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("pro", snapshot.Plan);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "monthly Credits" && metric.Value == "70");
+        Assert.All(handler.Requests, request => Assert.Equal("better-auth.session_token=session", request.Headers.GetValues("Cookie").Single()));
+    }
+
+    [Fact]
+    public async Task KimiWebContractUsesPostAndMapsRateAndWeeklyWindows()
+    {
+        var handler = new RoutingStubHandler(request => request.RequestUri!.AbsolutePath.Contains("GetSubscriptionStats", StringComparison.Ordinal)
+            ? """{"subscriptionBalance":{"feature":"FEATURE_OMNI","type":"SUBSCRIPTION","amountUsedRatio":0.2,"expireTime":"2030-02-01T00:00:00Z"},"ratelimitCode7d":{"ratio":0.3,"enabled":true,"resetTime":"2030-01-07T00:00:00Z"}}"""
+            : """{"usages":[{"scope":"FEATURE_CODING","detail":{"limit":"100","used":"40","resetTime":"2030-01-07T00:00:00Z"},"limits":[{"window":{"duration":5,"timeUnit":"TIME_UNIT_HOUR"},"detail":{"limit":"20","used":"5","resetTime":"2030-01-01T00:00:00Z"}}]}]}""");
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "kimi"),
+            new TestConfiguration(("kimi", "cookieHeader", "kimi-auth=kimi-session")),
+            new HttpClient(handler));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal(25, snapshot.PrimaryWindow!.UsedPercent);
+        Assert.Equal(40, snapshot.SecondaryWindow!.UsedPercent);
+        Assert.Equal("Bearer kimi-session", handler.Requests[0].Headers.Authorization!.ToString());
+        Assert.All(handler.Requests, request => Assert.Equal(HttpMethod.Post, request.Method));
+        Assert.Contains("FEATURE_CODING", handler.RequestBodies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task JetBrainsQuotaFileIsDetectedFromTheOfficialLocalFormat()
     {
         var reset = DateTimeOffset.UtcNow.AddDays(12);
@@ -539,6 +602,25 @@ public sealed class ProviderCatalogTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(response, Encoding.UTF8, "application/json"),
+                RequestMessage = request,
+            };
+        }
+    }
+
+    private sealed class RoutingStubHandler(Func<HttpRequestMessage, string> responseFactory) : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+        public List<string?> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            RequestBodies.Add(request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseFactory(request), Encoding.UTF8, "application/json"),
                 RequestMessage = request,
             };
         }
