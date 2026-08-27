@@ -17,6 +17,7 @@ public sealed class UsageSnapshotCache : IUsageProvider, IDisposable
     private readonly object _stateGate = new();
     private UsageSnapshot? _snapshot;
     private DateTimeOffset _fetchedAt;
+    private long _invalidationVersion;
     private int _disposed;
 
     public UsageSnapshotCache(
@@ -63,6 +64,7 @@ public sealed class UsageSnapshotCache : IUsageProvider, IDisposable
         lock (_stateGate)
         {
             _fetchedAt = default;
+            _invalidationVersion++;
         }
     }
 
@@ -76,31 +78,47 @@ public sealed class UsageSnapshotCache : IUsageProvider, IDisposable
             return cachedSnapshot;
         }
 
-        await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        while (true)
         {
-            if (TryGetFreshSnapshot(out cachedSnapshot))
+            await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                return cachedSnapshot;
+                if (TryGetFreshSnapshot(out cachedSnapshot))
+                {
+                    return cachedSnapshot;
+                }
+
+                long requestVersion;
+                lock (_stateGate)
+                {
+                    requestVersion = _invalidationVersion;
+                }
+
+                var freshSnapshot = await _provider
+                    .GetUsageSnapshotAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                var fetchedAt = _timeProvider.GetUtcNow();
+                freshSnapshot = freshSnapshot with { FetchedAt = fetchedAt };
+
+                lock (_stateGate)
+                {
+                    if (requestVersion != _invalidationVersion)
+                    {
+                        // Settings changed while the request was in flight. Do not
+                        // let the stale response become the fresh cache entry.
+                        continue;
+                    }
+
+                    _snapshot = freshSnapshot;
+                    _fetchedAt = fetchedAt;
+                }
+
+                return freshSnapshot;
             }
-
-            var freshSnapshot = await _provider
-                .GetUsageSnapshotAsync(cancellationToken)
-                .ConfigureAwait(false);
-            var fetchedAt = _timeProvider.GetUtcNow();
-            freshSnapshot = freshSnapshot with { FetchedAt = fetchedAt };
-
-            lock (_stateGate)
+            finally
             {
-                _snapshot = freshSnapshot;
-                _fetchedAt = fetchedAt;
+                _refreshGate.Release();
             }
-
-            return freshSnapshot;
-        }
-        finally
-        {
-            _refreshGate.Release();
         }
     }
 
