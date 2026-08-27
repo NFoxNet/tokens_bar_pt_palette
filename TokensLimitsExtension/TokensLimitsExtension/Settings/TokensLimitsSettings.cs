@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -14,6 +15,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 {
     private const int DefaultRefreshIntervalSeconds = 60;
     private const string SettingsNamespace = "tokensLimits";
+    private const string SecretMask = "••••••••";
 
     private readonly ChoiceSetSetting _refreshInterval = new(
         $"{SettingsNamespace}.refreshInterval",
@@ -28,15 +30,20 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     private readonly Dictionary<string, ToggleSetting> _providerToggles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextSetting> _providerFields = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _secretFieldKeys = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ProtectedSecretStore _secretStore;
 
     private bool _disposed;
+    private bool _handlingSettingsChange;
 
     public TokensLimitsSettings()
     {
         FilePath = SettingsJsonPath();
+        _secretStore = new ProtectedSecretStore(SecretsJsonPath());
         Settings.Add(_refreshInterval);
         AddProviderSettings();
         LoadSettings();
+        MigrateAndMaskLoadedSecrets();
         Settings.SettingsChanged += OnSettingsChanged;
     }
 
@@ -68,10 +75,27 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         if (_providerFields.TryGetValue(FieldKey(providerId, key), out var setting))
         {
-            var configured = Normalize(setting.Value);
-            if (configured is not null)
+            if (_secretFieldKeys.Contains(setting.Key))
             {
-                return configured;
+                var protectedValue = Normalize(_secretStore.Get(setting.Key));
+                if (protectedValue is not null)
+                {
+                    return protectedValue;
+                }
+
+                var unprotectedValue = Normalize(setting.Value);
+                if (unprotectedValue is not null && !IsSecretMask(unprotectedValue))
+                {
+                    return unprotectedValue;
+                }
+            }
+            else
+            {
+                var configured = Normalize(setting.Value);
+                if (configured is not null)
+                {
+                    return configured;
+                }
             }
         }
 
@@ -97,6 +121,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
         _disposed = true;
         Settings.SettingsChanged -= OnSettingsChanged;
+        _secretStore.Dispose();
         Changed = null;
         GC.SuppressFinalize(this);
     }
@@ -106,6 +131,13 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         var directory = Utilities.BaseSettingsPath("TokensLimitsExtension");
         Directory.CreateDirectory(directory);
         return Path.Combine(directory, $"{SettingsNamespace}.settings.json");
+    }
+
+    private static string SecretsJsonPath()
+    {
+        var directory = Utilities.BaseSettingsPath("TokensLimitsExtension");
+        Directory.CreateDirectory(directory);
+        return Path.Combine(directory, $"{SettingsNamespace}.secrets.json");
     }
 
     private void AddProviderSettings()
@@ -129,9 +161,15 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
                     field.DefaultValue ?? string.Empty)
                 {
                     IsRequired = false,
-                    Placeholder = field.IsSecret ? "Введите значение или задайте переменную окружения" : string.Empty,
+                    Placeholder = field.IsSecret
+                        ? "Сохранено; введите новое значение для замены"
+                        : string.Empty,
                 };
                 _providerFields.Add(setting.Key, setting);
+                if (field.IsSecret)
+                {
+                    _secretFieldKeys.Add(setting.Key);
+                }
                 Settings.Add(setting);
             }
         }
@@ -153,7 +191,81 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     private void OnSettingsChanged(object? sender, PaletteSettings args)
     {
-        SaveSettings();
+        if (_disposed || _handlingSettingsChange)
+        {
+            return;
+        }
+
+        _handlingSettingsChange = true;
+        try
+        {
+            if (PersistAndMaskSecrets())
+            {
+                SaveSettings();
+            }
+        }
+        finally
+        {
+            _handlingSettingsChange = false;
+        }
+
         Changed?.Invoke(this, EventArgs.Empty);
     }
+
+    private void MigrateAndMaskLoadedSecrets()
+    {
+        if (!PersistAndMaskSecrets())
+        {
+            return;
+        }
+
+        try
+        {
+            SaveSettings();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[TokensLimits] ERROR: unable to save masked settings: {ex.Message}");
+        }
+    }
+
+    private bool PersistAndMaskSecrets()
+    {
+        foreach (var setting in _providerFields.Values)
+        {
+            if (!_secretFieldKeys.Contains(setting.Key))
+            {
+                continue;
+            }
+
+            var value = Normalize(setting.Value);
+            if (IsSecretMask(value))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (value is null)
+                {
+                    _secretStore.Remove(setting.Key);
+                }
+                else
+                {
+                    _secretStore.Set(setting.Key, value);
+                    setting.Value = SecretMask;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[TokensLimits] ERROR: unable to protect setting '{setting.Key}': {ex.Message}");
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsSecretMask(string? value)
+        => string.Equals(value, SecretMask, StringComparison.Ordinal);
 }
