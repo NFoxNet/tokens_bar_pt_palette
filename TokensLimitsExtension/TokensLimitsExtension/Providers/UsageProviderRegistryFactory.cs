@@ -14,6 +14,7 @@ public static class UsageProviderRegistryFactory
         ICodexUsageProvider codexProvider,
         IUsageProviderConfiguration configuration,
         HttpClient httpClient,
+        bool ownsCodexProvider = true,
         Action<string>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(codexProvider);
@@ -24,7 +25,7 @@ public static class UsageProviderRegistryFactory
         {
             // Constructing adapters is side-effect free. Network requests begin
             // only when a provider is enabled and its page/Dock surface exists.
-            new CodexUsageProviderAdapter(codexProvider),
+            new CodexUsageProviderAdapter(codexProvider, ownsCodexProvider),
         };
 
         foreach (var descriptor in UsageProviderDescriptorRegistry.All.Skip(1))

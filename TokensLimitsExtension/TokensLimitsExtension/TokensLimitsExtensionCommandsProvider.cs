@@ -29,7 +29,6 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private readonly UsageSnapshotCache[] _snapshotCaches;
     private UsageDockBandItem[] _dockBandItems = [];
     private readonly UsageOverviewPage _overviewPage;
-    private readonly IDisposable? _ownedUsageService;
     private readonly HttpClient? _ownedProviderHttpClient;
     private readonly bool _settingsDrivenProviders;
     private readonly object _surfaceGate = new();
@@ -45,20 +44,26 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         _settings = new TokensLimitsSettings();
         Settings = _settings.Settings;
-        var ownsUsageService = usageService is null;
-        usageService ??= CreateDefaultService();
-        _ownedUsageService = ownsUsageService ? usageService as IDisposable : null;
-
         _settingsDrivenProviders = providerRegistry is null;
         _ownsProviderRegistry = providerRegistry is null;
         _ownedProviderHttpClient = providerRegistry is null
             ? new HttpClient { Timeout = TimeSpan.FromSeconds(20) }
             : null;
-        _providerRegistry = providerRegistry ?? UsageProviderRegistryFactory.CreateDefault(
-            usageService,
-            _settings,
-            _ownedProviderHttpClient!,
-            LogMessage);
+        if (providerRegistry is not null)
+        {
+            _providerRegistry = providerRegistry;
+        }
+        else
+        {
+            var ownsUsageService = usageService is null;
+            usageService ??= CreateDefaultService();
+            _providerRegistry = UsageProviderRegistryFactory.CreateDefault(
+                usageService,
+                _settings,
+                _ownedProviderHttpClient!,
+                ownsUsageService,
+                LogMessage);
+        }
         var providers = _providerRegistry.Providers;
         _snapshotCaches = providers
             .Select(provider => new UsageSnapshotCache(provider, _settings))
@@ -131,7 +136,6 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             _providerRegistry.Dispose();
         }
 
-        _ownedUsageService?.Dispose();
         _ownedProviderHttpClient?.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();
