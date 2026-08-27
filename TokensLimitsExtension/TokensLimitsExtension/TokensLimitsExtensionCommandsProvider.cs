@@ -157,9 +157,35 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 
     private void SettingsOnChanged(object? sender, EventArgs e)
     {
-        if (Volatile.Read(ref _disposed) == 0)
+        if (Volatile.Read(ref _disposed) != 0)
         {
-            RebuildEnabledSurfaces();
+            return;
+        }
+
+        foreach (var cache in _snapshotCaches)
+        {
+            cache.Invalidate();
+        }
+
+        RebuildEnabledSurfaces();
+
+        UsageDockBandItem[] dockBandItems;
+        TokensLimitsPage[] pages;
+        lock (_surfaceGate)
+        {
+            dockBandItems = _dockBandItems.ToArray();
+            pages = _pages.ToArray();
+        }
+
+        _ = _overviewPage.RefreshAsync();
+        foreach (var dockBandItem in dockBandItems)
+        {
+            _ = dockBandItem.RefreshAsync();
+        }
+
+        foreach (var page in pages)
+        {
+            _ = page.RefreshAsync();
         }
     }
 
