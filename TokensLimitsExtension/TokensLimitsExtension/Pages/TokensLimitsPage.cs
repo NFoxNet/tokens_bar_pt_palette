@@ -59,7 +59,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         PlaceholderText = $"{_usageProvider.Descriptor.DisplayName} limits";
         ShowDetails = true;
 
-        _refreshTimer = new Timer(GetRefreshIntervalMilliseconds())
+        _refreshTimer = new Timer(UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings))
         {
             AutoReset = true,
         };
@@ -77,8 +77,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
         if (Volatile.Read(ref _hasLoaded) == 0)
         {
-            if (_usageProvider is UsageSnapshotCache cache
-                && cache.TryGetSnapshot(out var cachedSnapshot))
+            if (_usageProvider.TryGetCachedSnapshot(out var cachedSnapshot))
             {
                 SetItems(CreateItems(cachedSnapshot), notify: false);
             }
@@ -218,17 +217,12 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             return;
         }
 
-        _refreshTimer.Interval = GetRefreshIntervalMilliseconds();
-        if (_usageProvider is UsageSnapshotCache cache)
-        {
-            cache.Invalidate();
-        }
-
-        _ = RefreshAsync();
+        UsageRefreshHelpers.ApplySettingsChanged(
+            _usageProvider,
+            _refreshTimer,
+            _refreshSettings,
+            () => RefreshAsync());
     }
-
-    private double GetRefreshIntervalMilliseconds()
-        => Math.Max(1000, (_refreshSettings?.RefreshInterval ?? TimeSpan.FromMinutes(1)).TotalMilliseconds);
 
     private void SetItems(IListItem[] items, bool notify)
     {

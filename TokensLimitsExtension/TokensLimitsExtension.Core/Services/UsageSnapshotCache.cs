@@ -8,7 +8,7 @@ namespace TokensLimitsExtension.Core.Services;
 /// for a provider. This prevents the Dock and details page from issuing
 /// duplicate requests at the same time.
 /// </summary>
-public sealed class UsageSnapshotCache : IUsageProvider, IDisposable
+public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
 {
     private readonly IUsageProvider _provider;
     private readonly IUsageRefreshSettings? _refreshSettings;

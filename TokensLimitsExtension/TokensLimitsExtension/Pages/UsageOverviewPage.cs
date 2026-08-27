@@ -52,7 +52,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         PlaceholderText = "Enabled providers";
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         ShowDetails = true;
-        _refreshTimer = new Timer(GetRefreshIntervalMilliseconds(refreshSettings)) { AutoReset = true };
+        _refreshTimer = new Timer(UsageRefreshHelpers.GetRefreshIntervalMilliseconds(refreshSettings)) { AutoReset = true };
         _refreshTimer.Elapsed += RefreshTimerOnElapsed;
         _refreshTimer.Start();
         if (_refreshSettings is not null)
@@ -210,13 +210,10 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     {
         if (!_disposed)
         {
-            _refreshTimer.Interval = GetRefreshIntervalMilliseconds(_refreshSettings);
+            _refreshTimer.Interval = UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings);
             _ = RefreshAsync();
         }
     }
-
-    private static double GetRefreshIntervalMilliseconds(IUsageRefreshSettings? settings)
-        => Math.Max(1000, (settings?.RefreshInterval ?? TimeSpan.FromMinutes(1)).TotalMilliseconds);
 
     private static void LogMessage(string message)
     {
