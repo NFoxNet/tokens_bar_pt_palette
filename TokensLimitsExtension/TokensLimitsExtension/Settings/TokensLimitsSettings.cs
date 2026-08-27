@@ -13,20 +13,21 @@ namespace TokensLimitsExtension.Settings;
 
 public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRefreshSettings, IUsageProviderConfiguration, IDisposable
 {
+    private const int MinimumRefreshIntervalSeconds = 30;
+    private const int MaximumRefreshIntervalSeconds = 3600;
     private const int DefaultRefreshIntervalSeconds = 60;
     private const string SettingsNamespace = "tokensLimits";
     private const string SecretMask = "••••••••";
 
-    private readonly ChoiceSetSetting _refreshInterval = new(
+    private readonly TextSetting _refreshInterval = new(
         $"{SettingsNamespace}.refreshInterval",
         "Частота обновления",
-        "Как часто получать актуальные данные о лимитах.",
-        [
-            new ChoiceSetSetting.Choice("1 минута", "60"),
-            new ChoiceSetSetting.Choice("30 секунд", "30"),
-            new ChoiceSetSetting.Choice("5 минут", "300"),
-            new ChoiceSetSetting.Choice("15 минут", "900"),
-        ]);
+        $"Интервал в секундах, от {MinimumRefreshIntervalSeconds} до {MaximumRefreshIntervalSeconds}.",
+        DefaultRefreshIntervalSeconds.ToString(CultureInfo.InvariantCulture))
+    {
+        IsRequired = true,
+        Placeholder = $"{MinimumRefreshIntervalSeconds}–{MaximumRefreshIntervalSeconds}",
+    };
 
     private readonly Dictionary<string, ToggleSetting> _providerToggles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextSetting> _providerFields = new(StringComparer.OrdinalIgnoreCase);
@@ -43,6 +44,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         Settings.Add(_refreshInterval);
         AddProviderSettings();
         LoadSettings();
+        ValidateRefreshInterval();
         MigrateAndMaskLoadedSecrets();
         Settings.SettingsChanged += OnSettingsChanged;
     }
@@ -51,8 +53,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     {
         get
         {
-            if (int.TryParse(_refreshInterval.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds)
-                && seconds > 0)
+            if (TryGetRefreshIntervalSeconds(out var seconds))
             {
                 return TimeSpan.FromSeconds(seconds);
             }
@@ -199,6 +200,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         _handlingSettingsChange = true;
         try
         {
+            ValidateRefreshInterval();
             if (PersistAndMaskSecrets())
             {
                 SaveSettings();
@@ -210,6 +212,25 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
 
         Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private bool ValidateRefreshInterval()
+    {
+        if (TryGetRefreshIntervalSeconds(out _))
+        {
+            _refreshInterval.ErrorMessage = string.Empty;
+            return true;
+        }
+
+        _refreshInterval.ErrorMessage =
+            $"Введите целое число от {MinimumRefreshIntervalSeconds} до {MaximumRefreshIntervalSeconds} секунд.";
+        return false;
+    }
+
+    private bool TryGetRefreshIntervalSeconds(out int seconds)
+    {
+        return int.TryParse(_refreshInterval.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out seconds)
+            && seconds is >= MinimumRefreshIntervalSeconds and <= MaximumRefreshIntervalSeconds;
     }
 
     private void MigrateAndMaskLoadedSecrets()
