@@ -7,32 +7,33 @@ namespace TokensLimitsExtension.Core.Services;
 
 public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
 {
-    private static readonly Uri UsageEndpoint = new("https://chatgpt.com/backend-api/wham/usage");
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DefaultRetryDelay = TimeSpan.FromMilliseconds(250);
-    private const int MaxAttempts = 3;
     private readonly HttpClient _httpClient;
     private readonly Action<string>? _logger;
     private readonly Func<string?>? _accountIdProvider;
+    private readonly CodexUsageClientOptions _options;
     private readonly bool _ownsHttpClient;
     private int _disposed;
 
     public CodexUsageClient(
         HttpClient? httpClient = null,
         Action<string>? logger = null,
-        Func<string?>? accountIdProvider = null)
+        Func<string?>? accountIdProvider = null,
+        CodexUsageClientOptions? options = null)
     {
         _httpClient = httpClient ?? new HttpClient();
         _logger = logger;
         _accountIdProvider = accountIdProvider;
+        _options = options ?? new CodexUsageClientOptions();
         _ownsHttpClient = httpClient is null;
     }
 
     public CodexUsageClient(
         HttpMessageHandler handler,
         Action<string>? logger = null,
-        Func<string?>? accountIdProvider = null)
-        : this(new HttpClient(handler, disposeHandler: false), logger, accountIdProvider)
+        Func<string?>? accountIdProvider = null,
+        CodexUsageClientOptions? options = null)
+        : this(new HttpClient(handler, disposeHandler: false), logger, accountIdProvider, options)
     {
     }
 
@@ -44,11 +45,11 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
         }
 
         ThrowIfDisposed();
-        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        for (var attempt = 1; attempt <= _options.MaxAttempts; attempt++)
         {
             using var request = CreateRequest(accessToken);
             using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            requestCts.CancelAfter(RequestTimeout);
+            requestCts.CancelAfter(_options.RequestTimeout);
 
             try
             {
@@ -59,7 +60,7 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
                 var body = await response.Content.ReadAsStringAsync(requestCts.Token).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
-                    if (IsTransient(response.StatusCode) && attempt < MaxAttempts)
+                    if (IsTransient(response.StatusCode) && attempt < _options.MaxAttempts)
                     {
                         await DelayBeforeRetryAsync(response, attempt, cancellationToken).ConfigureAwait(false);
                         continue;
@@ -83,7 +84,7 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && requestCts.IsCancellationRequested)
             {
-                if (attempt == MaxAttempts)
+                if (attempt == _options.MaxAttempts)
                 {
                     throw new TimeoutException("Codex usage request timed out.");
                 }
@@ -280,10 +281,10 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
 
     private HttpRequestMessage CreateRequest(string accessToken)
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
+        var request = new HttpRequestMessage(HttpMethod.Get, _options.UsageEndpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.UserAgent.ParseAdd("codex-cli");
+        request.Headers.UserAgent.ParseAdd(_options.UserAgent);
         var accountId = _accountIdProvider?.Invoke();
         if (!string.IsNullOrWhiteSpace(accountId))
         {
