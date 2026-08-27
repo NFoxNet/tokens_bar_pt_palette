@@ -214,7 +214,9 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
                 .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings))
                 .ToArray();
             var dockBands = enabledCaches
-                .Select(cache => CreateDockBand(cache, LogMessage, _overviewPage, _settings))
+                .Zip(
+                    _pages,
+                    (cache, page) => CreateDockBand(cache, LogMessage, page, _settings))
                 .ToArray();
             _dockBandItems = dockBands.Select(pair => pair.Item).ToArray();
             _dockBands = dockBands.Select(pair => pair.Band).ToArray();
