@@ -15,10 +15,11 @@ public sealed partial class TokensLimitsExtension : IExtension, IDisposable
     private readonly ManualResetEvent _extensionDisposedEvent;
 
     private readonly TokensLimitsExtensionCommandsProvider _provider = new();
+    private int _disposed;
 
     public TokensLimitsExtension(ManualResetEvent extensionDisposedEvent)
     {
-        this._extensionDisposedEvent = extensionDisposedEvent;
+        _extensionDisposedEvent = extensionDisposedEvent ?? throw new ArgumentNullException(nameof(extensionDisposedEvent));
     }
 
     public object? GetProvider(ProviderType providerType)
@@ -32,7 +33,19 @@ public sealed partial class TokensLimitsExtension : IExtension, IDisposable
 
     public void Dispose()
     {
-        _provider.Dispose();
-        _extensionDisposedEvent.Set();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _provider.Dispose();
+        }
+        finally
+        {
+            _extensionDisposedEvent.Set();
+            GC.SuppressFinalize(this);
+        }
     }
 }

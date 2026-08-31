@@ -13,6 +13,8 @@ TokensLimitsExtension — расширение Microsoft PowerToys Command Palet
 - CLSID из `[Guid]` в `TokensLimitsExtension.cs` должен совпадать с `ClassId` в `Package.appxmanifest` во всех местах.
 - Не коммитьте токены, Cookie, OAuth credentials, локальные settings/secrets или реальные ответы API.
 - Не логируйте access token, API key, Cookie, credentials JSON и полный ответ API. Логи должны быть пригодны для диагностики без раскрытия секретов.
+- При переустановке или переключении MSIX-регистрации обязательно сохраняйте данные приложения: используйте `Remove-AppxPackage -PreserveApplicationData`. Не удаляйте пакет без этого параметра, поскольку можно потерять зашифрованные provider secrets. Для локальной Debug-проверки сначала предпочитайте остановить extension process и зарегистрировать Debug `AppxManifest.xml` напрямую; подпись и сертификаты для этого не нужны.
+- Для публичного MSIX `Publisher` в manifest обязан совпадать с subject сертификата. PFX, пароль сертификата и GitHub secrets никогда не коммитятся и не попадают в логи; в GitHub Release можно публиковать только `.cer`, `.msix`/`.msixbundle`, checksums и исходный код. Self-signed сертификат годится лишь для явно задокументированного sideload-канала; для доверенной установки без ручного импорта нужен Microsoft Store или доверенный code-signing/Trusted Signing.
 - Не придумывайте процент лимита, если провайдер его не возвращает. Используйте `UsageMetric`, а оценку помечайте `IsEstimate = true`.
 - Не ломайте обратную совместимость идентификаторов провайдеров, настроек, команд и dock bands без явной задачи.
 - Существующие изменения в рабочем дереве принадлежат пользователю: перед правкой проверьте `git status` и не откатывайте чужие изменения.

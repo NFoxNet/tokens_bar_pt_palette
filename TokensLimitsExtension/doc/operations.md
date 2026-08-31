@@ -8,7 +8,9 @@
 - `tokensLimits.providers.<providerId>.enabled` — включение провайдера.
 - `tokensLimits.providers.<providerId>.<field>` — provider-specific поле.
 
-Фактические пути вычисляются через `Utilities.BaseSettingsPath("TokensLimitsExtension")`. Обычные settings и secrets находятся в отдельных JSON-файлах. Не копируйте эти файлы в issue или pull request целиком.
+Обычные settings и secrets находятся в отдельных JSON-файлах в едином каталоге `%LOCALAPPDATA%\TokensLimitsExtension` (`tokensLimits.settings.json` и `tokensLimits.secrets.json`). После обновления расширение один раз мигрирует найденные host/package-local файлы в этот каталог; старые копии не используются. Не копируйте эти файлы в issue или pull request целиком.
+
+Для Codex расширение читает `$CODEX_HOME\auth.json` (или `%USERPROFILE%\.codex\auth.json`). Если OAuth возвращает ротацию токена, обновлённая пара атомарно записывается обратно только когда файл не был изменён Codex CLI во время запроса; изменение файла CLI подхватывается при следующем обновлении. Содержимое этого файла также является секретом.
 
 Переменные окружения провайдеров указаны рядом с полями в `UsageProviderDescriptorRegistry.cs`. Для Codex:
 

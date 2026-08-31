@@ -23,4 +23,8 @@ public sealed record CodexUsageSnapshot(
     public bool HasPrimaryWindow { get; init; } = true;
 
     public bool HasSecondaryWindow { get; init; } = true;
+
+    public int PrimaryWindowSeconds { get; init; } = 5 * 60 * 60;
+
+    public int SecondaryWindowSeconds { get; init; } = 7 * 24 * 60 * 60;
 }

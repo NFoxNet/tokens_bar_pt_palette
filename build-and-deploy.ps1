@@ -20,31 +20,23 @@ if (-not (Test-Path -LiteralPath $projectFullPath -PathType Leaf)) {
     throw "Project file was not found: $projectFullPath"
 }
 
-$existingPackages = @(Get-AppxPackage -Name "TokensLimitsExtension" -ErrorAction SilentlyContinue)
-if ($existingPackages.Count -gt 0) {
-    Write-Host "Removing previous TokensLimitsExtension registration(s)..."
-    $processesToStop = @(Get-Process -Name "TokensLimitsExtension","Microsoft.CmdPal.UI","Microsoft.CmdPal.Ext.PowerToys" -ErrorAction SilentlyContinue)
-    foreach ($process in $processesToStop) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+$extensionProcesses = @(Get-Process -Name "TokensLimitsExtension" -ErrorAction SilentlyContinue)
+foreach ($process in $extensionProcesses) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+}
+
+$stopDeadline = [DateTime]::UtcNow.AddSeconds(15)
+do {
+    $runningProcesses = @(Get-Process -Name "TokensLimitsExtension" -ErrorAction SilentlyContinue)
+    if ($runningProcesses.Count -eq 0) {
+        break
     }
 
-    $stopDeadline = [DateTime]::UtcNow.AddSeconds(15)
-    do {
-        $runningProcesses = @(Get-Process -Name "TokensLimitsExtension","Microsoft.CmdPal.UI","Microsoft.CmdPal.Ext.PowerToys" -ErrorAction SilentlyContinue)
-        if ($runningProcesses.Count -eq 0) {
-            break
-        }
+    Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $stopDeadline)
 
-        Start-Sleep -Milliseconds 250
-    } while ([DateTime]::UtcNow -lt $stopDeadline)
-
-    if ($runningProcesses.Count -gt 0) {
-        throw "Unable to stop the Command Palette processes before deployment."
-    }
-
-    foreach ($existingPackage in $existingPackages) {
-        Remove-AppxPackage -Package $existingPackage.PackageFullName
-    }
+if ($runningProcesses.Count -gt 0) {
+    throw "Unable to stop TokensLimitsExtension before deployment."
 }
 
 Write-Host "Publishing $projectFullPath ($Configuration/$Platform)..."
@@ -63,6 +55,8 @@ if ($manifestCandidates.Count -ne 1) {
 $manifest = $manifestCandidates[0]
 
 Write-Host "Registering package manifest: $($manifest.FullName)"
+# Register over the existing package. Removing it first would delete LocalState
+# and all DPAPI-protected provider credentials.
 Add-AppxPackage -Register $manifest.FullName -ForceUpdateFromAnyVersion
 $registeredPackage = @(Get-AppxPackage -Name "TokensLimitsExtension" -ErrorAction SilentlyContinue |
     Where-Object { $_.InstallLocation -eq $manifest.DirectoryName })

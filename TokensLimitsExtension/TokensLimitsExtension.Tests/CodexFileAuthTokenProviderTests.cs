@@ -40,7 +40,7 @@ public sealed class CodexFileAuthTokenProviderTests
         var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = JsonContent.Create(new { access_token = "refreshed-token" }),
+            Content = JsonContent.Create(new { access_token = "refreshed-token", refresh_token = "rotated-refresh-token" }),
         });
         try
         {
@@ -59,6 +59,9 @@ public sealed class CodexFileAuthTokenProviderTests
             Assert.Equal("https://auth.openai.com/oauth/token", handler.Request.RequestUri!.ToString());
             Assert.Contains("refresh_token", handler.RequestBody, StringComparison.Ordinal);
             Assert.Contains("grant_type", handler.RequestBody, StringComparison.Ordinal);
+            using var persisted = JsonDocument.Parse(await File.ReadAllTextAsync(authPath));
+            Assert.Equal("refreshed-token", persisted.RootElement.GetProperty("access_token").GetString());
+            Assert.Equal("rotated-refresh-token", persisted.RootElement.GetProperty("refresh_token").GetString());
         }
         finally
         {
@@ -142,6 +145,35 @@ public sealed class CodexFileAuthTokenProviderTests
             Assert.Equal("refreshed-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
             Assert.Equal("refreshed-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
             Assert.Equal(1, handler.CallCount);
+        }
+        finally
+        {
+            File.Delete(authPath);
+        }
+    }
+
+    [Fact]
+    public async Task ReloadsAnUnexpiredTokenWhenCodexUpdatesAuthFile()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(authPath, JsonSerializer.Serialize(new
+            {
+                access_token = "first-token",
+                expires_at = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds(),
+            }));
+            var provider = new CodexFileAuthTokenProvider(authPath);
+            Assert.Equal("first-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
+
+            await File.WriteAllTextAsync(authPath, JsonSerializer.Serialize(new
+            {
+                access_token = "updated-token",
+                expires_at = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds(),
+            }));
+            File.SetLastWriteTimeUtc(authPath, DateTime.UtcNow.AddSeconds(2));
+
+            Assert.Equal("updated-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
         }
         finally
         {

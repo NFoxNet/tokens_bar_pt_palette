@@ -35,6 +35,7 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
         CodexUsageClientOptions? options = null)
         : this(new HttpClient(handler, disposeHandler: false), logger, accountIdProvider, options)
     {
+        _ownsHttpClient = true;
     }
 
     public async Task<CodexUsageSnapshot> FetchUsageAsync(string accessToken, CancellationToken cancellationToken)
@@ -143,6 +144,8 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
             AdditionalRateLimits = ParseAdditionalRateLimits(root),
             HasPrimaryWindow = hasPrimaryWindow,
             HasSecondaryWindow = hasSecondaryWindow,
+            PrimaryWindowSeconds = primary.LimitWindowSeconds,
+            SecondaryWindowSeconds = secondary.LimitWindowSeconds,
         };
         return snapshot;
     }
@@ -295,7 +298,9 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
     }
 
     private static bool IsTransient(HttpStatusCode statusCode)
-        => statusCode == HttpStatusCode.TooManyRequests || (int)statusCode >= 500;
+        => statusCode == HttpStatusCode.RequestTimeout
+            || statusCode == HttpStatusCode.TooManyRequests
+            || (int)statusCode >= 500;
 
     private static async Task DelayBeforeRetryAsync(
         HttpResponseMessage? response,

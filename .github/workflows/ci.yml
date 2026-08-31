@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: TokensLimitsExtension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore .\TokensLimitsExtension.sln -p:Platform=x64 -p:RuntimeIdentifier=win-x64 -p:PublishReadyToRun=true
+      - run: dotnet build .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore -warnaserror
+      - run: dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore --no-build

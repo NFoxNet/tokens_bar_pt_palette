@@ -1,11 +1,13 @@
-# Tokens Limits Command Palette extension
+# Tokens Limits for PowerToys Command Palette
 
-Расширение PowerToys Command Palette показывает реальные лимиты и расход подключённых AI-провайдеров прямо в Dock.
+Open-source extension for Microsoft PowerToys Command Palette that shows real usage limits and other account metrics for configured AI providers in one persistent Dock band.
 Codex включён по умолчанию; остальные провайдеры включаются пользователем в стандартных настройках Command Palette.
+
+> The first public release is distributed as a signed sideloaded MSIX. It requires PowerToys Command Palette and a one-time import of the release certificate. See [installation](TokensLimitsExtension/doc/release.md#installing-a-github-release).
 
 ## Возможности
 
-- нативный Dock band с коротким видом `5ч\98%, 7д\69%`;
+- один нативный Dock band с коротким видом `5ч\98%, 7д\69%` для каждого включённого провайдера;
 - подробная страница с оставшимся процентом, обратным отсчётом до сброса, тарифом и дополнительными окнами;
 - автоматическое обновление без повторного открытия палитры;
 - официальный Codex usage API как основной источник;
@@ -31,9 +33,10 @@ Codex включён по умолчанию; остальные провайд�
 - `UsageSnapshotCache` — TTL-кеш и single-flight refresh;
 - `CodexUsageProviderAdapter` — адаптер существующей Codex-логики.
 
-UI-слой создаёт для каждой включённой записи кеш, подробную страницу и `WrappedDockItem`. Корневой пункт открывает список
-всех включённых провайдеров, а `GetDockBands()` возвращает их bands автоматически. Новый provider endpoint не требует
-правок `CommandProvider` или Dock-кода.
+UI-слой создаёт для каждой включённой записи кеш и две независимые подробные страницы: обычную и Dock-transient.
+`GetDockBands()` возвращает **один** `WrappedDockItem` со стабильным ID; его содержимое динамически объединяет
+`UsageDockBandItem` всех включённых провайдеров. Поэтому закреплённый Dock не теряет новые провайдеры после изменения
+настроек, а Dock-навигация не загрязняет основной Command Palette. Новый provider endpoint не требует правок Dock-кода.
 
 ## Поддерживаемые провайдеры
 
@@ -76,12 +79,12 @@ Codex-путь устроен так:
 - дополнительные поля появляются рядом с провайдером и соответствуют его источнику: API key, Cookie, OAuth token,
   base URL, account/project/region или путь к локальным данным.
 
-По умолчанию включён только Codex. После изменения toggle Command Palette может потребовать перезагрузить расширение,
-чтобы перечитать набор Dock bands.
+По умолчанию включён только Codex. Изменение toggle перестраивает состав единого Dock band без удаления пользовательских данных;
+если хост не перерисовал Dock сразу, выполните Reload расширений Command Palette.
 
-Файл настроек хранится в каталоге, который возвращает `Utilities.BaseSettingsPath`, под именем `tokensLimits.settings.json`.
-Секретные значения не попадают в `[TokensLimits]`-логи. Значения из настроек хранятся стандартным JSON-хранилищем
-Toolkit; для API key также можно использовать указанную в настройке переменную окружения.
+Настройки хранятся в `%LOCALAPPDATA%\TokensLimitsExtension\tokensLimits.settings.json`, а секреты — отдельно в
+`tokensLimits.secrets.json`, зашифрованном DPAPI для текущего пользователя Windows. Секретные значения не попадают в
+`[TokensLimits]`-логи; для API key также можно использовать указанную в настройке переменную окружения.
 
 ## Сборка и тесты
 
@@ -99,7 +102,7 @@ dotnet build .\TokensLimitsExtension\TokensLimitsExtension.sln -p:EnableMsixTool
 .\build-and-deploy.ps1
 ```
 
-Скрипт останавливает связанные процессы, публикует выбранные `Configuration`/`Platform`, регистрирует ровно опубликованный `AppxManifest.xml` и проверяет наличие установленного пакета. После регистрации перезапустите или перезагрузите расширения Command Palette через PowerToys, если хост не подхватил обновление автоматически.
+Скрипт останавливает только процесс расширения, публикует выбранные `Configuration`/`Platform`, регистрирует ровно опубликованный `AppxManifest.xml` поверх текущей регистрации и проверяет наличие установленного пакета. Пакет перед обновлением не удаляется, поэтому настройки и зашифрованные ключи сохраняются. После регистрации перезапустите или перезагрузите расширения Command Palette через PowerToys, если хост не подхватил обновление автоматически.
 
 ## Ограничения и честность данных
 
@@ -112,3 +115,10 @@ dotnet build .\TokensLimitsExtension\TokensLimitsExtension.sln -p:EnableMsixTool
   метрику, а не превращает тариф в выдуманный процент.
 - Endpoint'ы отдельных провайдеров являются приватными web API и могут измениться самим провайдером; ошибка запроса
   отображается явно и записывается в лог без полного ответа и секретов.
+
+## Open source
+
+- License: [MIT](LICENSE).
+- Security reports: [SECURITY.md](SECURITY.md).
+- Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+- Release and signing details: [TokensLimitsExtension/doc/release.md](TokensLimitsExtension/doc/release.md).

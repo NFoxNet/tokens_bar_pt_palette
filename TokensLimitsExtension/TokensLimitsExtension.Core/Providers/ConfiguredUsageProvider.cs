@@ -176,6 +176,10 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 snapshots.Add(snapshot);
                 _logger($"[TokensLimits] Provider {_descriptor.Id}: snapshot fetched from {endpoint.Name}.");
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or XmlException or InvalidOperationException or UsageProviderRequestException or UsageProviderConfigurationException)
             {
                 failures.Add(ex);
@@ -396,11 +400,9 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         }
 
         Uri? configuredBaseUri = null;
-        if (!string.IsNullOrWhiteSpace(baseUrl)
-            && !Uri.TryCreate(baseUrl, UriKind.Absolute, out configuredBaseUri))
+        if (!string.IsNullOrWhiteSpace(baseUrl))
         {
-            throw new UsageProviderConfigurationException(
-                $"Базовый URL {Descriptor.DisplayName} имеет неверный формат.");
+            configuredBaseUri = ParseBaseUrl(baseUrl, Descriptor.DisplayName);
         }
 
         if (endpoint.UseConfiguredBaseUrl && configuredBaseUri is not null)
@@ -504,6 +506,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         {
             Query = string.Join("&", query),
         };
+        ValidateEndpointUri(builder.Uri, Descriptor.DisplayName);
         return builder.Uri;
     }
 
@@ -1423,13 +1426,30 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
     private static Uri ParseBaseUrl(string value, string displayName)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
             throw new UsageProviderConfigurationException($"Базовый URL {displayName} имеет неверный формат.");
         }
 
+        ValidateEndpointUri(uri, displayName);
         return uri;
+    }
+
+    private static void ValidateEndpointUri(Uri uri, string displayName)
+    {
+        if (!uri.IsAbsoluteUri
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || string.IsNullOrWhiteSpace(uri.Host))
+        {
+            throw new UsageProviderConfigurationException($"Базовый URL {displayName} имеет неверный формат.");
+        }
+
+        if (uri.Scheme == Uri.UriSchemeHttp && !uri.IsLoopback)
+        {
+            throw new UsageProviderConfigurationException(
+                $"Базовый URL {displayName} должен использовать HTTPS; HTTP разрешён только для локального сервера.");
+        }
     }
 
     private async Task<UsageSnapshot> GetJetBrainsSnapshotAsync(CancellationToken cancellationToken)
@@ -2019,11 +2039,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         }
 
         var baseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl") ?? "https://api.openai.com";
-        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri)
-            || (baseUri.Scheme != Uri.UriSchemeHttps && baseUri.Scheme != Uri.UriSchemeHttp))
-        {
-            throw new UsageProviderConfigurationException("Базовый URL OpenAI имеет неверный формат.");
-        }
+        var baseUri = ParseBaseUrl(baseUrl, "OpenAI");
 
         var historyDays = 30;
         var configuredHistoryDays = _configuration.GetValue(Descriptor.Id, "historyDays");
@@ -2816,10 +2832,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         }
 
         var baseValue = _configuration.GetValue(Descriptor.Id, "baseUrl") ?? "https://api.deepgram.com/v1";
-        if (!Uri.TryCreate(baseValue, UriKind.Absolute, out var baseUri))
-        {
-            throw new UsageProviderConfigurationException("Базовый URL Deepgram имеет неверный формат.");
-        }
+        var baseUri = ParseBaseUrl(baseValue, "Deepgram");
 
         var basePath = baseUri.AbsolutePath.TrimEnd('/');
         if (!basePath.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
@@ -3526,11 +3539,17 @@ internal static class UsageJsonParser
 
         var candidates = new List<UsageWindowCandidate>();
         CollectObjects(root, string.Empty, candidates, fetchedAt, 0);
-        return (
-            candidates.FirstOrDefault(candidate => candidate.Kind == WindowKind.Primary)?.Window
-                ?? candidates.FirstOrDefault()?.Window,
-            candidates.FirstOrDefault(candidate => candidate.Kind == WindowKind.Secondary)?.Window
-                ?? (candidates.Count > 1 ? candidates[1].Window : null));
+        var primaryCandidate = candidates.FirstOrDefault(candidate => candidate.Kind == WindowKind.Primary);
+        var secondaryCandidate = candidates.FirstOrDefault(candidate => candidate.Kind == WindowKind.Secondary);
+        if (primaryCandidate is null && secondaryCandidate is null)
+        {
+            primaryCandidate = candidates.FirstOrDefault();
+        }
+        else if (primaryCandidate is not null && (secondaryCandidate is null || ReferenceEquals(primaryCandidate, secondaryCandidate)))
+        {
+            secondaryCandidate = candidates.FirstOrDefault(candidate => !ReferenceEquals(candidate, primaryCandidate));
+        }
+        return (primaryCandidate?.Window, secondaryCandidate?.Window);
     }
 
     private static void CollectObjects(
@@ -3684,7 +3703,7 @@ internal static class UsageJsonParser
                         WindowKind.Secondary));
                 }
             }
-            if (used is not null || utilization is not null || remaining is not null || (limit is not null && amountUsed is not null))
+            if (used is not null || utilization is not null || remaining is not null || (limit is > 0 && amountUsed is not null))
             {
                 var percentUsed = used is not null
                     ? NormalizeDirectPercent(used.Value)
@@ -3701,7 +3720,7 @@ internal static class UsageJsonParser
                 var seconds = FindNumber(properties, "window_seconds", "windowSeconds", "period_seconds", "periodSeconds")
                     ?? FindQuotaWindowSeconds(properties)
                     ?? GuessWindowSeconds(classificationPath);
-                if (effectiveReset is not null)
+                if (effectiveReset is not null && double.IsFinite(percentUsed))
                 {
                     var resolvedSeconds = seconds ?? 0;
                     var kind = ClassifyWindow(classificationPath, resolvedSeconds);
@@ -3949,7 +3968,7 @@ internal static class UsageJsonParser
             if (providerId.Equals("qwencloud", StringComparison.OrdinalIgnoreCase)
                 || providerId.Equals("alibabatokenplan", StringComparison.OrdinalIgnoreCase))
             {
-                if (TryCreateWindow(
+                if (TryCreateFractionWindow(
                         FindNumber(properties, "per5HourPercentage"),
                         FindDate(properties, "per5HourResetTime"),
                         5 * 60 * 60,
@@ -3959,7 +3978,7 @@ internal static class UsageJsonParser
                     found = true;
                 }
 
-                if (TryCreateWindow(
+                if (TryCreateFractionWindow(
                         FindNumber(properties, "per1WeekPercentage"),
                         FindDate(properties, "per1WeekResetTime"),
                         7 * 24 * 60 * 60,
@@ -3972,7 +3991,7 @@ internal static class UsageJsonParser
 
             if (providerId.Equals("stepfun", StringComparison.OrdinalIgnoreCase))
             {
-                if (TryCreateRemainingWindow(
+                if (TryCreateRemainingFractionWindow(
                         FindNumber(properties, "five_hour_usage_left_rate"),
                         FindDate(properties, "five_hour_usage_reset_time"),
                         5 * 60 * 60,
@@ -3982,7 +4001,7 @@ internal static class UsageJsonParser
                     found = true;
                 }
 
-                if (TryCreateRemainingWindow(
+                if (TryCreateRemainingFractionWindow(
                         FindNumber(properties, "weekly_usage_left_rate"),
                         FindDate(properties, "weekly_usage_reset_time"),
                         7 * 24 * 60 * 60,
@@ -3993,7 +4012,7 @@ internal static class UsageJsonParser
                 }
 
                 if (primary is null
-                    && TryCreateRemainingWindow(
+                    && TryCreateRemainingFractionWindow(
                         FindNumber(properties, "subscription_credit_left_rate", "topup_credit_left_rate"),
                         FindDate(properties, "subscription_credit_reset_time", "next_reset_at"),
                         30 * 24 * 60 * 60,
@@ -4028,7 +4047,7 @@ internal static class UsageJsonParser
             }
 
             if (providerId.Equals("antigravity", StringComparison.OrdinalIgnoreCase)
-                && TryCreateRemainingWindow(
+                && TryCreateRemainingFractionWindow(
                     FindNumber(properties, "remainingFraction"),
                     FindDate(properties, "resetTime"),
                     0,
@@ -4263,8 +4282,41 @@ internal static class UsageJsonParser
         return false;
     }
 
-    private static double NormalizeDirectPercent(double value)
-        => value is >= 0 and <= 1 ? value * 100 : value;
+    private static bool TryCreateFractionWindow(
+        double? fraction,
+        DateTimeOffset? resetAt,
+        int windowSeconds,
+        out UsageWindow window)
+    {
+        if (fraction is >= 0 and <= 1 && resetAt is not null)
+        {
+            window = new UsageWindow(fraction.Value * 100, resetAt.Value, windowSeconds);
+            return true;
+        }
+
+        window = null!;
+        return false;
+    }
+
+    private static bool TryCreateRemainingFractionWindow(
+        double? remainingFraction,
+        DateTimeOffset? resetAt,
+        int windowSeconds,
+        out UsageWindow window)
+    {
+        if (remainingFraction is >= 0 and <= 1 && resetAt is not null)
+        {
+            window = new UsageWindow(100 - (remainingFraction.Value * 100), resetAt.Value, windowSeconds);
+            return true;
+        }
+
+        window = null!;
+        return false;
+    }
+
+    // Fields explicitly named "percent" are already percent units: 1 means 1%,
+    // not a ratio of 1. Ratio-like fields are handled by NormalizeUtilization.
+    private static double NormalizeDirectPercent(double value) => value;
 
     private static bool TryCreateBudgetWindow(JsonProperty[] properties, out UsageWindow window)
     {

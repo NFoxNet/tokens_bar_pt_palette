@@ -16,6 +16,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     private const int MinimumRefreshIntervalSeconds = 30;
     private const int MaximumRefreshIntervalSeconds = 3600;
     private const int DefaultRefreshIntervalSeconds = 60;
+    private const string StorageDirectoryName = "TokensLimitsExtension";
     private const string SettingsNamespace = "tokensLimits";
     private const string SecretMask = "••••••••";
 
@@ -38,9 +39,19 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     private bool _handlingSettingsChange;
 
     public TokensLimitsSettings()
+        : this(ResolveDefaultStorage())
     {
-        FilePath = SettingsJsonPath();
-        _secretStore = new ProtectedSecretStore(SecretsJsonPath());
+    }
+
+    internal TokensLimitsSettings(string storageDirectory, string? hostDirectory = null)
+        : this(ResolveStorage(storageDirectory, hostDirectory))
+    {
+    }
+
+    private TokensLimitsSettings(SettingsStorage storage)
+    {
+        FilePath = storage.SettingsPath;
+        _secretStore = new ProtectedSecretStore(storage.SecretsPath);
         Settings.Add(_refreshInterval);
         AddProviderSettings();
         LoadSettings();
@@ -127,18 +138,84 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         GC.SuppressFinalize(this);
     }
 
-    private static string SettingsJsonPath()
+    private static SettingsStorage ResolveDefaultStorage()
     {
-        var directory = Utilities.BaseSettingsPath("TokensLimitsExtension");
-        Directory.CreateDirectory(directory);
-        return Path.Combine(directory, $"{SettingsNamespace}.settings.json");
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrWhiteSpace(localAppData))
+        {
+            throw new InvalidOperationException("Local application data path is unavailable.");
+        }
+
+        var canonicalDirectory = Path.Combine(localAppData, StorageDirectoryName);
+
+        string? hostDirectory = null;
+        try
+        {
+            hostDirectory = Utilities.BaseSettingsPath(StorageDirectoryName);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[TokensLimits] WARNING: unable to resolve host settings path: {ex.Message}");
+        }
+
+        return ResolveStorage(canonicalDirectory, hostDirectory);
     }
 
-    private static string SecretsJsonPath()
+    internal static SettingsStorage ResolveStorage(string canonicalDirectory, string? hostDirectory)
     {
-        var directory = Utilities.BaseSettingsPath("TokensLimitsExtension");
-        Directory.CreateDirectory(directory);
-        return Path.Combine(directory, $"{SettingsNamespace}.secrets.json");
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalDirectory);
+        Directory.CreateDirectory(canonicalDirectory);
+
+        if (!string.IsNullOrWhiteSpace(hostDirectory))
+        {
+            MigrateHostStorage(hostDirectory, canonicalDirectory);
+        }
+
+        return new SettingsStorage(
+            Path.Combine(canonicalDirectory, $"{SettingsNamespace}.settings.json"),
+            Path.Combine(canonicalDirectory, $"{SettingsNamespace}.secrets.json"));
+    }
+
+    private static void MigrateHostStorage(string hostDirectory, string canonicalDirectory)
+    {
+        var normalizedHostDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(hostDirectory));
+        var normalizedCanonicalDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(canonicalDirectory));
+        if (string.Equals(normalizedHostDirectory, normalizedCanonicalDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var hostSettingsPath = Path.Combine(hostDirectory, $"{SettingsNamespace}.settings.json");
+        var hostSecretsPath = Path.Combine(hostDirectory, $"{SettingsNamespace}.secrets.json");
+        var canonicalSettingsPath = Path.Combine(canonicalDirectory, $"{SettingsNamespace}.settings.json");
+        var canonicalSecretsPath = Path.Combine(canonicalDirectory, $"{SettingsNamespace}.secrets.json");
+
+        try
+        {
+            // A package-local secret store may contain the latest key after an update.
+            // Keep its settings file paired with the encrypted secrets during migration.
+            if (File.Exists(hostSecretsPath) && !File.Exists(canonicalSecretsPath))
+            {
+                if (File.Exists(hostSettingsPath))
+                {
+                    File.Copy(hostSettingsPath, canonicalSettingsPath, overwrite: true);
+                }
+
+                File.Copy(hostSecretsPath, canonicalSecretsPath, overwrite: false);
+                return;
+            }
+
+            if (!File.Exists(canonicalSettingsPath) && File.Exists(hostSettingsPath))
+            {
+                File.Copy(hostSettingsPath, canonicalSettingsPath, overwrite: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            // The extension can still start with the canonical store if another host has
+            // already completed the migration. Do not log setting or secret values.
+            Debug.WriteLine($"[TokensLimits] WARNING: unable to migrate host storage: {ex.Message}");
+        }
     }
 
     private void AddProviderSettings()
@@ -289,4 +366,6 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     private static bool IsSecretMask(string? value)
         => string.Equals(value, SecretMask, StringComparison.Ordinal);
+
+    internal sealed record SettingsStorage(string SettingsPath, string SecretsPath);
 }

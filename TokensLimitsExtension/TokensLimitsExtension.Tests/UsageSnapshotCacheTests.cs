@@ -60,6 +60,19 @@ public sealed class UsageSnapshotCacheTests
         Assert.Equal(2, provider.CallCount);
     }
 
+    [Fact]
+    public async Task CancelsAnInFlightRefreshWhenDisposed()
+    {
+        var provider = new BlockingProvider();
+        var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+
+        var refresh = cache.GetUsageSnapshotAsync();
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cache.Dispose();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh);
+    }
+
     private sealed class BlockingProvider : IUsageProvider
     {
         public UsageProviderDescriptor Descriptor { get; } = new("blocking", "Blocking");

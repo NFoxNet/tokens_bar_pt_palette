@@ -24,7 +24,13 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private IListItem[] _items = CreateLoadingItems();
     private int _refreshInProgress;
     private int _hasLoaded;
-    private bool _disposed;
+    private int _activated;
+    private int _deactivated;
+    private int _disposed;
+
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+    private bool IsRefreshEnabled => !IsDisposed && Volatile.Read(ref _deactivated) == 0;
 
     public TokensLimitsPage(
         CodexUsageService usageService,
@@ -45,15 +51,17 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     public TokensLimitsPage(
         IUsageProvider usageProvider,
         Action<string>? logger = null,
-        IUsageRefreshSettings? refreshSettings = null)
+        IUsageRefreshSettings? refreshSettings = null,
+        string? idSuffix = null)
     {
         _usageProvider = usageProvider ?? throw new ArgumentNullException(nameof(usageProvider));
         _refreshSettings = refreshSettings;
         _logger = logger ?? LogMessage;
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
-        Id = _usageProvider.Descriptor.Id.Equals("codex", StringComparison.OrdinalIgnoreCase)
+        var baseId = _usageProvider.Descriptor.Id.Equals("codex", StringComparison.OrdinalIgnoreCase)
             ? "com.tokenslimits.codex.limits"
             : $"com.tokenslimits.provider.{_usageProvider.Descriptor.Id}.limits";
+        Id = string.IsNullOrWhiteSpace(idSuffix) ? baseId : $"{baseId}.{idSuffix}";
         Title = $"{_usageProvider.Descriptor.DisplayName} limits";
         Name = $"Show {_usageProvider.Descriptor.DisplayName} usage limits";
         PlaceholderText = $"{_usageProvider.Descriptor.DisplayName} limits";
@@ -64,16 +72,16 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             AutoReset = true,
         };
         _refreshTimer.Elapsed += RefreshTimerOnElapsed;
-        _refreshTimer.Start();
-        _refreshSettings?.Changed += RefreshSettingsOnChanged;
     }
 
     public override IListItem[] GetItems()
     {
-        if (_disposed)
+        if (IsDisposed)
         {
             return [];
         }
+
+        _ = EnsureActivated();
 
         if (Volatile.Read(ref _hasLoaded) == 0)
         {
@@ -92,16 +100,19 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (_disposed || Interlocked.Exchange(ref _refreshInProgress, 1) != 0)
+        if (!EnsureActivated() || Interlocked.Exchange(ref _refreshInProgress, 1) != 0)
         {
             return;
         }
 
-        var token = cancellationToken.CanBeCanceled ? cancellationToken : _lifetimeCts.Token;
+        using var linkedCts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCts.Token)
+            : null;
+        var token = linkedCts?.Token ?? _lifetimeCts.Token;
         try
         {
             var snapshot = await _usageProvider.GetUsageSnapshotAsync(token).ConfigureAwait(false);
-            if (!_disposed)
+            if (IsRefreshEnabled)
             {
                 SetItems(CreateItems(snapshot), notify: true);
             }
@@ -111,7 +122,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         }
         catch (Exception ex)
         {
-            if (!_disposed)
+            if (IsRefreshEnabled)
             {
                 _logger($"[TokensLimits] ERROR: {ex.Message}");
                 SetItems([new ListItem(new NoOpCommand())
@@ -181,7 +192,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
     private void RefreshTimerOnElapsed(object? sender, ElapsedEventArgs e)
     {
-        if (!_disposed)
+        if (IsRefreshEnabled)
         {
             _ = RefreshAsync();
         }
@@ -195,16 +206,12 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
-        _refreshSettings?.Changed -= RefreshSettingsOnChanged;
-        _lifetimeCts.Cancel();
-        _lifetimeCts.Dispose();
-        _refreshTimer.Stop();
+        Deactivate();
         _refreshTimer.Elapsed -= RefreshTimerOnElapsed;
         _refreshTimer.Dispose();
         GC.SuppressFinalize(this);
@@ -212,13 +219,12 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
     private void RefreshSettingsOnChanged(object? sender, EventArgs e)
     {
-        if (_disposed)
+        if (!IsRefreshEnabled)
         {
             return;
         }
 
         UsageRefreshHelpers.ApplySettingsChanged(
-            _usageProvider,
             _refreshTimer,
             _refreshSettings,
             () => RefreshAsync());
@@ -228,7 +234,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     {
         Volatile.Write(ref _items, items);
         Volatile.Write(ref _hasLoaded, 1);
-        if (notify && !_disposed)
+        if (notify && IsRefreshEnabled)
         {
             RaiseItemsChanged(items.Length);
         }
@@ -240,6 +246,39 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             Title = "Лимиты",
             Subtitle = "Загрузка...",
         }];
+
+    internal void Deactivate()
+    {
+        if (Interlocked.Exchange(ref _deactivated, 1) != 0)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _activated, 0) != 0)
+        {
+            _refreshSettings?.Changed -= RefreshSettingsOnChanged;
+            _refreshTimer.Stop();
+        }
+
+        _lifetimeCts.Cancel();
+    }
+
+    private bool EnsureActivated()
+    {
+        if (!IsRefreshEnabled)
+        {
+            return false;
+        }
+
+        if (Interlocked.Exchange(ref _activated, 1) == 0)
+        {
+            _refreshTimer.Interval = UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings);
+            _refreshSettings?.Changed += RefreshSettingsOnChanged;
+            _refreshTimer.Start();
+        }
+
+        return true;
+    }
 
     private static string FormatAdditionalLimit(
         AdditionalUsageLimit limit,

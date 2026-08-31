@@ -5,3 +5,8 @@ obj/
 *.user
 *.suo
 TestResults/
+AppPackages/
+artifacts/
+*.pfx
+*.p12
+*.snk

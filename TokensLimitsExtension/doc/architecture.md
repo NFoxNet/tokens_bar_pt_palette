@@ -13,6 +13,17 @@
 - `TokensLimitsPage` показывает детали одного провайдера.
 - `UsageDockBandItem` показывает короткую сводку в dock band.
 
+Для одного провайдера создаются две независимые `TokensLimitsPage`: одна
+принадлежит обычной навигации через overview, вторая — transient-навигации,
+которую Command Palette запускает из Dock. Это намеренное разделение
+жизненных циклов: страница, открытая из Dock, не должна переиспользоваться
+обычным overview-элементом после закрытия палитры.
+
+Dock представлен одним стабильным band с историческим ID Codex, чтобы уже
+закреплённый пользователем элемент продолжил работать после обновления. Его
+`TokensLimitsDockBandPage` динамически содержит `UsageDockBandItem` всех
+включённых провайдеров; provider не становится отдельным закрепляемым band.
+
 ### Core layer
 
 Папка `TokensLimitsExtension.Core/` не должна зависеть от UI:
@@ -50,7 +61,7 @@ UI surface
   -> RaiseItemsChanged()
 ```
 
-`UsageSnapshotCache` хранит последний результат и сериализует конкурентные обновления через один refresh gate. Поэтому overview, detail page и dock band используют общий snapshot.
+`UsageSnapshotCache` хранит последний результат и сериализует конкурентные обновления через один refresh gate. Поэтому overview, обычная detail page, Dock detail page и dock band используют общий snapshot, но не общий объект страницы.
 
 ## Codex
 
@@ -60,12 +71,12 @@ UI surface
 
 ## Настройки и реконфигурация
 
-`TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует `Changed`. `TokensLimitsExtensionCommandsProvider` на это событие:
+`TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует `Changed`. Настройки и зашифрованные секреты всегда читаются и записываются в едином стабильном каталоге `%LOCALAPPDATA%\TokensLimitsExtension`. При первом запуске после обновления содержимое host/package-local каталога переносится туда, если там найден более новый secret store. `TokensLimitsExtensionCommandsProvider` на это событие:
 
-1. инвалидирует все кэши;
+1. `UsageSnapshotCache` один раз инвалидирует snapshot;
 2. заново вычисляет список включённых провайдеров;
-3. создаёт новые страницы и dock items при изменении состава;
-4. запускает обновление поверхностей.
+3. создаёт новые обычные страницы, отдельные Dock detail pages и dock items при изменении состава;
+4. существующие UI-поверхности обновляются через свои подписки, без повторного запуска refresh из provider coordinator.
 
 Интервал ограничен 30–3600 секундами, по умолчанию 60 секунд.
 

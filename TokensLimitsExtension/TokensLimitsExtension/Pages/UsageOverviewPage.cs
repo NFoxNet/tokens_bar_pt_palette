@@ -28,8 +28,12 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     private readonly CancellationTokenSource _lifetimeCts = new();
     private IListItem[] _items = [new ListItem(new NoOpCommand()) { Title = "Провайдеры", Subtitle = "Загрузка..." }];
     private int _refreshInProgress;
+    private int _refreshPending;
     private int _hasLoaded;
-    private bool _disposed;
+    private int _disposed;
+    private long _providerVersion;
+
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     public UsageOverviewPage(
         IReadOnlyList<UsageSnapshotCache> caches,
@@ -63,7 +67,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
 
     public override IListItem[] GetItems()
     {
-        if (_disposed)
+        if (IsDisposed)
         {
             return [];
         }
@@ -78,46 +82,72 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (_disposed || Interlocked.Exchange(ref _refreshInProgress, 1) != 0)
+        if (IsDisposed)
         {
             return;
         }
 
-        var token = cancellationToken.CanBeCanceled ? cancellationToken : _lifetimeCts.Token;
+        if (Interlocked.Exchange(ref _refreshInProgress, 1) != 0)
+        {
+            Volatile.Write(ref _refreshPending, 1);
+            return;
+        }
+
+        using var linkedCts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCts.Token)
+            : null;
+        var token = linkedCts?.Token ?? _lifetimeCts.Token;
         try
         {
-            IReadOnlyList<UsageSnapshotCache> caches;
-            IReadOnlyList<TokensLimitsPage> pages;
-            lock (_providerGate)
+            do
             {
-                caches = _caches;
-                pages = _pages;
-            }
-
-            var results = await Task.WhenAll(caches.Select(cache => ReadProviderAsync(cache, token))).ConfigureAwait(false);
-            var items = new List<IListItem>();
-            for (var index = 0; index < results.Length; index++)
-            {
-                var result = results[index];
-                items.Add(new ListItem(pages[index])
+                Volatile.Write(ref _refreshPending, 0);
+                IReadOnlyList<UsageSnapshotCache> caches;
+                IReadOnlyList<TokensLimitsPage> pages;
+                long providerVersion;
+                lock (_providerGate)
                 {
-                    Title = caches[index].Descriptor.DisplayName,
-                    Subtitle = result.Error is null
-                        ? UsageDisplayFormatter.FormatDockBandSubtitle(result.Snapshot!)
-                        : result.Error,
-                });
-            }
+                    caches = _caches;
+                    pages = _pages;
+                    providerVersion = _providerVersion;
+                }
 
-            if (items.Count == 0)
-            {
-                items.Add(new ListItem(new NoOpCommand())
+                var results = await Task.WhenAll(caches.Select(cache => ReadProviderAsync(cache, token))).ConfigureAwait(false);
+                var items = new List<IListItem>();
+                for (var index = 0; index < results.Length; index++)
                 {
-                    Title = "Нет включённых провайдеров",
-                    Subtitle = "Включите провайдеров в настройках расширения.",
-                });
-            }
+                    var result = results[index];
+                    items.Add(new ListItem(pages[index])
+                    {
+                        Title = caches[index].Descriptor.DisplayName,
+                        Subtitle = result.Error is null
+                            ? UsageDisplayFormatter.FormatDockBandSubtitle(result.Snapshot!)
+                            : result.Error,
+                    });
+                }
 
-            SetItems(items.ToArray());
+                if (items.Count == 0)
+                {
+                    items.Add(new ListItem(new NoOpCommand())
+                    {
+                        Title = "Нет включённых провайдеров",
+                        Subtitle = "Включите провайдеров в настройках расширения.",
+                    });
+                }
+
+                lock (_providerGate)
+                {
+                    if (providerVersion == _providerVersion && !IsDisposed)
+                    {
+                        SetItems(items.ToArray());
+                    }
+                    else
+                    {
+                        Volatile.Write(ref _refreshPending, 1);
+                    }
+                }
+            }
+            while (!IsDisposed && Interlocked.Exchange(ref _refreshPending, 0) != 0);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -125,6 +155,10 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         finally
         {
             Volatile.Write(ref _refreshInProgress, 0);
+            if (!IsDisposed && Interlocked.Exchange(ref _refreshPending, 0) != 0)
+            {
+                _ = RefreshAsync(CancellationToken.None);
+            }
         }
     }
 
@@ -143,10 +177,12 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         {
             _caches = caches;
             _pages = pages;
+            _providerVersion++;
         }
 
+        Volatile.Write(ref _refreshPending, 1);
         Volatile.Write(ref _hasLoaded, 0);
-        if (!_disposed)
+        if (!IsDisposed)
         {
             _ = RefreshAsync();
         }
@@ -171,15 +207,13 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
         _refreshSettings?.Changed -= RefreshSettingsOnChanged;
         _lifetimeCts.Cancel();
-        _lifetimeCts.Dispose();
         _refreshTimer.Stop();
         _refreshTimer.Elapsed -= RefreshTimerOnElapsed;
         _refreshTimer.Dispose();
@@ -188,7 +222,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
 
     private void SetItems(IListItem[] items)
     {
-        if (_disposed)
+        if (IsDisposed)
         {
             return;
         }
@@ -200,7 +234,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
 
     private void RefreshTimerOnElapsed(object? sender, ElapsedEventArgs e)
     {
-        if (!_disposed)
+        if (!IsDisposed)
         {
             _ = RefreshAsync();
         }
@@ -208,10 +242,12 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
 
     private void RefreshSettingsOnChanged(object? sender, EventArgs e)
     {
-        if (!_disposed)
+        if (!IsDisposed)
         {
-            _refreshTimer.Interval = UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings);
-            _ = RefreshAsync();
+            UsageRefreshHelpers.ApplySettingsChanged(
+                _refreshTimer,
+                _refreshSettings,
+                () => RefreshAsync());
         }
     }
 
