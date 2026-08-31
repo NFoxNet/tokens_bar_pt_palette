@@ -27,6 +27,15 @@ dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --
 4. После Deploy в Command Palette выполните `Reload` → `Reload Command Palette extensions`.
 5. Для диагностики смотрите Output window в режиме Debug; код пишет сообщения через `Debug.WriteLine` и `ExtensionHost.LogMessage`.
 
+### Проверка Dock-навигации
+
+После Deploy проверьте последовательность: клик по Tokens Limits в Dock →
+открытие деталей → закрытие палитры → повторный вызов основной палитры по
+горячей клавише. Основная палитра должна открыться на корневом экране, а не
+на странице лимитов. Для этой проверки важна актуальная версия Command
+Palette: в старых сборках хоста был upstream-баг transient-навигации Dock.
+Описание соответствующего исправления хоста: [PowerToys PR #48089](https://github.com/microsoft/PowerToys/pull/48089).
+
 ## Release/MSIX
 
 Для локальной проверки пакета применяйте отдельные сборки архитектур:
@@ -37,6 +46,8 @@ dotnet build .\TokensLimitsExtension.sln --configuration Release -p:GenerateAppx
 ```
 
 Release включает trimming, поэтому проверяйте предупреждения AOT/trim. Профили публикации находятся в `TokensLimitsExtension/Properties/PublishProfiles/`.
+
+Для публичного GitHub-релиза используйте `scripts/Build-Release.ps1`. Скрипт требует PFX, чей subject в точности совпадает с `Publisher` в `Package.appxmanifest`, подписывает x64 и ARM64 MSIX и создаёт SHA-256 checksums. PFX и пароль не должны попадать в репозиторий или логи. Полная процедура — в [release.md](release.md).
 
 ## Тестовые уровни
 

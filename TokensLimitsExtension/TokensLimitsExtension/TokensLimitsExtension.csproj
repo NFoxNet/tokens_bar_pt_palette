@@ -9,6 +9,10 @@
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <Version>0.0.2.1</Version>
+    <AppxPackageIdentityName>TokensLimitsExtension</AppxPackageIdentityName>
+    <AppxPackagePublisher>CN=NFoxNet</AppxPackagePublisher>
+    <AppxPackageVersion>0.0.2.1</AppxPackageVersion>
 
     <PublishProfile>win-$(Platform).pubxml</PublishProfile>
     <EnableMsixTooling>true</EnableMsixTooling>
@@ -23,6 +27,11 @@
     <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
     <Content Include="Assets\StoreLogo.png" />
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Command Palette extensions are activated through the packaged out-of-process COM server. -->
+    <WindowsMetadataReference Include="$(CmdPalSDKPackageDir)\winmd\Microsoft.CommandPalette.Extensions.winmd" IsOutOfProcess="true" />
   </ItemGroup>
 
   <ItemGroup>
@@ -49,6 +58,10 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TokensLimitsExtension.IntegrationTests" />
   </ItemGroup>
 
   <!--

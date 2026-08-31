@@ -37,6 +37,8 @@ public sealed class CodexUsageClientTests
         Assert.Equal(38, snapshot.PrimaryUsedPercent);
         Assert.Equal(12.5, snapshot.SecondaryUsedPercent);
         Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1790000000), snapshot.PrimaryResetAt);
+        Assert.Equal(18000, snapshot.PrimaryWindowSeconds);
+        Assert.Equal(604800, snapshot.SecondaryWindowSeconds);
         Assert.Single(snapshot.AdditionalRateLimits);
         Assert.Equal("GPT-5.3-Codex-Spark", snapshot.AdditionalRateLimits[0].Name);
         Assert.Equal(20, snapshot.AdditionalRateLimits[0].PrimaryWindow!.UsedPercent);

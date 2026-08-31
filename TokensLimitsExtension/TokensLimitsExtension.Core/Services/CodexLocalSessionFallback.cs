@@ -70,6 +70,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         long fiveHourTokens = 0;
         long weeklyTokens = 0;
         var visitedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tokenEventCount = 0;
 
         foreach (var home in _codexHomes)
         {
@@ -85,16 +86,18 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
                     try
                     {
                         var events = await ReadEventsAsync(file, cancellationToken).ConfigureAwait(false);
+                        tokenEventCount += events.Count;
                         foreach (var tokenEvent in events)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             if (tokenEvent.Timestamp >= weeklyCutoff && tokenEvent.Timestamp <= now)
                             {
-                                weeklyTokens += tokenEvent.Delta;
+                                weeklyTokens = AddSaturated(weeklyTokens, tokenEvent.Delta, _weeklyLimitTokens);
                             }
 
                             if (tokenEvent.Timestamp >= fiveHourCutoff && tokenEvent.Timestamp <= now)
                             {
-                                fiveHourTokens += tokenEvent.Delta;
+                                fiveHourTokens = AddSaturated(fiveHourTokens, tokenEvent.Delta, _fiveHourLimitTokens);
                             }
                         }
                     }
@@ -116,6 +119,20 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             {
                 _logger?.Invoke($"[TokensLimits] Skipping inaccessible Codex home '{home}': {ex.Message}");
             }
+        }
+
+        foreach (var cachedFile in _fileCache.Keys)
+        {
+            if (!visitedFiles.Contains(cachedFile))
+            {
+                _fileCache.TryRemove(cachedFile, out _);
+            }
+        }
+
+        if (tokenEventCount == 0)
+        {
+            throw new InvalidDataException(
+                "Codex local session history does not contain readable token usage events.");
         }
 
         return new CodexUsageSnapshot(
@@ -269,6 +286,16 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         }
 
         return false;
+    }
+
+    private static long AddSaturated(long current, long delta, long limit)
+    {
+        if (delta <= 0 || current >= limit)
+        {
+            return Math.Min(current, limit);
+        }
+
+        return delta >= limit - current ? limit : current + delta;
     }
 
     private static double Percent(long used, long limit) => Math.Clamp(used * 100d / limit, 0d, 100d);

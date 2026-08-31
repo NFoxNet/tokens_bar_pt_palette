@@ -30,47 +30,68 @@ public sealed class TokensLimitsPageIntegrationTests
     [Fact]
     public void CommandsProviderExposesExactlyOneCommand()
     {
-        using var provider = new TokensLimitsExtensionCommandsProvider(new FakeUsageProvider(
-            new CodexUsageSnapshot(1, DateTimeOffset.UtcNow, 2, DateTimeOffset.UtcNow, null, true)));
+        using var testDirectory = new TestDirectory();
+        using var provider = new TokensLimitsExtensionCommandsProvider(
+            new FakeUsageProvider(
+                new CodexUsageSnapshot(1, DateTimeOffset.UtcNow, 2, DateTimeOffset.UtcNow, null, true)),
+            null,
+            new global::TokensLimitsExtension.Settings.TokensLimitsSettings(testDirectory.Path));
 
         Assert.Single(provider.TopLevelCommands());
         Assert.Equal("com.tokenslimits.extension", provider.Id);
     }
 
     [Fact]
-    public void DockBandsAreCreatedFromTheProviderRegistry()
+    public async Task DockBandContainsEveryProviderFromTheRegistry()
     {
+        var codexProvider = new FakeGenericProvider(
+            "codex",
+            "Codex",
+            new UsageSnapshot(
+                "codex",
+                "Codex",
+                new UsageWindow(10, DateTimeOffset.UtcNow.AddHours(1), 3600),
+                new UsageWindow(20, DateTimeOffset.UtcNow.AddDays(1), 86400),
+                null,
+                false));
         var otherProvider = new FakeGenericProvider(
             "other-provider",
             "Other Provider",
             new UsageSnapshot(
                 "other-provider",
                 "Other Provider",
-                new UsageWindow(10, DateTimeOffset.UtcNow.AddHours(1), 3600),
-                new UsageWindow(20, DateTimeOffset.UtcNow.AddDays(1), 86400),
+                new UsageWindow(30, DateTimeOffset.UtcNow.AddHours(1), 3600),
+                new UsageWindow(40, DateTimeOffset.UtcNow.AddDays(1), 86400),
                 null,
                 false));
+        using var testDirectory = new TestDirectory();
+        using var registry = new UsageProviderRegistry([codexProvider, otherProvider]);
         using var provider = new TokensLimitsExtensionCommandsProvider(
-            new FakeUsageProvider(new CodexUsageSnapshot(
-                1,
-                DateTimeOffset.UtcNow.AddHours(1),
-                2,
-                DateTimeOffset.UtcNow.AddDays(1),
-                null,
-                true)),
-            new UsageProviderRegistry([otherProvider]));
+            null,
+            registry,
+            new global::TokensLimitsExtension.Settings.TokensLimitsSettings(testDirectory.Path));
 
         var bands = provider.GetDockBands();
 
         var band = Assert.Single(bands);
-        Assert.Equal("com.tokenslimits.provider.other-provider.band", band.Command!.Id);
-        Assert.Equal("Other Provider", band.Title);
-        var wrappedBand = Assert.IsType<WrappedDockItem>(band);
-        var dockItem = Assert.Single(wrappedBand.Items);
-        Assert.Equal("Other Provider", dockItem.Title);
-        Assert.Equal("5ч\\90%, 7д\\80%", dockItem.Subtitle);
-        Assert.Equal("com.tokenslimits.provider.other-provider.limits", dockItem.Command!.Id);
+        Assert.Equal(TokensLimitsDockBandPage.StableId, band.Command!.Id);
+        Assert.Equal("Tokens Limits", band.Title);
+        var dockPage = Assert.IsType<TokensLimitsDockBandPage>(band.Command);
+        var dockItems = dockPage.GetItems();
+        Assert.Equal(2, dockItems.Length);
+        await Task.WhenAll(dockItems.Cast<UsageDockBandItem>().Select(item => item.RefreshAsync()));
+        var overviewCommand = Assert.Single(provider.TopLevelCommands()).Command;
+        var overviewPage = Assert.IsType<UsageOverviewPage>(overviewCommand);
+        await overviewPage.RefreshAsync();
+        var overviewProviderItems = overviewPage.GetItems();
+        Assert.Equal(2, overviewProviderItems.Length);
+        var dockItem = Assert.Single(dockItems.Cast<UsageDockBandItem>(), item => item.Title == "Other Provider");
+        var overviewProviderItem = Assert.Single(overviewProviderItems, item => item.Title == "Other Provider");
+        Assert.Equal("5ч\\70%, 7д\\60%", dockItem.Subtitle);
+        Assert.Equal("com.tokenslimits.provider.other-provider.limits.dock", dockItem.Command!.Id);
         Assert.IsType<TokensLimitsPage>(dockItem.Command);
+        Assert.NotSame(overviewProviderItem.Command, dockItem.Command);
+        Assert.NotEqual(overviewProviderItem.Command!.Id, dockItem.Command.Id);
     }
 
     [Fact]
@@ -112,5 +133,26 @@ public sealed class TokensLimitsPageIntegrationTests
 
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(snapshot);
+    }
+
+    private sealed class TestDirectory : IDisposable
+    {
+        public TestDirectory()
+        {
+            Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"TokensLimitsExtension.Tests.{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+        }
     }
 }

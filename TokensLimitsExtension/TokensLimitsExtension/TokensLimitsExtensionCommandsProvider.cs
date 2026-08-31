@@ -21,14 +21,18 @@ namespace TokensLimitsExtension;
 public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 {
     private readonly ICommandItem[] _commands;
-    private ICommandItem[] _dockBands = [];
+    private readonly ICommandItem[] _dockBands;
     private readonly TokensLimitsSettings _settings;
     private readonly UsageProviderRegistry _providerRegistry;
     private readonly bool _ownsProviderRegistry;
     private TokensLimitsPage[] _pages = [];
+    private TokensLimitsPage[] _dockPages = [];
     private readonly UsageSnapshotCache[] _snapshotCaches;
     private UsageDockBandItem[] _dockBandItems = [];
+    private readonly List<UsageDockBandItem> _retiredDockBandItems = [];
+    private readonly List<TokensLimitsPage> _retiredPages = [];
     private readonly UsageOverviewPage _overviewPage;
+    private readonly TokensLimitsDockBandPage _dockBandPage;
     private readonly HttpClient? _ownedProviderHttpClient;
     private readonly bool _settingsDrivenProviders;
     private readonly object _surfaceGate = new();
@@ -38,11 +42,19 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     public TokensLimitsExtensionCommandsProvider(
         ICodexUsageProvider? usageService = null,
         UsageProviderRegistry? providerRegistry = null)
+        : this(usageService, providerRegistry, null)
+    {
+    }
+
+    internal TokensLimitsExtensionCommandsProvider(
+        ICodexUsageProvider? usageService,
+        UsageProviderRegistry? providerRegistry,
+        TokensLimitsSettings? settings)
     {
         DisplayName = "Tokens Limits";
         Id = "com.tokenslimits.extension";
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
-        _settings = new TokensLimitsSettings();
+        _settings = settings ?? new TokensLimitsSettings();
         Settings = _settings.Settings;
         _settingsDrivenProviders = providerRegistry is null;
         _ownsProviderRegistry = providerRegistry is null;
@@ -69,6 +81,16 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             .Select(provider => new UsageSnapshotCache(provider, _settings))
             .ToArray();
         _overviewPage = new UsageOverviewPage([], [], LogMessage, _settings);
+        _dockBandPage = new TokensLimitsDockBandPage();
+        _dockBands =
+        [
+            new CommandItem(_dockBandPage)
+            {
+                Title = "Tokens Limits",
+                Subtitle = "Лимиты включённых провайдеров",
+                Icon = _dockBandPage.Icon,
+            },
+        ];
         _commands =
         [
             new CommandItem(_overviewPage)
@@ -106,11 +128,13 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         TokensLimitsPage[] pages;
         lock (_surfaceGate)
         {
-            dockBandItems = _dockBandItems;
-            pages = _pages;
+            dockBandItems = [.. _dockBandItems, .. _retiredDockBandItems];
+            pages = [.. _pages, .. _dockPages, .. _retiredPages];
             _dockBandItems = [];
             _pages = [];
-            _dockBands = [];
+            _dockPages = [];
+            _retiredDockBandItems.Clear();
+            _retiredPages.Clear();
         }
 
         foreach (var dockBandItem in dockBandItems)
@@ -118,6 +142,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             dockBandItem.Dispose();
         }
 
+        _dockBandPage.Dispose();
         _overviewPage.Dispose();
 
         foreach (var page in pages)
@@ -141,22 +166,13 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         base.Dispose();
     }
 
-    private static (UsageDockBandItem Item, ICommandItem Band) CreateDockBand(
+    private static UsageDockBandItem CreateDockItem(
         UsageSnapshotCache provider,
         Action<string> logger,
         ICommand detailsCommand,
         IUsageRefreshSettings refreshSettings)
     {
-        var item = new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings);
-        var wrappedBand = new WrappedDockItem(
-            [item],
-            $"com.tokenslimits.provider.{provider.Descriptor.Id}.band",
-            provider.Descriptor.DisplayName)
-        {
-            Icon = item.Icon,
-        };
-
-        return (item, wrappedBand);
+        return new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings);
     }
 
     private void SettingsOnChanged(object? sender, EventArgs e)
@@ -166,31 +182,10 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             return;
         }
 
-        foreach (var cache in _snapshotCaches)
-        {
-            cache.Invalidate();
-        }
-
+        // UsageSnapshotCache observes the same settings event and invalidates once.
+        // Surfaces refresh through their own subscriptions. Keeping this handler focused
+        // on provider composition avoids duplicate concurrent refreshes on every save.
         RebuildEnabledSurfaces();
-
-        UsageDockBandItem[] dockBandItems;
-        TokensLimitsPage[] pages;
-        lock (_surfaceGate)
-        {
-            dockBandItems = _dockBandItems.ToArray();
-            pages = _pages.ToArray();
-        }
-
-        _ = _overviewPage.RefreshAsync();
-        foreach (var dockBandItem in dockBandItems)
-        {
-            _ = dockBandItem.RefreshAsync();
-        }
-
-        foreach (var page in pages)
-        {
-            _ = page.RefreshAsync();
-        }
     }
 
     private void RebuildEnabledSurfaces()
@@ -201,6 +196,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         var enabledIds = enabledCaches.Select(cache => cache.Descriptor.Id).ToArray();
         UsageDockBandItem[] oldDockItems;
         TokensLimitsPage[] oldPages;
+        TokensLimitsPage[] oldDockPages;
         lock (_surfaceGate)
         {
             if (_enabledProviderIds.SequenceEqual(enabledIds, StringComparer.OrdinalIgnoreCase))
@@ -210,29 +206,41 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 
             oldDockItems = _dockBandItems;
             oldPages = _pages;
+            oldDockPages = _dockPages;
             _pages = enabledCaches
                 .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings))
                 .ToArray();
-            var dockBands = enabledCaches
-                .Zip(
-                    _pages,
-                    (cache, page) => CreateDockBand(cache, LogMessage, page, _settings))
+            _dockPages = enabledCaches
+                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock"))
                 .ToArray();
-            _dockBandItems = dockBands.Select(pair => pair.Item).ToArray();
-            _dockBands = dockBands.Select(pair => pair.Band).ToArray();
+            _dockBandItems = enabledCaches
+                .Zip(
+                    _dockPages,
+                    (cache, page) => CreateDockItem(cache, LogMessage, page, _settings))
+                .ToArray();
             _enabledProviderIds = enabledIds;
             _overviewPage.UpdateProviders(enabledCaches, _pages);
+            _dockBandPage.UpdateItems(_dockBandItems);
+            _retiredDockBandItems.AddRange(oldDockItems);
+            _retiredPages.AddRange(oldPages);
+            _retiredPages.AddRange(oldDockPages);
         }
 
         foreach (var item in oldDockItems)
         {
-            item.Dispose();
+            item.Deactivate();
         }
 
         foreach (var page in oldPages)
         {
-            page.Dispose();
+            page.Deactivate();
         }
+
+        foreach (var page in oldDockPages)
+        {
+            page.Deactivate();
+        }
+
     }
 
     private static CodexUsageService CreateDefaultService()

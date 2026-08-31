@@ -9,8 +9,6 @@ namespace TokensLimitsExtension.Core.Providers.Codex;
 /// </summary>
 public sealed class CodexUsageProviderAdapter : IUsageProvider, IDisposable
 {
-    private const int PrimaryWindowSeconds = 5 * 60 * 60;
-    private const int SecondaryWindowSeconds = 7 * 24 * 60 * 60;
     private readonly ICodexUsageProvider _codexProvider;
     private readonly bool _ownsCodexProvider;
     private int _disposed;
@@ -36,13 +34,13 @@ public sealed class CodexUsageProviderAdapter : IUsageProvider, IDisposable
                 ? new UsageWindow(
                     snapshot.PrimaryUsedPercent,
                     snapshot.PrimaryResetAt,
-                    PrimaryWindowSeconds)
+                    snapshot.PrimaryWindowSeconds)
                 : null,
             snapshot.HasSecondaryWindow
                 ? new UsageWindow(
                     snapshot.SecondaryUsedPercent,
                     snapshot.SecondaryResetAt,
-                    SecondaryWindowSeconds)
+                    snapshot.SecondaryWindowSeconds)
                 : null,
             snapshot.Plan,
             snapshot.IsEstimate)

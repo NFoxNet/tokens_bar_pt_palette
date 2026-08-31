@@ -19,6 +19,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     private readonly Timer _refreshTimer;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private int _refreshInProgress;
+    private int _deactivated;
     private int _disposed;
 
     public UsageDockBandItem(
@@ -54,20 +55,25 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
+    private bool IsRefreshEnabled => !IsDisposed && Volatile.Read(ref _deactivated) == 0;
+
     public string DockSubtitle { get; private set => SetProperty(ref field, value); } = string.Empty;
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (IsDisposed || Interlocked.Exchange(ref _refreshInProgress, 1) != 0)
+        if (!IsRefreshEnabled || Interlocked.Exchange(ref _refreshInProgress, 1) != 0)
         {
             return;
         }
 
         try
         {
-            var token = cancellationToken.CanBeCanceled ? cancellationToken : _lifetimeCts.Token;
+            using var linkedCts = cancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCts.Token)
+                : null;
+            var token = linkedCts?.Token ?? _lifetimeCts.Token;
             var snapshot = await _provider.GetUsageSnapshotAsync(token).ConfigureAwait(false);
-            if (IsDisposed)
+            if (!IsRefreshEnabled)
             {
                 return;
             }
@@ -81,7 +87,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         }
         catch (Exception ex)
         {
-            if (!IsDisposed)
+            if (IsRefreshEnabled)
             {
                 Subtitle = "Лимиты недоступны";
                 DockSubtitle = "Лимиты недоступны";
@@ -101,32 +107,43 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
             return;
         }
 
-        _refreshTimer.Stop();
+        Deactivate();
         _refreshTimer.Elapsed -= RefreshTimerOnElapsed;
-        _refreshSettings?.Changed -= RefreshSettingsOnChanged;
-        _lifetimeCts.Cancel();
-        _lifetimeCts.Dispose();
         _refreshTimer.Dispose();
         GC.SuppressFinalize(this);
     }
 
     private void RefreshTimerOnElapsed(object? sender, ElapsedEventArgs e)
     {
-        _ = RefreshAsync();
+        if (IsRefreshEnabled)
+        {
+            _ = RefreshAsync();
+        }
     }
 
     private void RefreshSettingsOnChanged(object? sender, EventArgs e)
     {
-        if (IsDisposed)
+        if (!IsRefreshEnabled)
         {
             return;
         }
 
         UsageRefreshHelpers.ApplySettingsChanged(
-            _provider,
             _refreshTimer,
             _refreshSettings,
             () => RefreshAsync());
+    }
+
+    internal void Deactivate()
+    {
+        if (Interlocked.Exchange(ref _deactivated, 1) != 0)
+        {
+            return;
+        }
+
+        _refreshTimer.Stop();
+        _refreshSettings?.Changed -= RefreshSettingsOnChanged;
+        _lifetimeCts.Cancel();
     }
 
     private static void LogMessage(string message)

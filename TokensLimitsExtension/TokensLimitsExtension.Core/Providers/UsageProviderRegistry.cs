@@ -32,12 +32,12 @@ public sealed class UsageProviderRegistry : IDisposable
 
     public void Register(IUsageProvider provider)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(provider.Descriptor);
 
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             if (_providers.Any(existing => string.Equals(
                     existing.Descriptor.Id,
                     provider.Descriptor.Id,

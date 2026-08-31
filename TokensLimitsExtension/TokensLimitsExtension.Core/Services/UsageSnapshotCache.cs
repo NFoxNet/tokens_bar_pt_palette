@@ -14,6 +14,7 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
     private readonly IUsageRefreshSettings? _refreshSettings;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _stateGate = new();
     private UsageSnapshot? _snapshot;
     private DateTimeOffset _fetchedAt;
@@ -78,11 +79,16 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
             return cachedSnapshot;
         }
 
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _lifetimeCts.Token);
+        var token = linkedCts.Token;
         while (true)
         {
-            await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await _refreshGate.WaitAsync(token).ConfigureAwait(false);
             try
             {
+                ThrowIfDisposed();
                 if (TryGetFreshSnapshot(out cachedSnapshot))
                 {
                     return cachedSnapshot;
@@ -95,8 +101,9 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
                 }
 
                 var freshSnapshot = await _provider
-                    .GetUsageSnapshotAsync(cancellationToken)
+                    .GetUsageSnapshotAsync(token)
                     .ConfigureAwait(false);
+                ThrowIfDisposed();
                 var fetchedAt = _timeProvider.GetUtcNow();
                 freshSnapshot = freshSnapshot with { FetchedAt = fetchedAt };
 
@@ -130,6 +137,7 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
         }
 
         _refreshSettings?.Changed -= RefreshSettingsOnChanged;
+        _lifetimeCts.Cancel();
         // Do not dispose the gate here: a refresh that already passed WaitAsync
         // still has to execute its finally block and release it. The cache is
         // owned by the extension lifetime, so the managed semaphore can be

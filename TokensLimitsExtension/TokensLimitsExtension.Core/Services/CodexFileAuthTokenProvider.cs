@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Globalization;
 
 namespace TokensLimitsExtension.Core.Services;
@@ -15,10 +16,12 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
     private readonly TimeProvider _timeProvider;
     private readonly bool _ownsHttpClient;
     private readonly SemaphoreSlim _tokenGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetimeCts = new();
     private string? _cachedAccessToken;
     private DateTimeOffset _cachedExpiresAt;
     private string? _cachedRefreshToken;
     private string? _cachedAccountId;
+    private DateTime _cachedAuthFileLastWriteTimeUtc;
     private int _disposed;
 
     public string? AccountId => Volatile.Read(ref _cachedAccountId);
@@ -40,23 +43,27 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         TimeProvider? timeProvider = null)
         : this(authFilePath, new HttpClient(handler, disposeHandler: false), timeProvider)
     {
+        _ownsHttpClient = true;
     }
 
     public async Task<string> GetValidAccessTokenAsync(CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
-        await _tokenGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _lifetimeCts.Token);
+        await _tokenGate.WaitAsync(linkedCts.Token).ConfigureAwait(false);
         try
         {
+            ThrowIfDisposed();
             var now = _timeProvider.GetUtcNow();
-            if (!string.IsNullOrWhiteSpace(_cachedAccessToken)
-                && _cachedExpiresAt > now.AddMinutes(1))
+            if (HasCurrentCachedAccessToken(now))
             {
-                return _cachedAccessToken;
+                return _cachedAccessToken!;
             }
 
-            var token = await ReadAndRefreshIfNeededAsync(now, cancellationToken).ConfigureAwait(false);
+            var token = await ReadAndRefreshIfNeededAsync(now, linkedCts.Token).ConfigureAwait(false);
             return token;
         }
         finally
@@ -72,7 +79,9 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
             return;
         }
 
-        _tokenGate.Dispose();
+        _lifetimeCts.Cancel();
+        // An active or queued token request still releases the semaphore in its
+        // finally block. Let the managed gate and CTS be reclaimed with this provider.
         if (_ownsHttpClient)
         {
             _httpClient.Dispose();
@@ -90,7 +99,14 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
             throw new FileNotFoundException($"Codex auth.json not found: {_authFilePath}", _authFilePath);
         }
 
-        await using var stream = File.OpenRead(_authFilePath);
+        var authFileLastWriteTimeUtc = GetAuthFileLastWriteTimeUtc();
+        await using var stream = new FileStream(
+            _authFilePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         var root = document.RootElement;
         var tokenObject = TryGetObject(root, "tokens") ?? root;
@@ -115,7 +131,7 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         expiresAt ??= GetJwtExpiry(accessToken);
         if (expiresAt is null || expiresAt > now.AddMinutes(1))
         {
-            CacheToken(accessToken, expiresAt ?? now.AddMinutes(5));
+            CacheToken(accessToken, expiresAt ?? now.AddMinutes(5), authFileLastWriteTimeUtc);
             return accessToken;
         }
 
@@ -124,13 +140,24 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
             throw new InvalidOperationException("Codex access token has expired and no refresh_token is available.");
         }
 
+        // Release the source file before atomically replacing it with a rotated
+        // credential set below. The values needed for the refresh are already copied.
+        document.Dispose();
+        await stream.DisposeAsync().ConfigureAwait(false);
         var refreshed = await RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(refreshed.RefreshToken))
         {
             _cachedRefreshToken = refreshed.RefreshToken;
         }
 
-        CacheToken(refreshed.AccessToken, refreshed.ExpiresAt ?? GetJwtExpiry(refreshed.AccessToken) ?? now.AddMinutes(5));
+        var refreshedExpiresAt = refreshed.ExpiresAt ?? GetJwtExpiry(refreshed.AccessToken) ?? now.AddMinutes(5);
+        var persistedLastWriteTimeUtc = await PersistRefreshedTokensIfUnchangedAsync(
+            authFileLastWriteTimeUtc,
+            refreshed.AccessToken,
+            refreshed.RefreshToken ?? refreshToken,
+            refreshedExpiresAt,
+            cancellationToken).ConfigureAwait(false);
+        CacheToken(refreshed.AccessToken, refreshedExpiresAt, persistedLastWriteTimeUtc ?? authFileLastWriteTimeUtc);
         return refreshed.AccessToken;
     }
 
@@ -193,10 +220,90 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         }
     }
 
-    private void CacheToken(string accessToken, DateTimeOffset expiresAt)
+    private bool HasCurrentCachedAccessToken(DateTimeOffset now)
+    {
+        return !string.IsNullOrWhiteSpace(_cachedAccessToken)
+            && _cachedExpiresAt > now.AddMinutes(1)
+            && _cachedAuthFileLastWriteTimeUtc == GetAuthFileLastWriteTimeUtc();
+    }
+
+    private DateTime GetAuthFileLastWriteTimeUtc()
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(_authFilePath);
+        }
+        catch (IOException)
+        {
+            return DateTime.MinValue;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return DateTime.MinValue;
+        }
+    }
+
+    private async Task<DateTime?> PersistRefreshedTokensIfUnchangedAsync(
+        DateTime expectedLastWriteTimeUtc,
+        string accessToken,
+        string refreshToken,
+        DateTimeOffset expiresAt,
+        CancellationToken cancellationToken)
+    {
+        // Do not overwrite a token file that Codex CLI refreshed while this OAuth
+        // request was in flight. The newer CLI-authored state is authoritative.
+        if (GetAuthFileLastWriteTimeUtc() != expectedLastWriteTimeUtc)
+        {
+            return null;
+        }
+
+        var temporaryPath = $"{_authFilePath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            var raw = await File.ReadAllTextAsync(_authFilePath, cancellationToken).ConfigureAwait(false);
+            var root = JsonNode.Parse(raw) as JsonObject
+                ?? throw new InvalidDataException("Codex auth.json root is not an object.");
+            var tokenObject = root["tokens"] as JsonObject ?? root;
+            tokenObject["access_token"] = accessToken;
+            tokenObject["refresh_token"] = refreshToken;
+            tokenObject["expires_at"] = expiresAt.ToUnixTimeSeconds();
+
+            await File.WriteAllTextAsync(
+                temporaryPath,
+                root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                Encoding.UTF8,
+                cancellationToken).ConfigureAwait(false);
+            File.Move(temporaryPath, _authFilePath, overwrite: true);
+            return GetAuthFileLastWriteTimeUtc();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        {
+            // The refreshed token is still usable in this process. Do not expose
+            // authentication values in diagnostics if persisting them fails.
+            System.Diagnostics.Debug.WriteLine($"[TokensLimits] WARNING: unable to persist refreshed Codex auth state: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup of a non-secret temporary path.
+            }
+        }
+    }
+
+    private void CacheToken(string accessToken, DateTimeOffset expiresAt, DateTime authFileLastWriteTimeUtc)
     {
         _cachedAccessToken = accessToken;
         _cachedExpiresAt = expiresAt;
+        _cachedAuthFileLastWriteTimeUtc = authFileLastWriteTimeUtc;
     }
 
     private static JsonElement? TryGetObject(JsonElement element, string propertyName)

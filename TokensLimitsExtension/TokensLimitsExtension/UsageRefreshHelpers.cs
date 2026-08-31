@@ -23,29 +23,28 @@ internal static class UsageRefreshHelpers
         return false;
     }
 
-    public static void InvalidateIfSupported(this IUsageProvider provider)
-    {
-        if (provider is IRefreshableUsageProvider refreshableProvider)
-        {
-            refreshableProvider.Invalidate();
-        }
-    }
-
     public static double GetRefreshIntervalMilliseconds(IUsageRefreshSettings? settings)
         => Math.Max(1000, (settings?.RefreshInterval ?? TimeSpan.FromMinutes(1)).TotalMilliseconds);
 
     public static void ApplySettingsChanged(
-        IUsageProvider provider,
         Timer refreshTimer,
         IUsageRefreshSettings? refreshSettings,
         Func<Task> refreshAsync)
     {
-        ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(refreshTimer);
         ArgumentNullException.ThrowIfNull(refreshAsync);
 
-        refreshTimer.Interval = GetRefreshIntervalMilliseconds(refreshSettings);
-        provider.InvalidateIfSupported();
+        try
+        {
+            refreshTimer.Interval = GetRefreshIntervalMilliseconds(refreshSettings);
+        }
+        catch (ObjectDisposedException)
+        {
+            // A settings event can already have captured a surface handler while
+            // the provider is concurrently disposing that surface.
+            return;
+        }
+
         _ = refreshAsync();
     }
 }

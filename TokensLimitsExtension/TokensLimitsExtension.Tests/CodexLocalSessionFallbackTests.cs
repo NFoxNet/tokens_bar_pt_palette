@@ -95,6 +95,52 @@ public sealed class CodexLocalSessionFallbackTests
         }
     }
 
+    [Fact]
+    public async Task ThrowsWhenNoReadableTokenUsageExists()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(home, "sessions"));
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(DateTimeOffset.UtcNow));
+
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => provider.GetSnapshotAsync(CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SaturatesMalformedTokenCountsInsteadOfOverflowing()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        await File.WriteAllLinesAsync(Path.Combine(sessions, "session.jsonl"), [
+            $"{{\"timestamp\":\"{now.AddHours(-1):O}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"total_tokens\":9223372036854775807}}}}}}}}",
+            $"{{\"timestamp\":\"{now.AddMinutes(-30):O}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"total_tokens\":9223372036854775807}}}}}}}}",
+        ]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, 10_000, 100_000, new FixedTimeProvider(now));
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(100, snapshot.PrimaryUsedPercent);
+            Assert.Equal(100, snapshot.SecondaryUsedPercent);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
