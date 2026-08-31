@@ -39,6 +39,27 @@ public sealed class UsageSnapshotCacheTests
         Assert.Equal(2, provider.CallCount);
     }
 
+    [Fact]
+    public async Task DoesNotCacheResponseStartedBeforeInvalidation()
+    {
+        var provider = new InvalidationDuringRefreshProvider();
+        var settings = new TestRefreshSettings(TimeSpan.FromMinutes(10));
+        using var cache = new UsageSnapshotCache(provider, settings, new FixedTimeProvider());
+
+        var refresh = cache.GetUsageSnapshotAsync();
+        await provider.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        settings.RaiseChanged();
+        provider.ReleaseFirstCall.TrySetResult();
+
+        var snapshot = await refresh;
+
+        Assert.Equal(2, provider.CallCount);
+        Assert.Equal("2", snapshot.Plan);
+        var cachedSnapshot = await cache.GetUsageSnapshotAsync();
+        Assert.Same(snapshot, cachedSnapshot);
+        Assert.Equal(2, provider.CallCount);
+    }
+
     private sealed class BlockingProvider : IUsageProvider
     {
         public UsageProviderDescriptor Descriptor { get; } = new("blocking", "Blocking");
@@ -64,6 +85,31 @@ public sealed class UsageSnapshotCacheTests
         {
             CallCount++;
             return Task.FromResult(CreateSnapshot(Descriptor));
+        }
+    }
+
+    private sealed class InvalidationDuringRefreshProvider : IUsageProvider
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("invalidation", "Invalidation");
+        public TaskCompletionSource FirstCallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _callCount;
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            var callNumber = Interlocked.Increment(ref _callCount);
+            if (callNumber == 1)
+            {
+                FirstCallStarted.TrySetResult();
+                await ReleaseFirstCall.Task.WaitAsync(cancellationToken);
+            }
+
+            return CreateSnapshot(Descriptor) with
+            {
+                Plan = callNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            };
         }
     }
 

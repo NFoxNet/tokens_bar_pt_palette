@@ -67,6 +67,18 @@ public sealed class UsageProviderRegistryTests
         Assert.Null(additional.SecondaryWindow);
     }
 
+    [Fact]
+    public void OwnedCodexAdapterDisposesItsProviderThroughTheRegistry()
+    {
+        var codexProvider = new DisposableFakeCodexProvider();
+        var adapter = new CodexUsageProviderAdapter(codexProvider, ownsCodexProvider: true);
+        using var registry = new UsageProviderRegistry([adapter]);
+
+        registry.Dispose();
+
+        Assert.True(codexProvider.IsDisposed);
+    }
+
     private sealed class FakeProvider(string id, string displayName) : IUsageProvider
     {
         public UsageProviderDescriptor Descriptor { get; } = new(id, displayName);
@@ -85,5 +97,21 @@ public sealed class UsageProviderRegistryTests
     {
         public Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(snapshot);
+    }
+
+    private sealed class DisposableFakeCodexProvider : ICodexUsageProvider, IDisposable
+    {
+        public bool IsDisposed { get; private set; }
+
+        public Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new CodexUsageSnapshot(
+                1,
+                DateTimeOffset.UtcNow,
+                2,
+                DateTimeOffset.UtcNow,
+                null,
+                false));
+
+        public void Dispose() => IsDisposed = true;
     }
 }

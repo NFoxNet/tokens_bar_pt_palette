@@ -14,6 +14,16 @@ public static class UsageDisplayFormatter
     public static string FormatDockBandSubtitle(UsageSnapshot snapshot)
     {
         var estimatePrefix = snapshot.IsEstimate ? "Оценка: " : string.Empty;
+        if (snapshot.PrimaryWindow is null
+            && snapshot.SecondaryWindow is null
+            && snapshot.Metrics.Count > 0)
+        {
+            var metrics = snapshot.Metrics
+                .Take(2)
+                .Select(metric => $"{metric.Name}: {TrimMetricValue(metric.Value)}");
+            return estimatePrefix + string.Join(", ", metrics);
+        }
+
         return string.Create(
             CultureInfo.InvariantCulture,
             $"{estimatePrefix}5ч\\{FormatDockPercent(snapshot.PrimaryWindow)}, 7д\\{FormatDockPercent(snapshot.SecondaryWindow)}");
@@ -50,6 +60,39 @@ public static class UsageDisplayFormatter
         => window is null
             ? "данные недоступны"
             : $"{FormatRemainingPercent(window.UsedPercent)} · {FormatTimeUntilReset(window.ResetAt, now)}";
+
+    public static string GetWindowLabel(UsageWindow? window, string fallback)
+        => window is null ? fallback : GetWindowShortLabel(window, fallback);
+
+    private static string GetWindowShortLabel(UsageWindow? window, string fallback)
+    {
+        if (window is null || window.LimitWindowSeconds <= 0)
+        {
+            return fallback;
+        }
+
+        var seconds = window.LimitWindowSeconds;
+        if (seconds % (7 * 24 * 60 * 60) == 0)
+        {
+            var weeks = seconds / (7 * 24 * 60 * 60);
+            return weeks == 1 ? "7д" : $"{weeks}н";
+        }
+
+        if (seconds % (24 * 60 * 60) == 0)
+        {
+            return $"{seconds / (24 * 60 * 60)}д";
+        }
+
+        if (seconds % (60 * 60) == 0)
+        {
+            return $"{seconds / (60 * 60)}ч";
+        }
+
+        return $"{Math.Max(1, seconds / 60)}м";
+    }
+
+    private static string TrimMetricValue(string value)
+        => value.Length <= 24 ? value : value[..24] + "…";
 
     private static int GetRemainingPercent(double usedPercent)
     {

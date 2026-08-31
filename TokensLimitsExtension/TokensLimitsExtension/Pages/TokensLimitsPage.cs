@@ -59,7 +59,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         PlaceholderText = $"{_usageProvider.Descriptor.DisplayName} limits";
         ShowDetails = true;
 
-        _refreshTimer = new Timer(GetRefreshIntervalMilliseconds())
+        _refreshTimer = new Timer(UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings))
         {
             AutoReset = true,
         };
@@ -77,8 +77,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
         if (Volatile.Read(ref _hasLoaded) == 0)
         {
-            if (_usageProvider is UsageSnapshotCache cache
-                && cache.TryGetSnapshot(out var cachedSnapshot))
+            if (_usageProvider.TryGetCachedSnapshot(out var cachedSnapshot))
             {
                 SetItems(CreateItems(cachedSnapshot), notify: false);
             }
@@ -134,12 +133,18 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         var estimatePrefix = snapshot.IsEstimate ? "Оценка: " : string.Empty;
         var primary = new ListItem(new NoOpCommand())
         {
-            Title = "5ч",
+            Title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
+                ? "5ч"
+                : UsageDisplayFormatter.GetWindowLabel(snapshot.PrimaryWindow, "Основное"),
             Subtitle = $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.PrimaryWindow, now)}",
         };
         var secondary = new ListItem(new NoOpCommand())
         {
-            Title = "Еженедельно",
+            Title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
+                ? "Еженедельно"
+                : snapshot.SecondaryWindow is null
+                    ? "Дополнительное"
+                    : UsageDisplayFormatter.GetWindowLabel(snapshot.SecondaryWindow, "Дополнительное"),
             Subtitle = $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.SecondaryWindow, now)}",
         };
 
@@ -159,6 +164,15 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             {
                 Title = additionalLimit.Name,
                 Subtitle = FormatAdditionalLimit(additionalLimit, now, estimatePrefix),
+            });
+        }
+
+        foreach (var metric in snapshot.Metrics)
+        {
+            items.Add(new ListItem(new NoOpCommand())
+            {
+                Title = metric.Name,
+                Subtitle = metric.Unit is null ? metric.Value : $"{metric.Value} {metric.Unit}",
             });
         }
 
@@ -203,17 +217,12 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             return;
         }
 
-        _refreshTimer.Interval = GetRefreshIntervalMilliseconds();
-        if (_usageProvider is UsageSnapshotCache cache)
-        {
-            cache.Invalidate();
-        }
-
-        _ = RefreshAsync();
+        UsageRefreshHelpers.ApplySettingsChanged(
+            _usageProvider,
+            _refreshTimer,
+            _refreshSettings,
+            () => RefreshAsync());
     }
-
-    private double GetRefreshIntervalMilliseconds()
-        => Math.Max(1000, (_refreshSettings?.RefreshInterval ?? TimeSpan.FromMinutes(1)).TotalMilliseconds);
 
     private void SetItems(IListItem[] items, bool notify)
     {
@@ -237,12 +246,14 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         DateTimeOffset now,
         string estimatePrefix)
     {
+        var primaryLabel = UsageDisplayFormatter.GetWindowLabel(limit.PrimaryWindow, "Основное");
+        var secondaryLabel = UsageDisplayFormatter.GetWindowLabel(limit.SecondaryWindow, "Дополнительное");
         var primary = limit.PrimaryWindow is null
-            ? "5ч: данные недоступны"
-            : $"5ч: {UsageDisplayFormatter.FormatRemainingWindow(limit.PrimaryWindow, now)}";
+            ? $"{primaryLabel}: данные недоступны"
+            : $"{primaryLabel}: {UsageDisplayFormatter.FormatRemainingWindow(limit.PrimaryWindow, now)}";
         var secondary = limit.SecondaryWindow is null
-            ? "7д: данные недоступны"
-            : $"7д: {UsageDisplayFormatter.FormatRemainingWindow(limit.SecondaryWindow, now)}";
+            ? $"{secondaryLabel}: данные недоступны"
+            : $"{secondaryLabel}: {UsageDisplayFormatter.FormatRemainingWindow(limit.SecondaryWindow, now)}";
         return $"{estimatePrefix}{primary}; {secondary}";
     }
 }

@@ -78,6 +78,30 @@ public sealed class CodexUsageClientTests
     }
 
     [Fact]
+    public async Task UsesConfiguredBackendContract()
+    {
+        const string json = """
+        {
+          "rate_limit": {
+            "primary_window": { "used_percent": 2, "reset_at": 1790000000, "limit_window_seconds": 18000 }
+          }
+        }
+        """;
+        var handler = new StubHandler(json);
+        var options = new CodexUsageClientOptions(
+            new Uri("https://example.test/usage"),
+            "codex-test-client",
+            TimeSpan.FromSeconds(5),
+            1);
+        var client = new CodexUsageClient(handler, options: options);
+
+        await client.FetchUsageAsync("test-token", CancellationToken.None);
+
+        Assert.Equal("https://example.test/usage", handler.Request!.RequestUri!.ToString());
+        Assert.Equal("codex-test-client", handler.Request.Headers.UserAgent.Single().Product!.Name);
+    }
+
+    [Fact]
     public async Task RetriesRateLimitedResponsesWithoutLoggingResponseBody()
     {
         const string json = """

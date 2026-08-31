@@ -41,7 +41,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         DockSubtitle = "Загрузка лимитов...";
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
 
-        _refreshTimer = new Timer(GetRefreshIntervalMilliseconds())
+        _refreshTimer = new Timer(UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings))
         {
             AutoReset = true,
         };
@@ -122,17 +122,12 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
             return;
         }
 
-        _refreshTimer.Interval = GetRefreshIntervalMilliseconds();
-        if (_provider is UsageSnapshotCache cache)
-        {
-            cache.Invalidate();
-        }
-
-        _ = RefreshAsync();
+        UsageRefreshHelpers.ApplySettingsChanged(
+            _provider,
+            _refreshTimer,
+            _refreshSettings,
+            () => RefreshAsync());
     }
-
-    private double GetRefreshIntervalMilliseconds()
-        => Math.Max(1000, (_refreshSettings?.RefreshInterval ?? TimeSpan.FromMinutes(1)).TotalMilliseconds);
 
     private static void LogMessage(string message)
     {
