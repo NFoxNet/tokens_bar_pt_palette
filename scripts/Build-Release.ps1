@@ -91,8 +91,9 @@ foreach ($package in $publishedPackages) {
 $certificateOutput = Join-Path $OutputDirectory 'NFoxNet.TokensLimitsExtension.cer'
 Export-Certificate -Cert $certificate -FilePath $certificateOutput -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\Install-TokensLimitsExtension.ps1') -Destination (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.ps1') -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\Install-TokensLimitsExtension.cmd') -Destination (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.cmd') -Force
 
-Get-FileHash -Algorithm SHA256 -LiteralPath ($publishedPackages.FullName + $certificateOutput + (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.ps1')) |
+Get-FileHash -Algorithm SHA256 -LiteralPath ($publishedPackages.FullName + $certificateOutput + (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.ps1') + (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.cmd')) |
     ForEach-Object { '{0} *{1}' -f $_.Hash, (Split-Path $_.Path -Leaf) } |
     Set-Content -LiteralPath (Join-Path $OutputDirectory 'SHA256SUMS.txt') -Encoding ascii
 

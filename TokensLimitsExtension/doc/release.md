@@ -12,23 +12,27 @@ The package requires:
 
 ## Installing a GitHub Release
 
-1. Download the matching `.msix`, `NFoxNet.TokensLimitsExtension.cer` and `SHA256SUMS.txt` from the [latest release](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/latest).
+1. Download the matching `.msix`, `NFoxNet.TokensLimitsExtension.cer`, `Install-TokensLimitsExtension.cmd`, `Install-TokensLimitsExtension.ps1` and `SHA256SUMS.txt` from the [latest release](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/latest), keeping them in one directory.
 2. Optionally verify the downloaded checksums:
 
    ```powershell
    Get-FileHash .\TokensLimitsExtension_*.msix -Algorithm SHA256
    ```
 
-3. Open **PowerShell as Administrator**, then run the repository installer:
+3. Run `Install-TokensLimitsExtension.cmd`. It selects the correct package for the PC, asks for UAC elevation, imports the public release certificate into `LocalMachine\\TrustedPeople`, then installs the MSIX. No PowerShell execution-policy change is required.
+
+   The `.cmd` bootstrap is intentional: a downloaded `.ps1` may be blocked by an `AllSigned` policy before it has an opportunity to import the certificate that would establish trust for the package.
+
+4. For a managed environment where `.cmd` launchers are disallowed, an administrator can invoke the helper explicitly:
 
    ```powershell
-   .\scripts\Install-TokensLimitsExtension.ps1 `
-     -PackagePath .\TokensLimitsExtension_0.0.2.1_x64.msix `
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-TokensLimitsExtension.ps1 `
+     -PackagePath .\TokensLimitsExtension_0.0.2.2_x64.msix `
      -CertificatePath .\NFoxNet.TokensLimitsExtension.cer
    ```
 
-   The script imports the **public** self-signed certificate only into `LocalMachine\TrustedPeople`, then invokes `Add-AppxPackage`. It never receives or installs a private key. This grants device-level trust to the publisher certificate, so install it only after verifying the release source and checksum.
-4. Open PowerToys Command Palette and run **Reload Command Palette extensions** if the extension does not appear immediately.
+   The helper imports the **public** self-signed certificate only into `LocalMachine\TrustedPeople`, then invokes `Add-AppxPackage`. It never receives or installs a private key. This grants device-level trust to the publisher certificate, so install it only after verifying the release source and checksum.
+5. Open PowerToys Command Palette and run **Reload Command Palette extensions** if the extension does not appear immediately.
 
 To remove a package while retaining configured providers and protected secrets, use:
 
@@ -38,7 +42,7 @@ Get-AppxPackage TokensLimitsExtension | Remove-AppxPackage -PreserveApplicationD
 
 ## Trust and signing model
 
-`v0.0.2.1` uses a self-signed `CN=NFoxNet` code-signing certificate. This is a transparent sideload distribution mechanism: an administrator must import the release `.cer` into `LocalMachine\TrustedPeople`, which is an explicit device-level trust decision. The certificate subject must exactly match the MSIX `Identity/Publisher`.
+`v0.0.2.2` uses a self-signed `CN=NFoxNet` code-signing certificate. This is a transparent sideload distribution mechanism: the installer imports the release `.cer` into `LocalMachine\TrustedPeople` after the administrator accepts UAC, which is an explicit device-level trust decision. The certificate subject must exactly match the MSIX `Identity/Publisher`.
 
 For a frictionless production channel, the next distribution step is either:
 
