@@ -2,6 +2,12 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.0.2.2] - 2026-09-03
+
+### Fixed
+
+- GitHub Release installation no longer requires directly running a downloaded unsigned PowerShell script under an `AllSigned` policy. The new `.cmd` bootstrap starts the installer with a process-local execution-policy bypass, requests UAC and retains MSIX signature verification.
+
 ## [0.0.2.1] - 2026-08-31
 
 ### Fixed

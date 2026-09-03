@@ -49,4 +49,5 @@ jobs:
             artifacts/*.msix
             artifacts/*.cer
             artifacts/*.txt
+            artifacts/Install-TokensLimitsExtension.cmd
             artifacts/Install-TokensLimitsExtension.ps1

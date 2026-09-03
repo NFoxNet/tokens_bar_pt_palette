@@ -3,7 +3,7 @@
 Open-source extension for Microsoft PowerToys Command Palette that shows real usage limits and other account metrics for configured AI providers in one persistent Dock band.
 Codex включён по умолчанию; остальные провайдеры включаются пользователем в стандартных настройках Command Palette.
 
-> The first public release is distributed as a signed sideloaded MSIX. It requires PowerToys Command Palette and a one-time import of the release certificate. See [installation](TokensLimitsExtension/doc/release.md#installing-a-github-release).
+> The public release is distributed as a signed sideloaded MSIX. It requires PowerToys Command Palette; the included installer asks for UAC once to import the public release certificate. See [installation](TokensLimitsExtension/doc/release.md#installing-a-github-release).
 
 ## Возможности
 
