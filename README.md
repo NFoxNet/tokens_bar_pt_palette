@@ -16,6 +16,10 @@ The installer verifies the package signature and checksums. Updates retain setti
 - English by default, Russian included; additional languages can be added as JSON files in `TokensLimitsExtension/lang/`.
 - Provider-specific API keys and settings stored securely in the Windows user profile.
 
+https://github.com/user-attachments/assets/a5dc3be1-7459-4a65-81e8-e5112dd34086
+
+<img width="3070" height="164" alt="193259" src="https://github.com/user-attachments/assets/aead3072-0ab0-4614-8fd7-d8b3baa9e298" />
+
 ## Documentation
 
 - [Русская версия README](README.ru.md)
