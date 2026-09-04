@@ -2,6 +2,21 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.0.4.1] - 2026-09-04
+
+### Documentation
+
+- Replaced the root README with a concise English overview and added a separate Russian README.
+- Updated release and architecture documentation for the shared refresh pipeline and current release process.
+
+## [0.0.4.0] - 2026-09-04
+
+### Added
+
+- One shared refresh coordinator for Dock, overview and detail pages.
+- Shared provider state with stale-snapshot handling and cancellation when a provider is disabled.
+- Separate handling for language changes and provider configuration changes.
+
 ## [0.0.2.2] - 2026-09-03
 
 ### Fixed
