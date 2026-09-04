@@ -62,7 +62,7 @@ The release workflow is already prepared for the latter through `MSIX_CERTIFICAT
    .\scripts\Build-Release.ps1 -CertificatePath C:\secure\tokens-limits.pfx -CertificatePassword $password
    ```
 
-4. Verify the resulting MSIX signatures and checksums, test both package architectures on suitable machines, then attach `artifacts/` files to a `vX.Y.Z.W` GitHub Release.
+4. The MSIX build signs the package through `PackageCertificateThumbprint`; do not run `signtool sign` on the completed `.msix` again. Verify the package structure, checksums and installation, test both package architectures on suitable machines, then attach `artifacts/` files to a `vX.Y.Z.W` GitHub Release.
 5. For automated releases, add the PFX encoded as Base64 to `MSIX_CERTIFICATE_BASE64` and the password to `MSIX_CERTIFICATE_PASSWORD`, then push the matching annotated tag.
 
 Do not commit a PFX, password, tokens, cookies or provider settings. A public `.cer` is safe to distribute.
