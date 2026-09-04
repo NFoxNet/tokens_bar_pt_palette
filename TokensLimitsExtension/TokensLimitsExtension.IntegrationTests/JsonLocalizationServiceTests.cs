@@ -34,10 +34,40 @@ public sealed class JsonLocalizationServiceTests
             { "culture":"en", "nativeName":"English", "strings": { "title":"Custom title" } }
             """);
         File.WriteAllText(Path.Combine(user.Path, "broken.json"), "not-json");
+        File.WriteAllText(Path.Combine(user.Path, "bad-format.json"), """
+            { "culture":"fr", "nativeName":"Français", "strings": { "title":"{0" } }
+            """);
 
         var localization = new JsonLocalizationService(packaged.Path, user.Path, "en");
 
         Assert.Equal("Custom title", localization.GetString("title"));
+        Assert.DoesNotContain(localization.Languages, language => language.Culture == "fr");
+    }
+
+    [Fact]
+    public void PackagedEnglishAndRussianPacksSatisfyTheCompleteLanguagePackContract()
+    {
+        var packaged = Path.Combine(AppContext.BaseDirectory, "lang");
+        using var user = new TestDirectory();
+        var localization = new JsonLocalizationService(packaged, user.Path, "en");
+
+        Assert.Empty(localization.GetValidationErrors("en"));
+        Assert.Empty(localization.GetValidationErrors("ru"));
+    }
+
+    [Fact]
+    public void CompleteLanguagePackValidationReportsMissingKeys()
+    {
+        using var packaged = new TestDirectory();
+        using var user = new TestDirectory();
+        File.WriteAllText(Path.Combine(packaged.Path, "en.json"), """
+            { "culture":"en", "nativeName":"English", "strings": { "app.title":"Title", "details.show":"{0}" } }
+            """);
+
+        var localization = new JsonLocalizationService(packaged.Path, user.Path, "en");
+        var errors = localization.GetValidationErrors("en");
+
+        Assert.Contains("Missing required key: settings.language", errors);
     }
 
     private sealed class TestDirectory : IDisposable
