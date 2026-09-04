@@ -18,6 +18,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 $solutionPath = Join-Path $repositoryRoot 'TokensLimitsExtension\TokensLimitsExtension.sln'
 $manifestPath = Join-Path $repositoryRoot 'TokensLimitsExtension\TokensLimitsExtension\Package.appxmanifest'
 $certificate = Import-PfxCertificate -FilePath $CertificatePath -Password $CertificatePassword -CertStoreLocation 'Cert:\CurrentUser\My'
@@ -63,7 +64,8 @@ finally {
     Pop-Location
 }
 
-$packages = Get-ChildItem -LiteralPath $OutputDirectory -Recurse -Filter '*.msix' | Where-Object { $_.Name -notlike '*Dependencies*' }
+$packages = @(Get-ChildItem -LiteralPath $OutputDirectory -Recurse -Filter '*.msix' |
+    Where-Object { $_.Name -notlike '*Dependencies*' })
 if ($packages.Count -ne $Platform.Count) {
     throw "Expected $($Platform.Count) MSIX packages, found $($packages.Count)."
 }
@@ -93,7 +95,11 @@ Export-Certificate -Cert $certificate -FilePath $certificateOutput -Force | Out-
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\Install-TokensLimitsExtension.ps1') -Destination (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\Install-TokensLimitsExtension.cmd') -Destination (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.cmd') -Force
 
-Get-FileHash -Algorithm SHA256 -LiteralPath ($publishedPackages.FullName + $certificateOutput + (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.ps1') + (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.cmd')) |
+$checksumFiles = @($publishedPackages | ForEach-Object FullName) + @(
+    $certificateOutput,
+    (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.ps1'),
+    (Join-Path $OutputDirectory 'Install-TokensLimitsExtension.cmd'))
+Get-FileHash -Algorithm SHA256 -LiteralPath $checksumFiles |
     ForEach-Object { '{0} *{1}' -f $_.Hash, (Split-Path $_.Path -Leaf) } |
     Set-Content -LiteralPath (Join-Path $OutputDirectory 'SHA256SUMS.txt') -Encoding ascii
 

@@ -27,51 +27,49 @@ dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --
 4. После Deploy в Command Palette выполните `Reload` → `Reload Command Palette extensions`.
 5. Для диагностики смотрите Output window в режиме Debug; код пишет сообщения через `Debug.WriteLine` и `ExtensionHost.LogMessage`.
 
-## Быстрая локальная установка для проверки UI
+## Проверенное локальное обновление для проверки UI
 
-Обычная `dotnet build` не создаёт `.msix`: её результат — текущая DLL в
-`TokensLimitsExtension/bin/x64/Debug/...`. Для ежедневной проверки кода
-регистрируйте Debug manifest напрямую. Это не требует сертификата, не меняет
-PowerShell execution policy и не удаляет `%LOCALAPPDATA%\TokensLimitsExtension`
-с настройками и зашифрованными ключами.
+Обычная `dotnet build` создаёт DLL, а не installable MSIX. Не регистрируйте
+Debug manifest поверх опубликованного пакета: Windows блокирует смешение
+development и signed MSIX с одинаковым package identity. Удаление обычного
+Release MSIX с `-PreserveApplicationData` тоже не поддерживается Windows, а
+удаление без этого флага может потерять защищённые provider keys.
 
-Из корня решения выполните:
+Для проверки UI используйте **подписанное обновление** с версией выше уже
+установленной. Это штатный AppX upgrade, который был проверен для перехода
+`0.0.2.2 → 0.0.3.0` и сохраняет application data:
 
 ```powershell
-dotnet build .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64
+# Из корня TokensLimitsExtension. Путь и пароль PFX держите вне репозитория.
+$certificatePassword = Read-Host 'PFX password' -AsSecureString
+& ..\scripts\Build-Release.ps1 `
+  -CertificatePath C:\secure\tokens-limits-release.pfx `
+  -CertificatePassword $certificatePassword `
+  -Platform x64 `
+  -OutputDirectory .\artifacts-local
+
+$package = Resolve-Path .\artifacts-local\TokensLimitsExtension_*.msix
+if ((Get-AuthenticodeSignature $package).Status -ne 'Valid') {
+  throw 'MSIX signature validation failed.'
+}
 
 Get-Process TokensLimitsExtension -ErrorAction SilentlyContinue |
   Stop-Process -Force
-
-# Требуется только при первом переходе с установленного Release MSIX на Debug.
-# Сохраняет provider settings и зашифрованные ключи.
-Get-AppxPackage -Name TokensLimitsExtension |
-  Remove-AppxPackage -PreserveApplicationData
-
-$manifest = Resolve-Path .\TokensLimitsExtension\bin\x64\Debug\net10.0-windows10.0.26100.0\win-x64\AppxManifest.xml
-Add-AppxPackage -Register $manifest -ForceApplicationShutdown
+Add-AppxPackage -Path $package -ForceApplicationShutdown
 ```
 
-Затем откройте Command Palette и выполните **Reload Command Palette
-extensions**. При следующем изменении повторите build, остановку процесса и
-регистрацию manifest; строку `Remove-AppxPackage` повторять не нужно, пока
-Debug-версия уже активна.
-
-Переход обратно на публичный MSIX также требует сначала снять Debug-
-регистрацию, опять же с сохранением данных:
+После установки в Command Palette выполните **Reload Command Palette
+extensions**. Убедитесь, что команда ниже показывает новую версию и `Status:
+Ok`:
 
 ```powershell
-Get-Process TokensLimitsExtension -ErrorAction SilentlyContinue |
-  Stop-Process -Force
-
 Get-AppxPackage -Name TokensLimitsExtension |
-  Remove-AppxPackage -PreserveApplicationData
-
-.\scripts\Install-TokensLimitsExtension.cmd
+  Format-List PackageFullName, Version, Status
 ```
 
-Не используйте `Remove-AppxPackage` без `-PreserveApplicationData`: иначе
-можно потерять сохранённые provider settings и защищённые ключи.
+Debug manifest можно применять только на чистом development-устройстве, где
+нет установленного signed MSIX с этим identity. Он не является безопасным
+способом переключения канала на машине с рабочими ключами.
 
 Путь к созданному релизному MSIX после сборки с
 `-p:GenerateAppxPackageOnBuild=true` —
