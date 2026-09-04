@@ -27,6 +27,37 @@ dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --
 4. После Deploy в Command Palette выполните `Reload` → `Reload Command Palette extensions`.
 5. Для диагностики смотрите Output window в режиме Debug; код пишет сообщения через `Debug.WriteLine` и `ExtensionHost.LogMessage`.
 
+## Быстрая локальная установка для проверки UI
+
+Обычная `dotnet build` не создаёт `.msix`: её результат — текущая DLL в
+`TokensLimitsExtension/bin/x64/Debug/...`. Для ежедневной проверки кода
+регистрируйте Debug manifest напрямую. Это не требует сертификата, не меняет
+PowerShell execution policy и не удаляет `%LOCALAPPDATA%\TokensLimitsExtension`
+с настройками и зашифрованными ключами.
+
+Из корня решения выполните:
+
+```powershell
+dotnet build .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64
+
+Get-Process TokensLimitsExtension -ErrorAction SilentlyContinue |
+  Stop-Process -Force
+
+$manifest = Resolve-Path .\TokensLimitsExtension\bin\x64\Debug\net10.0-windows10.0.26100.0\win-x64\AppxManifest.xml
+Add-AppxPackage -Register $manifest -ForceApplicationShutdown
+```
+
+Затем откройте Command Palette и выполните **Reload Command Palette
+extensions**. При следующем изменении повторите эти же команды. Если требуется
+переключиться обратно на публичный MSIX, установите его штатным
+`Install-TokensLimitsExtension.cmd`; перед явным удалением пакета всегда
+используйте `Remove-AppxPackage -PreserveApplicationData`.
+
+Путь к созданному релизному MSIX после сборки с
+`-p:GenerateAppxPackageOnBuild=true` —
+`TokensLimitsExtension/AppPackages/.../*.msix`. Такой пакет предназначен для
+проверки сценария установки и подписи, а не для быстрой итерации UI.
+
 ### Проверка Dock-навигации
 
 После Deploy проверьте последовательность: клик по Tokens Limits в Dock →
