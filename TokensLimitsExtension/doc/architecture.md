@@ -53,8 +53,8 @@ Dock представлен одним стабильным band с истори
 ## Жизненный цикл запроса
 
 ```text
-UI surface
-  -> UsageSnapshotCache.GetUsageSnapshotAsync()
+UsageRefreshCoordinator (one timer)
+  -> UsageSnapshotCache.RefreshAsync()
   -> IUsageProvider.GetUsageSnapshotAsync()
   -> provider adapter / ConfiguredUsageProvider
   -> HTTP, OAuth/Cookie или локальный источник
@@ -63,7 +63,7 @@ UI surface
   -> RaiseItemsChanged()
 ```
 
-`UsageSnapshotCache` хранит последний результат и сериализует конкурентные обновления через один refresh gate. Поэтому overview, обычная detail page, Dock detail page и dock band используют общий snapshot, но не общий объект страницы.
+`UsageRefreshCoordinator` владеет единственным периодическим расписанием. `UsageSnapshotCache` хранит последний результат, публикует безопасное UI-состояние и сериализует конкурентные обновления через один refresh gate. Поэтому overview, обычная detail page, Dock detail page и dock band используют общий snapshot, но не общий объект страницы и не имеют собственных таймеров. При временной ошибке старый snapshot остаётся доступен как устаревший; отключение провайдера отменяет его выполняющийся запрос.
 
 ## Codex
 
@@ -73,12 +73,12 @@ UI surface
 
 ## Настройки и реконфигурация
 
-`TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует `Changed`. Настройки и зашифрованные секреты всегда читаются и записываются в едином стабильном каталоге `%LOCALAPPDATA%\TokensLimitsExtension`. При первом запуске после обновления содержимое host/package-local каталога переносится туда, если там найден более новый secret store. `TokensLimitsExtensionCommandsProvider` на это событие:
+`TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует общее `Changed` и отдельное `ProviderConfigurationChanged`. Настройки и зашифрованные секреты всегда читаются и записываются в едином стабильном каталоге `%LOCALAPPDATA%\TokensLimitsExtension`. При первом запуске после обновления содержимое host/package-local каталога переносится туда, если там найден более новый secret store. При смене языка cache не инвалидируется; при смене ключа, аккаунта, URL или включения провайдера его старый snapshot очищается до нового запроса. `TokensLimitsExtensionCommandsProvider` на событие настроек:
 
 1. `UsageSnapshotCache` один раз инвалидирует snapshot;
 2. заново вычисляет список включённых провайдеров;
 3. создаёт новые обычные страницы, отдельные Dock detail pages и dock items при изменении состава;
-4. существующие UI-поверхности обновляются через свои подписки, без повторного запуска refresh из provider coordinator.
+4. coordinator обновляет набор активных кэшей, а UI-поверхности перестраиваются по их событиям состояния без самостоятельного сетевого опроса.
 
 Интервал ограничен 30–3600 секундами, по умолчанию 60 секунд.
 

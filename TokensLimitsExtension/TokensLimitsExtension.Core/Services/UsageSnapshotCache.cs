@@ -8,16 +8,18 @@ namespace TokensLimitsExtension.Core.Services;
 /// for a provider. This prevents the Dock and details page from issuing
 /// duplicate requests at the same time.
 /// </summary>
-public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
+public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
 {
     private readonly IUsageProvider _provider;
     private readonly IUsageRefreshSettings? _refreshSettings;
+    private readonly IUsageProviderConfigurationChangeSource? _configurationChanges;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _stateGate = new();
     private UsageSnapshot? _snapshot;
     private DateTimeOffset _fetchedAt;
+    private UsageProviderState _state = new(null, null, null, false);
     private long _invalidationVersion;
     private int _disposed;
 
@@ -28,11 +30,32 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _refreshSettings = refreshSettings;
+        _configurationChanges = refreshSettings as IUsageProviderConfigurationChangeSource;
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _refreshSettings?.Changed += RefreshSettingsOnChanged;
+        if (_configurationChanges is not null)
+        {
+            _configurationChanges.ProviderConfigurationChanged += ProviderConfigurationOnChanged;
+        }
+        else
+        {
+            _refreshSettings?.Changed += RefreshSettingsOnChanged;
+        }
     }
 
     public UsageProviderDescriptor Descriptor => _provider.Descriptor;
+
+    public event EventHandler? StateChanged;
+
+    public UsageProviderState State
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _state;
+            }
+        }
+    }
 
     public DateTimeOffset? LastFetchedAt
     {
@@ -67,6 +90,25 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
             _fetchedAt = default;
             _invalidationVersion++;
         }
+    }
+
+    /// <summary>Invalidates values that belong to a previous credential/account.</summary>
+    public void Clear()
+    {
+        lock (_stateGate)
+        {
+            _snapshot = null;
+            _fetchedAt = default;
+            _invalidationVersion++;
+            _state = _state with
+            {
+                Snapshot = null,
+                LastSuccessfulRefreshAt = null,
+                ErrorKind = UsageProviderErrorKind.None,
+                RetryAfter = null,
+            };
+        }
+        RaiseStateChanged();
     }
 
     public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
@@ -118,14 +160,47 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
 
                     _snapshot = freshSnapshot;
                     _fetchedAt = fetchedAt;
+                    _state = new UsageProviderState(freshSnapshot, fetchedAt, fetchedAt, false);
                 }
-
+                RaiseStateChanged();
                 return freshSnapshot;
             }
             finally
             {
                 _refreshGate.Release();
             }
+        }
+    }
+
+    public async Task RefreshAsync(bool force = false, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (force)
+        {
+            Invalidate();
+        }
+        else if (TryGetFreshSnapshot(out _))
+        {
+            return;
+        }
+
+        UpdateState(isRefreshing: true, errorKind: UsageProviderErrorKind.None, retryAfter: null);
+        try
+        {
+            await GetUsageSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            UpdateState(isRefreshing: false, errorKind: UsageProviderErrorKind.None, retryAfter: null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
+        {
+            UpdateState(isRefreshing: false, errorKind: UsageProviderErrorKind.None, retryAfter: null);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            UpdateState(
+                isRefreshing: false,
+                errorKind: UsageProviderErrorClassifier.Classify(exception),
+                retryAfter: UsageProviderErrorClassifier.GetRetryAfter(exception));
         }
     }
 
@@ -136,7 +211,14 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
             return;
         }
 
-        _refreshSettings?.Changed -= RefreshSettingsOnChanged;
+        if (_configurationChanges is not null)
+        {
+            _configurationChanges.ProviderConfigurationChanged -= ProviderConfigurationOnChanged;
+        }
+        else
+        {
+            _refreshSettings?.Changed -= RefreshSettingsOnChanged;
+        }
         _lifetimeCts.Cancel();
         // Do not dispose the gate here: a refresh that already passed WaitAsync
         // still has to execute its finally block and release it. The cache is
@@ -172,6 +254,28 @@ public sealed class UsageSnapshotCache : IRefreshableUsageProvider, IDisposable
     {
         Invalidate();
     }
+
+    private void ProviderConfigurationOnChanged(object? sender, EventArgs e) => Clear();
+
+    private void UpdateState(bool isRefreshing, UsageProviderErrorKind errorKind, TimeSpan? retryAfter)
+    {
+        lock (_stateGate)
+        {
+            _state = _state with
+            {
+                Snapshot = _snapshot,
+                LastSuccessfulRefreshAt = _snapshot is null ? null : _fetchedAt,
+                LastAttemptAt = isRefreshing ? _timeProvider.GetUtcNow() : _state.LastAttemptAt,
+                IsRefreshing = isRefreshing,
+                ErrorKind = errorKind,
+                RetryAfter = retryAfter,
+            };
+        }
+
+        RaiseStateChanged();
+    }
+
+    private void RaiseStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);
 
     private void ThrowIfDisposed()
     {

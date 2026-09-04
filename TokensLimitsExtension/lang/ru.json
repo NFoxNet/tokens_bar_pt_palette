@@ -19,6 +19,7 @@
     "metrics.currency": "Валюта",
     "status.estimate": "Оценка: ",
     "status.unavailable": "Лимиты недоступны",
+    "status.stale": "Устаревшие данные",
     "status.remaining": "Осталось {0}%",
     "status.reset": "сброс через {0}",
     "status.resetPassed": "сброс уже прошёл",

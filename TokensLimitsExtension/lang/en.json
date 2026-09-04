@@ -19,6 +19,7 @@
     "metrics.currency": "Currency",
     "status.estimate": "Estimate: ",
     "status.unavailable": "Limits unavailable",
+    "status.stale": "Stale",
     "status.remaining": "{0}% remaining",
     "status.reset": "resets in {0}",
     "status.resetPassed": "reset passed",
