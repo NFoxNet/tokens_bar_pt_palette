@@ -19,9 +19,10 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private readonly IUsageProvider _usageProvider;
     private readonly IUsageRefreshSettings? _refreshSettings;
     private readonly Action<string> _logger;
+    private readonly ILocalizationService _localization;
     private readonly Timer _refreshTimer;
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private IListItem[] _items = CreateLoadingItems();
+    private IListItem[] _items;
     private int _refreshInProgress;
     private int _hasLoaded;
     private int _activated;
@@ -52,20 +53,24 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         IUsageProvider usageProvider,
         Action<string>? logger = null,
         IUsageRefreshSettings? refreshSettings = null,
-        string? idSuffix = null)
+        string? idSuffix = null,
+        ILocalizationService? localization = null)
     {
         _usageProvider = usageProvider ?? throw new ArgumentNullException(nameof(usageProvider));
         _refreshSettings = refreshSettings;
         _logger = logger ?? LogMessage;
-        Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
+        _localization = localization ?? InvariantLocalizationService.Instance;
+        Icon = ProviderIconCatalog.For(_usageProvider.Descriptor.Id);
         var baseId = _usageProvider.Descriptor.Id.Equals("codex", StringComparison.OrdinalIgnoreCase)
             ? "com.tokenslimits.codex.limits"
             : $"com.tokenslimits.provider.{_usageProvider.Descriptor.Id}.limits";
         Id = string.IsNullOrWhiteSpace(idSuffix) ? baseId : $"{baseId}.{idSuffix}";
-        Title = $"{_usageProvider.Descriptor.DisplayName} limits";
-        Name = $"Show {_usageProvider.Descriptor.DisplayName} usage limits";
-        PlaceholderText = $"{_usageProvider.Descriptor.DisplayName} limits";
+        Title = $"{_usageProvider.Descriptor.DisplayName} {_localization.GetString("details.limits", "Limits")}";
+        Name = _localization.Format("details.show", _usageProvider.Descriptor.DisplayName);
+        PlaceholderText = Title;
         ShowDetails = true;
+        _items = CreateLoadingItems();
+        _localization.LanguageChanged += LocalizationOnLanguageChanged;
 
         _refreshTimer = new Timer(UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings))
         {
@@ -128,7 +133,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
                 SetItems([new ListItem(new NoOpCommand())
                 {
                     Title = _usageProvider.Descriptor.DisplayName,
-                    Subtitle = $"Не удалось получить лимиты: {ex.Message}",
+                    Subtitle = _localization.Format("overview.unavailable", ex.Message),
                 }], notify: true);
             }
         }
@@ -138,33 +143,36 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         }
     }
 
-    private static IListItem[] CreateItems(UsageSnapshot snapshot)
+    private IListItem[] CreateItems(UsageSnapshot snapshot)
     {
         var now = DateTimeOffset.UtcNow;
-        var estimatePrefix = snapshot.IsEstimate ? "Оценка: " : string.Empty;
-        var primary = new ListItem(new NoOpCommand())
+        var estimatePrefix = snapshot.IsEstimate ? _localization.GetString("status.estimate", "Estimate: ") : string.Empty;
+        var items = new List<IListItem>();
+        if (snapshot.PrimaryWindow is not null)
         {
-            Title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
-                ? "5ч"
-                : UsageDisplayFormatter.GetWindowLabel(snapshot.PrimaryWindow, "Основное"),
-            Subtitle = $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.PrimaryWindow, now)}",
-        };
-        var secondary = new ListItem(new NoOpCommand())
+            items.Add(new ListItem(new NoOpCommand())
+            {
+                Title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
+                    ? _localization.Format("time.hours", 5)
+                    : UsageDisplayFormatter.GetWindowLabel(snapshot.PrimaryWindow, _localization.GetString("details.primary", "Primary"), _localization),
+                Subtitle = $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.PrimaryWindow, now, _localization)}",
+            });
+        }
+        if (snapshot.SecondaryWindow is not null)
         {
-            Title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
-                ? "Еженедельно"
-                : snapshot.SecondaryWindow is null
-                    ? "Дополнительное"
-                    : UsageDisplayFormatter.GetWindowLabel(snapshot.SecondaryWindow, "Дополнительное"),
-            Subtitle = $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.SecondaryWindow, now)}",
-        };
-
-        var items = new List<IListItem> { primary, secondary };
+            items.Add(new ListItem(new NoOpCommand())
+            {
+                Title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
+                    ? _localization.GetString("window.weekly", "Weekly")
+                    : UsageDisplayFormatter.GetWindowLabel(snapshot.SecondaryWindow, _localization.GetString("details.secondary", "Additional"), _localization),
+                Subtitle = $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.SecondaryWindow, now, _localization)}",
+            });
+        }
         if (!string.IsNullOrWhiteSpace(snapshot.Plan))
         {
             items.Add(new ListItem(new NoOpCommand())
             {
-                Title = "План",
+                Title = _localization.GetString("details.plan", "Plan"),
                 Subtitle = snapshot.Plan,
             });
         }
@@ -182,8 +190,8 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         {
             items.Add(new ListItem(new NoOpCommand())
             {
-                Title = metric.Name,
-                Subtitle = metric.Unit is null ? metric.Value : $"{metric.Value} {metric.Unit}",
+                Title = GetMetricName(metric),
+                Subtitle = UsageDisplayFormatter.FormatMetric(metric, _localization.Culture),
             });
         }
 
@@ -212,6 +220,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         }
 
         Deactivate();
+        _localization.LanguageChanged -= LocalizationOnLanguageChanged;
         _refreshTimer.Elapsed -= RefreshTimerOnElapsed;
         _refreshTimer.Dispose();
         GC.SuppressFinalize(this);
@@ -240,11 +249,11 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         }
     }
 
-    private static IListItem[] CreateLoadingItems()
+    private IListItem[] CreateLoadingItems()
         => [new ListItem(new NoOpCommand())
         {
-            Title = "Лимиты",
-            Subtitle = "Загрузка...",
+            Title = _localization.GetString("details.limits", "Limits"),
+            Subtitle = _localization.GetString("details.loading", "Loading…"),
         }];
 
     internal void Deactivate()
@@ -280,19 +289,44 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         return true;
     }
 
-    private static string FormatAdditionalLimit(
+    private string FormatAdditionalLimit(
         AdditionalUsageLimit limit,
         DateTimeOffset now,
         string estimatePrefix)
     {
-        var primaryLabel = UsageDisplayFormatter.GetWindowLabel(limit.PrimaryWindow, "Основное");
-        var secondaryLabel = UsageDisplayFormatter.GetWindowLabel(limit.SecondaryWindow, "Дополнительное");
+        var primaryLabel = UsageDisplayFormatter.GetWindowLabel(limit.PrimaryWindow, _localization.GetString("details.primary", "Primary"), _localization);
+        var secondaryLabel = UsageDisplayFormatter.GetWindowLabel(limit.SecondaryWindow, _localization.GetString("details.secondary", "Additional"), _localization);
         var primary = limit.PrimaryWindow is null
-            ? $"{primaryLabel}: данные недоступны"
-            : $"{primaryLabel}: {UsageDisplayFormatter.FormatRemainingWindow(limit.PrimaryWindow, now)}";
+            ? $"{primaryLabel}: {_localization.GetString("overview.unavailable", "Data unavailable")}"
+            : $"{primaryLabel}: {UsageDisplayFormatter.FormatRemainingWindow(limit.PrimaryWindow, now, _localization)}";
         var secondary = limit.SecondaryWindow is null
-            ? $"{secondaryLabel}: данные недоступны"
-            : $"{secondaryLabel}: {UsageDisplayFormatter.FormatRemainingWindow(limit.SecondaryWindow, now)}";
+            ? $"{secondaryLabel}: {_localization.GetString("overview.unavailable", "Data unavailable")}"
+            : $"{secondaryLabel}: {UsageDisplayFormatter.FormatRemainingWindow(limit.SecondaryWindow, now, _localization)}";
         return $"{estimatePrefix}{primary}; {secondary}";
     }
+
+    private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        Title = $"{_usageProvider.Descriptor.DisplayName} {_localization.GetString("details.limits", "Limits")}";
+        Name = _localization.Format("details.show", _usageProvider.Descriptor.DisplayName);
+        PlaceholderText = Title;
+        if (_usageProvider.TryGetCachedSnapshot(out var snapshot))
+        {
+            SetItems(CreateItems(snapshot), notify: true);
+        }
+        else
+        {
+            SetItems(CreateLoadingItems(), notify: true);
+        }
+    }
+
+    private string GetMetricName(UsageMetric metric)
+        => string.Equals(metric.SemanticKey, "totalBalance", StringComparison.OrdinalIgnoreCase)
+            ? _localization.GetString("metrics.totalBalance", "Total balance")
+            : metric.Name;
 }

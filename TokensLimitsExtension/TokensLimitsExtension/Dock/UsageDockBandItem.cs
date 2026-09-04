@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Timer = System.Timers.Timer;
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
+using TokensLimitsExtension.Core.Models;
 using TokensLimitsExtension.Core.Providers;
 using TokensLimitsExtension.Core.Services;
 
@@ -16,17 +17,20 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     private readonly IUsageProvider _provider;
     private readonly IUsageRefreshSettings? _refreshSettings;
     private readonly Action<string> _logger;
+    private readonly ILocalizationService _localization;
     private readonly Timer _refreshTimer;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private int _refreshInProgress;
     private int _deactivated;
     private int _disposed;
+    private UsageSnapshot? _lastSnapshot;
 
     public UsageDockBandItem(
         IUsageProvider provider,
         Action<string>? logger = null,
         ICommand? detailsCommand = null,
-        IUsageRefreshSettings? refreshSettings = null)
+        IUsageRefreshSettings? refreshSettings = null,
+        ILocalizationService? localization = null)
         : base(detailsCommand ?? new NoOpCommand
         {
             Id = $"com.tokenslimits.provider.{provider?.Descriptor.Id}.dock",
@@ -36,11 +40,12 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _refreshSettings = refreshSettings;
         _logger = logger ?? LogMessage;
+        _localization = localization ?? InvariantLocalizationService.Instance;
 
         Title = _provider.Descriptor.DisplayName;
-        Subtitle = "Загрузка лимитов...";
-        DockSubtitle = "Загрузка лимитов...";
-        Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
+        Subtitle = _localization.GetString("details.loading", "Loading…");
+        DockSubtitle = Subtitle;
+        Icon = ProviderIconCatalog.For(_provider.Descriptor.Id);
 
         _refreshTimer = new Timer(UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings))
         {
@@ -49,6 +54,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         _refreshTimer.Elapsed += RefreshTimerOnElapsed;
         _refreshTimer.Start();
         _refreshSettings?.Changed += RefreshSettingsOnChanged;
+        _localization.LanguageChanged += LocalizationOnLanguageChanged;
 
         _ = RefreshAsync();
     }
@@ -79,7 +85,8 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
             }
 
             Title = snapshot.ProviderDisplayName;
-            DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot);
+            _lastSnapshot = snapshot;
+            DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization);
             Subtitle = DockSubtitle;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
@@ -89,8 +96,8 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         {
             if (IsRefreshEnabled)
             {
-                Subtitle = "Лимиты недоступны";
-                DockSubtitle = "Лимиты недоступны";
+                Subtitle = _localization.GetString("status.unavailable", "Limits unavailable");
+                DockSubtitle = Subtitle;
                 _logger($"[TokensLimits] ERROR: {ex.Message}");
             }
         }
@@ -143,6 +150,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
 
         _refreshTimer.Stop();
         _refreshSettings?.Changed -= RefreshSettingsOnChanged;
+        _localization.LanguageChanged -= LocalizationOnLanguageChanged;
         _lifetimeCts.Cancel();
     }
 
@@ -150,5 +158,24 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     {
         Debug.WriteLine(message);
         ExtensionHost.LogMessage(message);
+    }
+
+    private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (!IsRefreshEnabled)
+        {
+            return;
+        }
+
+        if (_lastSnapshot is null)
+        {
+            Subtitle = _localization.GetString("details.loading", "Loading…");
+            DockSubtitle = Subtitle;
+            return;
+        }
+
+        Title = _lastSnapshot.ProviderDisplayName;
+        DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(_lastSnapshot, _localization);
+        Subtitle = DockSubtitle;
     }
 }

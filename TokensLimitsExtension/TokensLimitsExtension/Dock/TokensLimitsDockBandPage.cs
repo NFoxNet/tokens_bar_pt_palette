@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
+using TokensLimitsExtension.Core.Services;
 
 namespace TokensLimitsExtension;
 
@@ -18,15 +19,18 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
     public const string StableId = "com.tokenslimits.provider.codex.band";
 
     private IListItem[] _items = [];
+    private readonly ILocalizationService _localization;
     private int _disposed;
 
-    public TokensLimitsDockBandPage()
+    public TokensLimitsDockBandPage(ILocalizationService? localization = null)
     {
+        _localization = localization ?? InvariantLocalizationService.Instance;
         Id = StableId;
-        Title = "Tokens Limits";
-        Name = "Show enabled provider limits in Dock";
-        PlaceholderText = "Enabled providers";
+        Title = _localization.GetString("app.title", "Tokens Limits");
+        Name = _localization.GetString("dock.show", "Show enabled provider limits in Dock");
+        PlaceholderText = _localization.GetString("overview.providers", "Enabled providers");
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
+        _localization.LanguageChanged += LocalizationOnLanguageChanged;
     }
 
     public override IListItem[] GetItems()
@@ -53,6 +57,20 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
         }
 
         Volatile.Write(ref _items, []);
+        _localization.LanguageChanged -= LocalizationOnLanguageChanged;
         GC.SuppressFinalize(this);
+    }
+
+    private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        Title = _localization.GetString("app.title", "Tokens Limits");
+        Name = _localization.GetString("dock.show", "Show enabled provider limits in Dock");
+        PlaceholderText = _localization.GetString("overview.providers", "Enabled providers");
+        RaiseItemsChanged(Volatile.Read(ref _items).Length);
     }
 }

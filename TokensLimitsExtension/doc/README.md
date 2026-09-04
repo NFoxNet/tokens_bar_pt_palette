@@ -23,6 +23,7 @@
 | `TokensLimitsExtension.Core/Providers/UsageProviderDescriptorRegistry.cs` | Каталог провайдеров и их настроек |
 | `TokensLimitsExtension/Properties/PublishProfiles/` | Профили публикации для x64 и ARM64 |
 | `.github/` | Инструкции и сценарии для разработки Command Palette |
+| `lang/` | JSON-словари интерфейса; `en.json` — обязательный fallback |
 
 ## Технологический контур
 
@@ -47,6 +48,7 @@
 - [Архитектура](architecture.md)
 - [Разработка, сборка и тесты](development.md)
 - [Провайдеры и добавление нового адаптера](providers.md)
+- [Языки и иконки](localization.md)
 - [Настройки, безопасность и диагностика](operations.md)
 - [Публичные релизы, установка и подпись](release.md)
 

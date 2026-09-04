@@ -80,14 +80,14 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         _snapshotCaches = providers
             .Select(provider => new UsageSnapshotCache(provider, _settings))
             .ToArray();
-        _overviewPage = new UsageOverviewPage([], [], LogMessage, _settings);
-        _dockBandPage = new TokensLimitsDockBandPage();
+        _overviewPage = new UsageOverviewPage([], [], LogMessage, _settings, _settings.Localization);
+        _dockBandPage = new TokensLimitsDockBandPage(_settings.Localization);
         _dockBands =
         [
             new CommandItem(_dockBandPage)
             {
-                Title = "Tokens Limits",
-                Subtitle = "Лимиты включённых провайдеров",
+                Title = _settings.Localization.GetString("app.title", "Tokens Limits"),
+                Subtitle = _settings.Localization.GetString("dock.show", "Show enabled provider limits in Dock"),
                 Icon = _dockBandPage.Icon,
             },
         ];
@@ -95,8 +95,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         [
             new CommandItem(_overviewPage)
             {
-                Title = "Провайдеры",
-                Subtitle = "Лимиты и расход включённых провайдеров",
+                Title = _settings.Localization.GetString("overview.providers", "Enabled providers"),
+                Subtitle = _settings.Localization.GetString("overview.providers", "Enabled providers"),
             },
         ];
         _settings.Changed += SettingsOnChanged;
@@ -170,9 +170,10 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         UsageSnapshotCache provider,
         Action<string> logger,
         ICommand detailsCommand,
-        IUsageRefreshSettings refreshSettings)
+        IUsageRefreshSettings refreshSettings,
+        ILocalizationService localization)
     {
-        return new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings);
+        return new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings, localization);
     }
 
     private void SettingsOnChanged(object? sender, EventArgs e)
@@ -208,15 +209,15 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             oldPages = _pages;
             oldDockPages = _dockPages;
             _pages = enabledCaches
-                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings))
+                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, localization: _settings.Localization))
                 .ToArray();
             _dockPages = enabledCaches
-                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock"))
+                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock", localization: _settings.Localization))
                 .ToArray();
             _dockBandItems = enabledCaches
                 .Zip(
                     _dockPages,
-                    (cache, page) => CreateDockItem(cache, LogMessage, page, _settings))
+                    (cache, page) => CreateDockItem(cache, LogMessage, page, _settings, _settings.Localization))
                 .ToArray();
             _enabledProviderIds = enabledIds;
             _overviewPage.UpdateProviders(enabledCaches, _pages);

@@ -1,0 +1,250 @@
+[
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-abacus.svg",
+    "sha256": "611f139db4d38d1a0320734ff9f720a1c3e4a64234414b9b7900f3252381eb46"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-aiand.svg",
+    "sha256": "212799a42876569261c55aaa77289cab489d1f1bbb35b7a92d8e3f0660c8bac9"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-alibaba.svg",
+    "sha256": "d40824f3e3f9263d223a2a449b963a4737dcd1c207c706e3019de523e0f6cb18"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-amp.svg",
+    "sha256": "39beb7e04bb6c6efccae7f8f9dd2cdec5e10a9f737f6634e1b2a5d338b81b022"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-antigravity.svg",
+    "sha256": "cdc3ae7e42ed4ff115b80122b7b49a69202c418ba188f7a0e00abf4f9a6eefb6"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-bedrock.svg",
+    "sha256": "ba6c508616d9a86d0d1d8140fb350bffd3e1ca879ba7739a67223d7efa820d47"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-chutes.svg",
+    "sha256": "2a8ecd98133f439b6f7e65c768790c32a04531877963e3a3ce2579de528d19ea"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-claude.svg",
+    "sha256": "5b87a0e7645cf1fc929ff2cd87233fb8356df8d2bcb6d012ea79609ee13174e4"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-clawrouter.svg",
+    "sha256": "e6eac8444abf4cf757edbe7e6bace129dfd95723ea48fd7f0c609c559dbc2139"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-codebuff.svg",
+    "sha256": "cc0e656ed40b5032d98dee85f3e5afd9f658e589b689814db6c53b862d1a2a3e"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-codex.svg",
+    "sha256": "c47930ce269a065182ccfd6e924536b28e03561fae8cc30f5990b40a07662749"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-commandcode.svg",
+    "sha256": "7d5a25f04397216394d9e865ba1414c0a6326367e57e7547c296c4de88cf0b58"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-copilot.svg",
+    "sha256": "5f0df653c3721e090b5a496f70ff0270023a7906af31b5c75434b7c40287aec5"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-crof.svg",
+    "sha256": "bbebe0e973765a11554ba4e38f9aaab080c249213a28f4fe059f94d7fa9e7d1b"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-cursor.svg",
+    "sha256": "3a709a142c6e956086b8b03a07d5dcf2e87f826fbccc492ac641ae7193cce76f"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-deepgram.svg",
+    "sha256": "69dc3a22f1969c936762838a15753545526260fa7f7cd9ae0be7e1abd9c7dcf9"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-deepinfra.svg",
+    "sha256": "0cb5719101236c97ace99564d6a9686203f66b452cbf8a87affda260124c41db"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-deepseek.svg",
+    "sha256": "1fffecd783aee9353e36767c50d56bb08f58f33f2bcf6b24e7da7fa7f8e2da11"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-devin.svg",
+    "sha256": "e9327746ea65b5cfafd1cb072c38c2eb2cfd4aa3fa4355d847f4fe1ecd8514d0"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-doubao.svg",
+    "sha256": "5c15329e218649d607b9b39e738deab28784f147acd80094d1c1bc338d462510"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-elevenlabs.svg",
+    "sha256": "645109995794c2d2e3fb1abaee7dafee078278f88fe8bd9761412cc6dd84f761"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-factory.svg",
+    "sha256": "cdc319568921de991988a5328dece0c016ba53d625951a2748161f93ed48c685"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-fireworks.svg",
+    "sha256": "7a04cd0d360fcf12b92ec14f2c87aea3e860c639f21d6c58e3a415bd5b09f5b1"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-gemini.svg",
+    "sha256": "4af17bce47c4aae095705de678527d2c1fb02f25533f2549973cc914d6593619"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-generic.svg",
+    "sha256": "0a35542f067f396cf9413dc8e475358a06860fdfb3b0d40321a2b5e93b49553d"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-grok.svg",
+    "sha256": "f7228513458b5c78c24613c09952cdbcbc4af4454a06275e36ab4ce7fb5f22b2"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-groq.svg",
+    "sha256": "0fef344c7a46ec6478a16db94b4a25ee6a522d6cd0db6fd58ea940e86bf1b197"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-ibmbob.svg",
+    "sha256": "34bcf5c2c0f346bff6925d06f64ecf8f8bb3a955b49eef08e09cadce81add549"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-jetbrains.svg",
+    "sha256": "b04cc9f6cb674a1a76f80974484b6554752bdfd0dd7d7e892a80baa4b126156d"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-kilo.svg",
+    "sha256": "8dbe7baf9807e013667fb8767ef8c9cb8e4cb75cc342e865e7b66325d118fe32"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-kimi.svg",
+    "sha256": "e81af41585ca07e6d8327fbbeb133e00d48560be1023055eb59a4a718cdcede0"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-kiro.svg",
+    "sha256": "9278727b4cbe94e5726b79cbc2555851a28f04ebdd31a48a101f89270ae38174"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-litellm.svg",
+    "sha256": "39b551d62886cbe9ca1d33ec7aac813d3dccae427bd913e822013e2db8ee51bf"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-llmproxy.svg",
+    "sha256": "83a153192d646692ad016bef9b93f7f291fc3a26dc62cb7908add06bfc983109"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-longcat.svg",
+    "sha256": "04ad8f31522fceef73761aa0f8b4522c902e518781d9a92b72def7fe941d4e6f"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-manus.svg",
+    "sha256": "134bbaa3e0901ed5f8f8fd63a4369245d3c6d8406bedb92978e4ad63c7f6e178"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-mimo.svg",
+    "sha256": "e140271db45b2ed5a939c744abad30e82f1a8f97d82ebfe659bb9b5c9db84480"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-minimax.svg",
+    "sha256": "bf6d4c83f429a2608de6ce961416ef8d86c4746e58e6e2ed45d416d7b132514e"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-mistral.svg",
+    "sha256": "bf6e7c63e7f5785234103a69504ab2e29dd0a33c830c0e4798f8bbfb7bbb15e5"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-neuralwatt.svg",
+    "sha256": "a89d91017cbf182c4dad8b8226f8623c1333c21251cf514f3c1724771afcf46b"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-notion.svg",
+    "sha256": "1ffa05c609d3ace7b3f1de7595413b0f8a2bfb02c50473a5c2fadf192a101a4f"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-opencode.svg",
+    "sha256": "327f9c9070cc3800e1df7a0a35c1f655f1a2d1b22f9b406b792e62b034ed4e58"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-opencodego.svg",
+    "sha256": "327f9c9070cc3800e1df7a0a35c1f655f1a2d1b22f9b406b792e62b034ed4e58"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-openrouter.svg",
+    "sha256": "8f3ff2595855b391bcfbc8ef493b18f46dd603a3acbc723b0d19ca356773bc98"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-perplexity.svg",
+    "sha256": "b175df3ebdd46af5f3ab145d687d03ce01ec7aa362978e5bc7c714de3636858b"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-poe.svg",
+    "sha256": "d4601fceb450cfe5e5a7b3e690e8e65737b47999d2f7e37b8fa35dd36a577a27"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-qoder.svg",
+    "sha256": "67650f7334bc1a636548e01a869d0140c85412c8833be78ec3fb2f2a9023c2df"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-qwencloud.svg",
+    "sha256": "6c5f09f0d68b8ec86be0090a798d66d1f9989814891823bbfa752d171d2495a1"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-sakana.svg",
+    "sha256": "9ca3c13a9749a044138ed0e212e3aaa187436051b1ed7f7b829f7c2f07d00245"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-stepfun.svg",
+    "sha256": "446ed425e471b8130e200e53d5c6f73fb5516558e9152c6b90e781bdb7277987"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-sub2api.svg",
+    "sha256": "72d83f68e31c97aa9e2adb29c844068345a8ccdd59b68c3011a462f660017fe6"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-synthetic.svg",
+    "sha256": "50097923233a6b2ee146a2c19ce141bed3612407bfeb5ce56976c727e2b9d309"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-t3chat.svg",
+    "sha256": "146c52e1f5e2dd3e245d001ebdf1657579cc16277059d0496b916ae95d6b28c3"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-venice.svg",
+    "sha256": "32120ee910761b4050f9afdabf2c11318f7bb038f5fb12876644f70be3be9dec"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-warp.svg",
+    "sha256": "1898ec93d92f9a6f45af34f393a61a414a234c7c4548fda775404351d4d2250a"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-wayfinder.svg",
+    "sha256": "43d0ecd399d4e4e34fa7b0fd271018f7c3b64421a05a5e0122e3a106d7c77b78"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-windsurf.svg",
+    "sha256": "71422a2e3238e4ecd0a33a1123688f86c570bb4082e6609b98fe9b82db8aa1c1"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-xai.svg",
+    "sha256": "9855e9ff1270b97b2ccc6e38c54e8295ca8493dcbd64a0fa59a436fd33c6f234"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-zai.svg",
+    "sha256": "9b2b539ce0226f0aab8a884cea7584cf90ca33dd038a62bdc89b16e32affae9d"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-zed.svg",
+    "sha256": "95c807d0715ba5d329a7dd9fcaf755ccfe28fdb8ed7658db1cf314e21ab1a801"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-zenmux.svg",
+    "sha256": "cbc209fbdc4f8b2a47ceacc95bb72673aa04017c910d8ba615140e555608f1da"
+  },
+  {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-zoommate.svg",
+    "sha256": "3603fcf7657a9ab2e13c9b0ccd0721daa34dee15f3e9cc89e69c7231f0458de5"
+  }
+]
