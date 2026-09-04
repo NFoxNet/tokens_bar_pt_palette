@@ -16,6 +16,17 @@ The installer verifies the package signature and checksums. Updates retain setti
 - English by default, Russian included; additional languages can be added as JSON files in `TokensLimitsExtension/lang/`.
 - Provider-specific API keys and settings stored securely in the Windows user profile.
 
+## Supported providers
+
+The extension includes adapters for the providers below. The available metrics depend on each provider's API, subscription and configured authentication.
+
+- **Codex:** Codex.
+- **A–C:** Abacus AI, ai&, Alibaba Coding Plan, Alibaba Token Plan, Amp, Antigravity, Augment, Azure OpenAI, AWS Bedrock, Chutes, Claude, ClawRouter, ClinePass, Codebuff, Command Code, Copilot, Crof and Cursor.
+- **D–G:** Deepgram, DeepInfra, DeepSeek, Devin, Doubao, Droid, ElevenLabs, Fireworks, Gemini, Grok and Groq.
+- **I–M:** IBM Bob, JetBrains AI, Kilo, Kimi Code, Kiro, LiteLLM, LLM Proxy, LongCat, Manus, Xiaomi MiMo, MiniMax, Mistral and Moonshot.
+- **N–R:** Neuralwatt, Notion AI, Ollama, OpenAI, OpenCode, OpenCode Go, OpenRouter, Perplexity, Poe, Qoder and Qwen Cloud.
+- **S–Z:** Sakana AI, StepFun, sub2api, Synthetic, T3 Chat, Venice, Vertex AI, Warp, Wayfinder, Windsurf, xAI, z.ai, Zed, ZenMux and ZoomMate.
+
 https://github.com/user-attachments/assets/a5dc3be1-7459-4a65-81e8-e5112dd34086
 
 <img width="3070" height="164" alt="193259" src="https://github.com/user-attachments/assets/aead3072-0ab0-4614-8fd7-d8b3baa9e298" />
