@@ -76,19 +76,10 @@ $publishedPackages = foreach ($package in $packages) {
     Get-Item -LiteralPath $destination
 }
 
-$signTool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter 'signtool.exe' |
-    Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
-    Sort-Object FullName -Descending |
-    Select-Object -First 1
-
-if ($null -eq $signTool) {
-    throw 'Windows SDK signtool.exe was not found. Install the Windows SDK before creating a public release.'
-}
-
-foreach ($package in $publishedPackages) {
-    & $signTool.FullName sign /fd SHA256 /sha1 $certificate.Thumbprint /s My /v $package.FullName
-    if ($LASTEXITCODE -ne 0) { throw "Signing failed for $($package.Name)." }
-}
+# Microsoft.Windows.SDK.BuildTools.MSIX signs the package during the build above
+# through PackageCertificateThumbprint. Running signtool over that complete MSIX
+# a second time corrupts its ZIP footprint files, making the release uninstallable.
+# Copy the build-signed package verbatim instead.
 
 $certificateOutput = Join-Path $OutputDirectory 'NFoxNet.TokensLimitsExtension.cer'
 Export-Certificate -Cert $certificate -FilePath $certificateOutput -Force | Out-Null
