@@ -27,7 +27,7 @@ The package requires:
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-TokensLimitsExtension.ps1 `
-     -PackagePath .\TokensLimitsExtension_0.0.2.2_x64.msix `
+     -PackagePath .\TokensLimitsExtension_0.0.4.1_x64.msix `
      -CertificatePath .\NFoxNet.TokensLimitsExtension.cer
    ```
 
@@ -42,7 +42,7 @@ Get-AppxPackage TokensLimitsExtension | Remove-AppxPackage -PreserveApplicationD
 
 ## Trust and signing model
 
-`v0.0.2.2` uses a self-signed `CN=NFoxNet` code-signing certificate. This is a transparent sideload distribution mechanism: the installer imports the release `.cer` into `LocalMachine\TrustedPeople` after the administrator accepts UAC, which is an explicit device-level trust decision. The certificate subject must exactly match the MSIX `Identity/Publisher`.
+`v0.0.4.1` uses a self-signed `CN=NFoxNet` code-signing certificate. This is a transparent sideload distribution mechanism: the installer imports the release `.cer` into `LocalMachine\TrustedPeople` after the administrator accepts UAC, which is an explicit device-level trust decision. The certificate subject must exactly match the MSIX `Identity/Publisher`.
 
 For a frictionless production channel, the next distribution step is either:
 

@@ -75,7 +75,7 @@ UsageRefreshCoordinator (one timer)
 
 `TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует общее `Changed` и отдельное `ProviderConfigurationChanged`. Настройки и зашифрованные секреты всегда читаются и записываются в едином стабильном каталоге `%LOCALAPPDATA%\TokensLimitsExtension`. При первом запуске после обновления содержимое host/package-local каталога переносится туда, если там найден более новый secret store. При смене языка cache не инвалидируется; при смене ключа, аккаунта, URL или включения провайдера его старый snapshot очищается до нового запроса. `TokensLimitsExtensionCommandsProvider` на событие настроек:
 
-1. `UsageSnapshotCache` один раз инвалидирует snapshot;
+1. `UsageSnapshotCache` очищает snapshot только при изменении конфигурации провайдера;
 2. заново вычисляет список включённых провайдеров;
 3. создаёт новые обычные страницы, отдельные Dock detail pages и dock items при изменении состава;
 4. coordinator обновляет набор активных кэшей, а UI-поверхности перестраиваются по их событиям состояния без самостоятельного сетевого опроса.
@@ -84,4 +84,4 @@ UsageRefreshCoordinator (one timer)
 
 ## Утилизация ресурсов
 
-При остановке расширения порядок важен: сначала снимаются UI surfaces и таймеры, затем кэши, registry, настройки и принадлежащие `HttpClient`/Codex-сервисы. Новые disposable-компоненты должны быть включены в этот lifecycle и иметь idempotent `Dispose()`.
+При остановке расширения порядок важен: сначала снимаются UI surfaces и coordinator, затем кэши, registry, настройки и принадлежащие `HttpClient`/Codex-сервисы. Новые disposable-компоненты должны быть включены в этот lifecycle и иметь idempotent `Dispose()`.

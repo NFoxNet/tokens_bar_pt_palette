@@ -37,7 +37,7 @@ Release MSIX с `-PreserveApplicationData` тоже не поддерживае�
 
 Для проверки UI используйте **подписанное обновление** с версией выше уже
 установленной. Это штатный AppX upgrade, который был проверен для перехода
-`0.0.2.2 → 0.0.3.0` и сохраняет application data:
+`0.0.3.1 → 0.0.4.1` и сохраняет application data:
 
 ```powershell
 # Из корня TokensLimitsExtension. Путь и пароль PFX держите вне репозитория.
