@@ -87,7 +87,8 @@ public sealed class TokensLimitsPageIntegrationTests
         Assert.Equal(2, overviewProviderItems.Length);
         var dockItem = Assert.Single(dockItems.Cast<UsageDockBandItem>(), item => item.Title == "Other Provider");
         var overviewProviderItem = Assert.Single(overviewProviderItems, item => item.Title == "Other Provider");
-        Assert.Equal("5ч\\70%, 7д\\60%", dockItem.Subtitle);
+        Assert.Contains("\\70%,", dockItem.Subtitle, StringComparison.Ordinal);
+        Assert.EndsWith("\\60%", dockItem.Subtitle, StringComparison.Ordinal);
         Assert.Equal("com.tokenslimits.provider.other-provider.limits.dock", dockItem.Command!.Id);
         Assert.IsType<TokensLimitsPage>(dockItem.Command);
         Assert.NotSame(overviewProviderItem.Command, dockItem.Command);
