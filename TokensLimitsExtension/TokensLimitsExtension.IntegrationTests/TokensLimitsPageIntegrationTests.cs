@@ -119,6 +119,29 @@ public sealed class TokensLimitsPageIntegrationTests
         Assert.True(item.IsDisposed);
     }
 
+    [Fact]
+    public async Task DockBandInvalidatesItemsWhenSharedSnapshotChanges()
+    {
+        var provider = new MutableGenericProvider(
+            "codex",
+            "Codex",
+            CreateSnapshot("codex", "Codex", primaryUsedPercent: 100));
+        using var cache = new UsageSnapshotCache(provider);
+        await cache.RefreshAsync();
+        using var dockItem = new UsageDockBandItem(cache);
+        using var dockPage = new TokensLimitsDockBandPage();
+        dockPage.UpdateItems([dockItem]);
+
+        var itemsChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        dockPage.ItemsChanged += (_, _) => itemsChanged.TrySetResult();
+
+        provider.SetSnapshot(CreateSnapshot("codex", "Codex", primaryUsedPercent: 4));
+        await cache.RefreshAsync(force: true);
+
+        await itemsChanged.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Contains("96%", dockItem.Subtitle, StringComparison.Ordinal);
+    }
+
     private sealed class FakeUsageProvider(CodexUsageSnapshot snapshot) : ICodexUsageProvider
     {
         public Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
@@ -135,6 +158,27 @@ public sealed class TokensLimitsPageIntegrationTests
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(snapshot);
     }
+
+    private sealed class MutableGenericProvider(string id, string displayName, UsageSnapshot snapshot) : IUsageProvider
+    {
+        private UsageSnapshot _snapshot = snapshot;
+
+        public UsageProviderDescriptor Descriptor { get; } = new(id, displayName);
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(Volatile.Read(ref _snapshot));
+
+        public void SetSnapshot(UsageSnapshot snapshot) => Volatile.Write(ref _snapshot, snapshot);
+    }
+
+    private static UsageSnapshot CreateSnapshot(string id, string displayName, int primaryUsedPercent)
+        => new(
+            id,
+            displayName,
+            new UsageWindow(primaryUsedPercent, DateTimeOffset.UtcNow.AddHours(1), 3600),
+            new UsageWindow(53, DateTimeOffset.UtcNow.AddDays(1), 86400),
+            null,
+            false);
 
     private sealed class TestDirectory : IDisposable
     {

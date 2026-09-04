@@ -19,6 +19,7 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
     public const string StableId = "com.tokenslimits.provider.codex.band";
 
     private IListItem[] _items = [];
+    private UsageDockBandItem[] _observedItems = [];
     private readonly ILocalizationService _localization;
     private int _disposed;
 
@@ -44,7 +45,20 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
             return;
         }
 
-        var updatedItems = items.Cast<IListItem>().ToArray();
+        var previousItems = _observedItems;
+        var updatedObservedItems = items.ToArray();
+        foreach (var item in previousItems)
+        {
+            item.PropChanged -= DockItemOnPropChanged;
+        }
+
+        foreach (var item in updatedObservedItems)
+        {
+            item.PropChanged += DockItemOnPropChanged;
+        }
+
+        var updatedItems = updatedObservedItems.Cast<IListItem>().ToArray();
+        _observedItems = updatedObservedItems;
         Volatile.Write(ref _items, updatedItems);
         RaiseItemsChanged(updatedItems.Length);
     }
@@ -57,6 +71,11 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
         }
 
         Volatile.Write(ref _items, []);
+        foreach (var item in _observedItems)
+        {
+            item.PropChanged -= DockItemOnPropChanged;
+        }
+        _observedItems = [];
         _localization.LanguageChanged -= LocalizationOnLanguageChanged;
         GC.SuppressFinalize(this);
     }
@@ -72,5 +91,17 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
         Name = _localization.GetString("dock.show", "Show enabled provider limits in Dock");
         PlaceholderText = _localization.GetString("overview.providers", "Enabled providers");
         RaiseItemsChanged(Volatile.Read(ref _items).Length);
+    }
+
+    private void DockItemOnPropChanged(object sender, IPropChangedEventArgs args)
+    {
+        if (Volatile.Read(ref _disposed) == 0
+            && (args.PropertyName == nameof(UsageDockBandItem.Title)
+                || args.PropertyName == nameof(UsageDockBandItem.Subtitle)))
+        {
+            // Dock does not always repaint a nested ListItem property change.
+            // Re-publishing its stable list makes a shared-cache update visible.
+            RaiseItemsChanged(Volatile.Read(ref _items).Length);
+        }
     }
 }
