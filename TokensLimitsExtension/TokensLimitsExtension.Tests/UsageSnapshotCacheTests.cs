@@ -73,6 +73,39 @@ public sealed class UsageSnapshotCacheTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh);
     }
 
+    [Fact]
+    public async Task KeepsLastSuccessfulSnapshotWhenRefreshFails()
+    {
+        var provider = new SucceedsThenFailsProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+
+        await cache.RefreshAsync();
+        await cache.RefreshAsync(force: true);
+
+        Assert.True(cache.TryGetSnapshot(out var snapshot));
+        Assert.Equal("first", snapshot.Plan);
+        Assert.Equal(UsageProviderErrorKind.Network, cache.State.ErrorKind);
+        Assert.True(cache.State.IsStale);
+    }
+
+    [Fact]
+    public async Task LanguageStyleChangeDoesNotInvalidateButConfigurationChangeClearsSnapshot()
+    {
+        var provider = new CountingProvider();
+        var settings = new ConfigurationAwareSettings(TimeSpan.FromMinutes(10));
+        using var cache = new UsageSnapshotCache(provider, settings, new FixedTimeProvider());
+
+        await cache.GetUsageSnapshotAsync();
+        settings.RaiseGeneralChanged();
+        await cache.GetUsageSnapshotAsync();
+
+        Assert.Equal(1, provider.CallCount);
+        settings.RaiseProviderConfigurationChanged();
+        Assert.False(cache.TryGetSnapshot(out _));
+        await cache.GetUsageSnapshotAsync();
+        Assert.Equal(2, provider.CallCount);
+    }
+
     private sealed class BlockingProvider : IUsageProvider
     {
         public UsageProviderDescriptor Descriptor { get; } = new("blocking", "Blocking");
@@ -126,12 +159,38 @@ public sealed class UsageSnapshotCacheTests
         }
     }
 
+    private sealed class SucceedsThenFailsProvider : IUsageProvider
+    {
+        private int _callCount;
+        public UsageProviderDescriptor Descriptor { get; } = new("flaky", "Flaky");
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _callCount) == 1)
+            {
+                return Task.FromResult(CreateSnapshot(Descriptor) with { Plan = "first" });
+            }
+
+            throw new HttpRequestException("connection failed");
+        }
+    }
+
     private sealed class TestRefreshSettings(TimeSpan refreshInterval) : IUsageRefreshSettings
     {
         public TimeSpan RefreshInterval { get; } = refreshInterval;
         public event EventHandler? Changed;
 
         public void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private sealed class ConfigurationAwareSettings(TimeSpan refreshInterval) : IUsageRefreshSettings, IUsageProviderConfigurationChangeSource
+    {
+        public TimeSpan RefreshInterval { get; } = refreshInterval;
+        public event EventHandler? Changed;
+        public event EventHandler? ProviderConfigurationChanged;
+
+        public void RaiseGeneralChanged() => Changed?.Invoke(this, EventArgs.Empty);
+        public void RaiseProviderConfigurationChanged() => ProviderConfigurationChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private sealed class FixedTimeProvider : TimeProvider

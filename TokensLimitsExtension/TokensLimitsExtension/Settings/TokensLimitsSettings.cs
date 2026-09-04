@@ -12,7 +12,7 @@ using PaletteSettings = Microsoft.CommandPalette.Extensions.Toolkit.Settings;
 
 namespace TokensLimitsExtension.Settings;
 
-public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRefreshSettings, IUsageProviderConfiguration, IDisposable
+public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRefreshSettings, IUsageProviderConfiguration, IUsageProviderConfigurationChangeSource, IDisposable
 {
     private const int MinimumRefreshIntervalSeconds = 30;
     private const int MaximumRefreshIntervalSeconds = 3600;
@@ -41,6 +41,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     private bool _disposed;
     private bool _handlingSettingsChange;
+    private string _providerConfigurationFingerprint = string.Empty;
 
     public TokensLimitsSettings()
         : this(ResolveDefaultStorage())
@@ -76,6 +77,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         _localization.ApplyPreference(_language.Value);
         ValidateRefreshInterval();
         MigrateAndMaskLoadedSecrets();
+        _providerConfigurationFingerprint = GetProviderConfigurationFingerprint();
         Settings.SettingsChanged += OnSettingsChanged;
     }
 
@@ -93,6 +95,8 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     }
 
     public event EventHandler? Changed;
+
+    public event EventHandler? ProviderConfigurationChanged;
 
     public ILocalizationService Localization => _localization;
 
@@ -156,6 +160,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         Settings.SettingsChanged -= OnSettingsChanged;
         _secretStore.Dispose();
         Changed = null;
+        ProviderConfigurationChanged = null;
         GC.SuppressFinalize(this);
     }
 
@@ -297,6 +302,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
 
         _handlingSettingsChange = true;
+        var previousFingerprint = _providerConfigurationFingerprint;
         try
         {
             _localization.ApplyPreference(_language.Value);
@@ -311,7 +317,30 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             _handlingSettingsChange = false;
         }
 
+        _providerConfigurationFingerprint = GetProviderConfigurationFingerprint();
+        if (!string.Equals(previousFingerprint, _providerConfigurationFingerprint, StringComparison.Ordinal))
+        {
+            ProviderConfigurationChanged?.Invoke(this, EventArgs.Empty);
+        }
         Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private string GetProviderConfigurationFingerprint()
+    {
+        // This comparison is intentionally process-local and never logged or persisted.
+        // It lets us identify a key/account edit after secret values have been moved to DPAPI.
+        var parts = new List<string>();
+        foreach (var descriptor in UsageProviderDescriptorRegistry.All)
+        {
+            parts.Add(descriptor.Id);
+            parts.Add(IsEnabled(descriptor.Id).ToString(CultureInfo.InvariantCulture));
+            foreach (var field in descriptor.Settings)
+            {
+                parts.Add(field.Key);
+                parts.Add(GetValue(descriptor.Id, field.Key) ?? string.Empty);
+            }
+        }
+        return string.Join("\u001F", parts);
     }
 
     private bool ValidateRefreshInterval()

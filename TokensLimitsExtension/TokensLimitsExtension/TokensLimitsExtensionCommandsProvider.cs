@@ -28,6 +28,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private TokensLimitsPage[] _pages = [];
     private TokensLimitsPage[] _dockPages = [];
     private readonly UsageSnapshotCache[] _snapshotCaches;
+    private readonly UsageRefreshCoordinator _refreshCoordinator;
     private UsageDockBandItem[] _dockBandItems = [];
     private readonly List<UsageDockBandItem> _retiredDockBandItems = [];
     private readonly List<TokensLimitsPage> _retiredPages = [];
@@ -80,7 +81,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         _snapshotCaches = providers
             .Select(provider => new UsageSnapshotCache(provider, _settings))
             .ToArray();
-        _overviewPage = new UsageOverviewPage([], [], LogMessage, _settings, _settings.Localization);
+        _refreshCoordinator = new UsageRefreshCoordinator(_settings);
+        _overviewPage = new UsageOverviewPage([], [], LogMessage, _settings, _settings.Localization, _refreshCoordinator);
         _dockBandPage = new TokensLimitsDockBandPage(_settings.Localization);
         _dockBands =
         [
@@ -145,6 +147,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         _dockBandPage.Dispose();
         _overviewPage.Dispose();
 
+        _refreshCoordinator.Dispose();
+
         foreach (var page in pages)
         {
             page.Dispose();
@@ -171,9 +175,10 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         Action<string> logger,
         ICommand detailsCommand,
         IUsageRefreshSettings refreshSettings,
-        ILocalizationService localization)
+        ILocalizationService localization,
+        UsageRefreshCoordinator refreshCoordinator)
     {
-        return new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings, localization);
+        return new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings, localization, refreshCoordinator);
     }
 
     private void SettingsOnChanged(object? sender, EventArgs e)
@@ -183,10 +188,10 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             return;
         }
 
-        // UsageSnapshotCache observes the same settings event and invalidates once.
-        // Surfaces refresh through their own subscriptions. Keeping this handler focused
-        // on provider composition avoids duplicate concurrent refreshes on every save.
         RebuildEnabledSurfaces();
+        // A language or interval edit returns immediately from fresh caches. A provider
+        // credential edit clears the affected shared state before this call.
+        _refreshCoordinator.RefreshAll();
     }
 
     private void RebuildEnabledSurfaces()
@@ -209,15 +214,15 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             oldPages = _pages;
             oldDockPages = _dockPages;
             _pages = enabledCaches
-                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, localization: _settings.Localization))
+                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, localization: _settings.Localization, coordinator: _refreshCoordinator))
                 .ToArray();
             _dockPages = enabledCaches
-                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock", localization: _settings.Localization))
+                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock", localization: _settings.Localization, coordinator: _refreshCoordinator))
                 .ToArray();
             _dockBandItems = enabledCaches
                 .Zip(
                     _dockPages,
-                    (cache, page) => CreateDockItem(cache, LogMessage, page, _settings, _settings.Localization))
+                    (cache, page) => CreateDockItem(cache, LogMessage, page, _settings, _settings.Localization, _refreshCoordinator))
                 .ToArray();
             _enabledProviderIds = enabledIds;
             _overviewPage.UpdateProviders(enabledCaches, _pages);
@@ -226,6 +231,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             _retiredPages.AddRange(oldPages);
             _retiredPages.AddRange(oldDockPages);
         }
+
+        _refreshCoordinator.UpdateProviders(enabledCaches);
 
         foreach (var item in oldDockItems)
         {

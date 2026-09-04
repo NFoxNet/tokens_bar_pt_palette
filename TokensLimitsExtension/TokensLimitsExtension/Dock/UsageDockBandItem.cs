@@ -1,9 +1,6 @@
 using System;
-using System.Diagnostics;
-using System.Timers;
 using System.Threading;
 using System.Threading.Tasks;
-using Timer = System.Timers.Timer;
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using TokensLimitsExtension.Core.Models;
@@ -12,170 +9,70 @@ using TokensLimitsExtension.Core.Services;
 
 namespace TokensLimitsExtension;
 
+/// <summary>Dock projection of a shared provider cache; it never owns a timer.</summary>
 public sealed partial class UsageDockBandItem : ListItem, IDisposable
 {
     private readonly IUsageProvider _provider;
-    private readonly IUsageRefreshSettings? _refreshSettings;
-    private readonly Action<string> _logger;
+    private readonly IUsageProviderStateSource? _stateSource;
+    private readonly UsageRefreshCoordinator? _coordinator;
     private readonly ILocalizationService _localization;
-    private readonly Timer _refreshTimer;
-    private readonly CancellationTokenSource _lifetimeCts = new();
-    private int _refreshInProgress;
-    private int _deactivated;
     private int _disposed;
-    private UsageSnapshot? _lastSnapshot;
 
-    public UsageDockBandItem(
-        IUsageProvider provider,
-        Action<string>? logger = null,
-        ICommand? detailsCommand = null,
-        IUsageRefreshSettings? refreshSettings = null,
-        ILocalizationService? localization = null)
-        : base(detailsCommand ?? new NoOpCommand
-        {
-            Id = $"com.tokenslimits.provider.{provider?.Descriptor.Id}.dock",
-            Name = provider?.Descriptor.DisplayName ?? "Usage limits",
-        })
+    public UsageDockBandItem(IUsageProvider provider, Action<string>? logger = null, ICommand? detailsCommand = null, IUsageRefreshSettings? refreshSettings = null, ILocalizationService? localization = null, UsageRefreshCoordinator? coordinator = null)
+        : base(detailsCommand ?? new NoOpCommand { Id = $"com.tokenslimits.provider.{provider?.Descriptor.Id}.dock", Name = provider?.Descriptor.DisplayName ?? "Usage limits" })
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
-        _refreshSettings = refreshSettings;
-        _logger = logger ?? LogMessage;
+        _stateSource = provider as IUsageProviderStateSource;
+        _coordinator = coordinator;
         _localization = localization ?? InvariantLocalizationService.Instance;
-
         Title = _provider.Descriptor.DisplayName;
         Subtitle = _localization.GetString("details.loading", "Loading…");
         DockSubtitle = Subtitle;
         Icon = ProviderIconCatalog.For(_provider.Descriptor.Id);
-
-        _refreshTimer = new Timer(UsageRefreshHelpers.GetRefreshIntervalMilliseconds(_refreshSettings))
-        {
-            AutoReset = true,
-        };
-        _refreshTimer.Elapsed += RefreshTimerOnElapsed;
-        _refreshTimer.Start();
-        _refreshSettings?.Changed += RefreshSettingsOnChanged;
         _localization.LanguageChanged += LocalizationOnLanguageChanged;
-
+        if (_stateSource is not null) _stateSource.StateChanged += StateSourceOnStateChanged;
         _ = RefreshAsync();
     }
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
-
-    private bool IsRefreshEnabled => !IsDisposed && Volatile.Read(ref _deactivated) == 0;
-
     public string DockSubtitle { get; private set => SetProperty(ref field, value); } = string.Empty;
-
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (!IsRefreshEnabled || Interlocked.Exchange(ref _refreshInProgress, 1) != 0)
+        if (IsDisposed) return;
+        if (_stateSource is not null)
         {
+            if (_coordinator is not null) await _coordinator.RefreshProviderAsync(_stateSource).ConfigureAwait(false);
+            else await _stateSource.RefreshAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+            ApplyState(_stateSource.State);
             return;
         }
-
-        try
-        {
-            using var linkedCts = cancellationToken.CanBeCanceled
-                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCts.Token)
-                : null;
-            var token = linkedCts?.Token ?? _lifetimeCts.Token;
-            var snapshot = await _provider.GetUsageSnapshotAsync(token).ConfigureAwait(false);
-            if (!IsRefreshEnabled)
-            {
-                return;
-            }
-
-            Title = snapshot.ProviderDisplayName;
-            _lastSnapshot = snapshot;
-            DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization);
-            Subtitle = DockSubtitle;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            if (IsRefreshEnabled)
-            {
-                Subtitle = _localization.GetString("status.unavailable", "Limits unavailable");
-                DockSubtitle = Subtitle;
-                _logger($"[TokensLimits] ERROR: {ex.Message}");
-            }
-        }
-        finally
-        {
-            Volatile.Write(ref _refreshInProgress, 0);
-        }
+        try { ApplySnapshot(await _provider.GetUsageSnapshotAsync(cancellationToken).ConfigureAwait(false)); }
+        catch { ApplyUnavailable(); }
     }
-
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        Deactivate();
-        _refreshTimer.Elapsed -= RefreshTimerOnElapsed;
-        _refreshTimer.Dispose();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (_stateSource is not null) _stateSource.StateChanged -= StateSourceOnStateChanged;
+        _localization.LanguageChanged -= LocalizationOnLanguageChanged;
         GC.SuppressFinalize(this);
     }
-
-    private void RefreshTimerOnElapsed(object? sender, ElapsedEventArgs e)
+    internal void Deactivate() => Dispose();
+    private void StateSourceOnStateChanged(object? sender, EventArgs e) => ApplyState(_stateSource!.State);
+    private void LocalizationOnLanguageChanged(object? sender, EventArgs e) { if (_stateSource?.State.Snapshot is { } snapshot) ApplySnapshot(snapshot); }
+    private void ApplyState(UsageProviderState state)
     {
-        if (IsRefreshEnabled)
+        if (IsDisposed) return;
+        if (state.Snapshot is { } snapshot)
         {
-            _ = RefreshAsync();
+            ApplySnapshot(snapshot);
+            if (state.IsStale)
+            {
+                DockSubtitle = $"{DockSubtitle} · {_localization.GetString("status.stale", "Stale")}";
+                Subtitle = DockSubtitle;
+            }
         }
+        else if (!state.IsRefreshing) ApplyUnavailable();
     }
-
-    private void RefreshSettingsOnChanged(object? sender, EventArgs e)
-    {
-        if (!IsRefreshEnabled)
-        {
-            return;
-        }
-
-        UsageRefreshHelpers.ApplySettingsChanged(
-            _refreshTimer,
-            _refreshSettings,
-            () => RefreshAsync());
-    }
-
-    internal void Deactivate()
-    {
-        if (Interlocked.Exchange(ref _deactivated, 1) != 0)
-        {
-            return;
-        }
-
-        _refreshTimer.Stop();
-        _refreshSettings?.Changed -= RefreshSettingsOnChanged;
-        _localization.LanguageChanged -= LocalizationOnLanguageChanged;
-        _lifetimeCts.Cancel();
-    }
-
-    private static void LogMessage(string message)
-    {
-        Debug.WriteLine(message);
-        ExtensionHost.LogMessage(message);
-    }
-
-    private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
-    {
-        if (!IsRefreshEnabled)
-        {
-            return;
-        }
-
-        if (_lastSnapshot is null)
-        {
-            Subtitle = _localization.GetString("details.loading", "Loading…");
-            DockSubtitle = Subtitle;
-            return;
-        }
-
-        Title = _lastSnapshot.ProviderDisplayName;
-        DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(_lastSnapshot, _localization);
-        Subtitle = DockSubtitle;
-    }
+    private void ApplySnapshot(UsageSnapshot snapshot) { if (IsDisposed) return; Title = snapshot.ProviderDisplayName; DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization); Subtitle = DockSubtitle; }
+    private void ApplyUnavailable() { Subtitle = _localization.GetString("status.unavailable", "Limits unavailable"); DockSubtitle = Subtitle; }
 }

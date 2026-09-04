@@ -14,8 +14,14 @@ namespace TokensLimitsExtension.Core.Providers;
 
 public sealed class UsageProviderConfigurationException(string message) : InvalidOperationException(message);
 
-public sealed class UsageProviderRequestException(string message, Exception? innerException = null)
-    : InvalidOperationException(message, innerException);
+public sealed class UsageProviderRequestException(
+    string message,
+    Exception? innerException = null,
+    TimeSpan? retryAfter = null)
+    : InvalidOperationException(message, innerException)
+{
+    public TimeSpan? RetryAfter { get; } = retryAfter;
+}
 
 /// <summary>
 /// A provider adapter for the provider-specific endpoint inventory. Authentication
