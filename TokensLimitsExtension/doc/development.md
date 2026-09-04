@@ -43,15 +43,35 @@ dotnet build .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64
 Get-Process TokensLimitsExtension -ErrorAction SilentlyContinue |
   Stop-Process -Force
 
+# Требуется только при первом переходе с установленного Release MSIX на Debug.
+# Сохраняет provider settings и зашифрованные ключи.
+Get-AppxPackage -Name TokensLimitsExtension |
+  Remove-AppxPackage -PreserveApplicationData
+
 $manifest = Resolve-Path .\TokensLimitsExtension\bin\x64\Debug\net10.0-windows10.0.26100.0\win-x64\AppxManifest.xml
 Add-AppxPackage -Register $manifest -ForceApplicationShutdown
 ```
 
 Затем откройте Command Palette и выполните **Reload Command Palette
-extensions**. При следующем изменении повторите эти же команды. Если требуется
-переключиться обратно на публичный MSIX, установите его штатным
-`Install-TokensLimitsExtension.cmd`; перед явным удалением пакета всегда
-используйте `Remove-AppxPackage -PreserveApplicationData`.
+extensions**. При следующем изменении повторите build, остановку процесса и
+регистрацию manifest; строку `Remove-AppxPackage` повторять не нужно, пока
+Debug-версия уже активна.
+
+Переход обратно на публичный MSIX также требует сначала снять Debug-
+регистрацию, опять же с сохранением данных:
+
+```powershell
+Get-Process TokensLimitsExtension -ErrorAction SilentlyContinue |
+  Stop-Process -Force
+
+Get-AppxPackage -Name TokensLimitsExtension |
+  Remove-AppxPackage -PreserveApplicationData
+
+.\scripts\Install-TokensLimitsExtension.cmd
+```
+
+Не используйте `Remove-AppxPackage` без `-PreserveApplicationData`: иначе
+можно потерять сохранённые provider settings и защищённые ключи.
 
 Путь к созданному релизному MSIX после сборки с
 `-p:GenerateAppxPackageOnBuild=true` —
