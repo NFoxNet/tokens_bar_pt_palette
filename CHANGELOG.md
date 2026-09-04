@@ -2,6 +2,12 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.0.4.2] - 2026-09-04
+
+### Fixed
+
+- Refreshed the persistent Dock band when a provider's shared usage snapshot changes, so it reflects a Codex limit reset without reopening Command Palette.
+
 ## [0.0.4.1] - 2026-09-04
 
 ### Documentation
