@@ -3265,6 +3265,12 @@ internal static class UsageJsonParser
         JsonElement root,
         DateTimeOffset fetchedAt)
     {
+        if (descriptor.Id.Equals("deepseek", StringComparison.OrdinalIgnoreCase)
+            && TryParseDeepSeekBalance(descriptor, source, root, fetchedAt, out var deepSeekSnapshot))
+        {
+            return deepSeekSnapshot;
+        }
+
         var leaves = new List<(string Path, JsonElement Value)>();
         CollectLeaves(root, string.Empty, leaves, 0);
         var metrics = new List<UsageMetric>();
@@ -3450,6 +3456,9 @@ internal static class UsageJsonParser
                 metric.Limit,
                 metric.Remaining,
                 metric.ResetAt,
+                metric.SemanticKey,
+                metric.NumericValue,
+                metric.CurrencyCode,
             })
             .Select(group => group.First())
             .Take(64)
@@ -3747,6 +3756,70 @@ internal static class UsageJsonParser
                 index++;
             }
         }
+    }
+
+    private static bool TryParseDeepSeekBalance(
+        UsageProviderDescriptor descriptor,
+        string source,
+        JsonElement root,
+        DateTimeOffset fetchedAt,
+        out UsageSnapshot snapshot)
+    {
+        snapshot = null!;
+        if (!root.TryGetProperty("balance_infos", out var balances)
+            || balances.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var values = new List<(decimal Amount, string Currency)>();
+        foreach (var balance in balances.EnumerateArray())
+        {
+            if (balance.ValueKind != JsonValueKind.Object
+                || !balance.TryGetProperty("total_balance", out var amountElement))
+            {
+                continue;
+            }
+
+            var amountText = amountElement.ValueKind == JsonValueKind.Number
+                ? amountElement.GetRawText()
+                : amountElement.GetString();
+            if (!decimal.TryParse(amountText, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount))
+            {
+                continue;
+            }
+
+            var currency = balance.TryGetProperty("currency", out var currencyElement)
+                ? currencyElement.GetString()
+                : null;
+            values.Add((amount, string.IsNullOrWhiteSpace(currency) ? "" : currency.Trim().ToUpperInvariant()));
+        }
+
+        if (values.Count == 0)
+        {
+            return false;
+        }
+
+        var singleCurrency = values.Select(value => value.Currency).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1;
+        var metrics = values.Select(value => new UsageMetric(
+            string.IsNullOrWhiteSpace(value.Currency) ? "Total balance" : $"Total balance ({value.Currency})",
+            value.Amount.ToString(CultureInfo.InvariantCulture),
+            SemanticKey: singleCurrency ? "totalBalance" : "balance",
+            NumericValue: value.Amount,
+            CurrencyCode: value.Currency)).ToArray();
+        snapshot = new UsageSnapshot(
+            descriptor.Id,
+            descriptor.DisplayName,
+            null,
+            null,
+            null,
+            false)
+        {
+            FetchedAt = fetchedAt,
+            Source = source,
+            Metrics = metrics,
+        };
+        return true;
     }
 
     private static void CollectLeaves(JsonElement element, string path, List<(string Path, JsonElement Value)> leaves, int depth)

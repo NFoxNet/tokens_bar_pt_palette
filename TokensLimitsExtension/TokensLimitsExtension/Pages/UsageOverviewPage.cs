@@ -24,9 +24,10 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     private readonly object _providerGate = new();
     private readonly Action<string> _logger;
     private readonly IUsageRefreshSettings? _refreshSettings;
+    private readonly ILocalizationService _localization;
     private readonly Timer _refreshTimer;
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private IListItem[] _items = [new ListItem(new NoOpCommand()) { Title = "Провайдеры", Subtitle = "Загрузка..." }];
+    private IListItem[] _items;
     private int _refreshInProgress;
     private int _refreshPending;
     private int _hasLoaded;
@@ -39,7 +40,8 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         IReadOnlyList<UsageSnapshotCache> caches,
         IReadOnlyList<TokensLimitsPage> pages,
         Action<string>? logger = null,
-        IUsageRefreshSettings? refreshSettings = null)
+        IUsageRefreshSettings? refreshSettings = null,
+        ILocalizationService? localization = null)
     {
         _caches = caches ?? throw new ArgumentNullException(nameof(caches));
         _pages = pages ?? throw new ArgumentNullException(nameof(pages));
@@ -50,12 +52,18 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
 
         _logger = logger ?? LogMessage;
         _refreshSettings = refreshSettings;
+        _localization = localization ?? InvariantLocalizationService.Instance;
         Id = "com.tokenslimits.overview";
-        Title = "Tokens Limits";
-        Name = "Show enabled provider limits";
-        PlaceholderText = "Enabled providers";
+        Title = _localization.GetString("app.title", "Tokens Limits");
+        Name = _localization.GetString("overview.providers", "Enabled providers");
+        PlaceholderText = _localization.GetString("overview.providers", "Enabled providers");
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         ShowDetails = true;
+        _items = [new ListItem(new NoOpCommand())
+        {
+            Title = _localization.GetString("overview.providers", "Enabled providers"),
+            Subtitle = _localization.GetString("overview.loading", "Loading…"),
+        }];
         _refreshTimer = new Timer(UsageRefreshHelpers.GetRefreshIntervalMilliseconds(refreshSettings)) { AutoReset = true };
         _refreshTimer.Elapsed += RefreshTimerOnElapsed;
         _refreshTimer.Start();
@@ -63,6 +71,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         {
             _refreshSettings.Changed += RefreshSettingsOnChanged;
         }
+        _localization.LanguageChanged += LocalizationOnLanguageChanged;
     }
 
     public override IListItem[] GetItems()
@@ -121,8 +130,8 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
                     {
                         Title = caches[index].Descriptor.DisplayName,
                         Subtitle = result.Error is null
-                            ? UsageDisplayFormatter.FormatDockBandSubtitle(result.Snapshot!)
-                            : result.Error,
+                            ? UsageDisplayFormatter.FormatDockBandSubtitle(result.Snapshot!, _localization)
+                            : _localization.Format("overview.unavailable", result.Error),
                     });
                 }
 
@@ -130,8 +139,8 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
                 {
                     items.Add(new ListItem(new NoOpCommand())
                     {
-                        Title = "Нет включённых провайдеров",
-                        Subtitle = "Включите провайдеров в настройках расширения.",
+                        Title = _localization.GetString("overview.empty.title", "No providers enabled"),
+                        Subtitle = _localization.GetString("overview.empty.subtitle", "Enable providers in the extension settings."),
                     });
                 }
 
@@ -201,7 +210,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         catch (Exception ex)
         {
             _logger($"[TokensLimits] ERROR: {cache.Descriptor.Id}: {ex.Message}");
-            return new ProviderResult(null, $"Данные недоступны: {ex.Message}");
+            return new ProviderResult(null, ex.Message);
         }
     }
 
@@ -213,6 +222,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         }
 
         _refreshSettings?.Changed -= RefreshSettingsOnChanged;
+        _localization.LanguageChanged -= LocalizationOnLanguageChanged;
         _lifetimeCts.Cancel();
         _refreshTimer.Stop();
         _refreshTimer.Elapsed -= RefreshTimerOnElapsed;
@@ -249,6 +259,19 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
                 _refreshSettings,
                 () => RefreshAsync());
         }
+    }
+
+    private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        Title = _localization.GetString("app.title", "Tokens Limits");
+        Name = _localization.GetString("overview.providers", "Enabled providers");
+        PlaceholderText = Name;
+        _ = RefreshAsync();
     }
 
     private static void LogMessage(string message)

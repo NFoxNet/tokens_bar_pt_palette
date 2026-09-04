@@ -27,6 +27,55 @@ dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --
 4. После Deploy в Command Palette выполните `Reload` → `Reload Command Palette extensions`.
 5. Для диагностики смотрите Output window в режиме Debug; код пишет сообщения через `Debug.WriteLine` и `ExtensionHost.LogMessage`.
 
+## Проверенное локальное обновление для проверки UI
+
+Обычная `dotnet build` создаёт DLL, а не installable MSIX. Не регистрируйте
+Debug manifest поверх опубликованного пакета: Windows блокирует смешение
+development и signed MSIX с одинаковым package identity. Удаление обычного
+Release MSIX с `-PreserveApplicationData` тоже не поддерживается Windows, а
+удаление без этого флага может потерять защищённые provider keys.
+
+Для проверки UI используйте **подписанное обновление** с версией выше уже
+установленной. Это штатный AppX upgrade, который был проверен для перехода
+`0.0.2.2 → 0.0.3.0` и сохраняет application data:
+
+```powershell
+# Из корня TokensLimitsExtension. Путь и пароль PFX держите вне репозитория.
+$certificatePassword = Read-Host 'PFX password' -AsSecureString
+& ..\scripts\Build-Release.ps1 `
+  -CertificatePath C:\secure\tokens-limits-release.pfx `
+  -CertificatePassword $certificatePassword `
+  -Platform x64 `
+  -OutputDirectory .\artifacts-local
+
+$package = Resolve-Path .\artifacts-local\TokensLimitsExtension_*.msix
+if ((Get-AuthenticodeSignature $package).Status -ne 'Valid') {
+  throw 'MSIX signature validation failed.'
+}
+
+Get-Process TokensLimitsExtension -ErrorAction SilentlyContinue |
+  Stop-Process -Force
+Add-AppxPackage -Path $package -ForceApplicationShutdown
+```
+
+После установки в Command Palette выполните **Reload Command Palette
+extensions**. Убедитесь, что команда ниже показывает новую версию и `Status:
+Ok`:
+
+```powershell
+Get-AppxPackage -Name TokensLimitsExtension |
+  Format-List PackageFullName, Version, Status
+```
+
+Debug manifest можно применять только на чистом development-устройстве, где
+нет установленного signed MSIX с этим identity. Он не является безопасным
+способом переключения канала на машине с рабочими ключами.
+
+Путь к созданному релизному MSIX после сборки с
+`-p:GenerateAppxPackageOnBuild=true` —
+`TokensLimitsExtension/AppPackages/.../*.msix`. Такой пакет предназначен для
+проверки сценария установки и подписи, а не для быстрой итерации UI.
+
 ### Проверка Dock-навигации
 
 После Deploy проверьте последовательность: клик по Tokens Limits в Dock →

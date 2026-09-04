@@ -2,11 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using Microsoft.CommandPalette.Extensions.Toolkit;
+using TokensLimitsExtension.Core.Services;
+using TokensLimitsExtension.Localization;
 using System.IO;
 using System.Linq;
-using Microsoft.CommandPalette.Extensions.Toolkit;
 using TokensLimitsExtension.Core.Providers;
-using TokensLimitsExtension.Core.Services;
 using PaletteSettings = Microsoft.CommandPalette.Extensions.Toolkit.Settings;
 
 namespace TokensLimitsExtension.Settings;
@@ -19,6 +20,8 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     private const string StorageDirectoryName = "TokensLimitsExtension";
     private const string SettingsNamespace = "tokensLimits";
     private const string SecretMask = "••••••••";
+
+    private readonly ChoiceSetSetting _language;
 
     private readonly TextSetting _refreshInterval = new(
         $"{SettingsNamespace}.refreshInterval",
@@ -34,6 +37,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     private readonly Dictionary<string, TextSetting> _providerFields = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _secretFieldKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ProtectedSecretStore _secretStore;
+    private readonly JsonLocalizationService _localization;
 
     private bool _disposed;
     private bool _handlingSettingsChange;
@@ -52,9 +56,24 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     {
         FilePath = storage.SettingsPath;
         _secretStore = new ProtectedSecretStore(storage.SecretsPath);
+        _localization = new JsonLocalizationService(
+            Path.Combine(AppContext.BaseDirectory, "lang"),
+            Path.Combine(storage.Directory, "lang"));
+        _language = new ChoiceSetSetting(
+            $"{SettingsNamespace}.language",
+            [
+                new ChoiceSetSetting.Choice(_localization.GetString("settings.auto"), "auto"),
+                .. _localization.Languages.Select(language => new ChoiceSetSetting.Choice(language.NativeName, language.Culture)),
+            ])
+        {
+            Label = _localization.GetString("settings.language"),
+            Description = _localization.GetString("settings.languageDescription"),
+        };
+        Settings.Add(_language);
         Settings.Add(_refreshInterval);
         AddProviderSettings();
         LoadSettings();
+        _localization.ApplyPreference(_language.Value);
         ValidateRefreshInterval();
         MigrateAndMaskLoadedSecrets();
         Settings.SettingsChanged += OnSettingsChanged;
@@ -74,6 +93,8 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     }
 
     public event EventHandler? Changed;
+
+    public ILocalizationService Localization => _localization;
 
     public bool IsEnabled(string providerId)
     {
@@ -172,6 +193,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
 
         return new SettingsStorage(
+            canonicalDirectory,
             Path.Combine(canonicalDirectory, $"{SettingsNamespace}.settings.json"),
             Path.Combine(canonicalDirectory, $"{SettingsNamespace}.secrets.json"));
     }
@@ -277,6 +299,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         _handlingSettingsChange = true;
         try
         {
+            _localization.ApplyPreference(_language.Value);
             ValidateRefreshInterval();
             if (PersistAndMaskSecrets())
             {
@@ -367,5 +390,5 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     private static bool IsSecretMask(string? value)
         => string.Equals(value, SecretMask, StringComparison.Ordinal);
 
-    internal sealed record SettingsStorage(string SettingsPath, string SecretsPath);
+    internal sealed record SettingsStorage(string Directory, string SettingsPath, string SecretsPath);
 }

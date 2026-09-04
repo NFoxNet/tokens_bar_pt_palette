@@ -23,7 +23,10 @@ public sealed record UsageMetric(
     double? Used = null,
     double? Limit = null,
     double? Remaining = null,
-    DateTimeOffset? ResetAt = null);
+    DateTimeOffset? ResetAt = null,
+    string? SemanticKey = null,
+    decimal? NumericValue = null,
+    string? CurrencyCode = null);
 
 public sealed record UsageSnapshot(
     string ProviderId,
