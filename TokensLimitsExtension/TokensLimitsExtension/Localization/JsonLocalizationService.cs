@@ -42,6 +42,38 @@ public sealed partial class JsonLocalizationService : ILocalizationService
 
     public string Preference => _preference;
 
+    /// <summary>
+    /// Returns contract violations for a complete pack. Runtime loading remains
+    /// intentionally permissive so that user packs may override only a subset
+    /// of English strings.
+    /// </summary>
+    public IReadOnlyList<string> GetValidationErrors(string culture)
+    {
+        if (!_packs.TryGetValue(culture, out var pack))
+        {
+            return [$"Language pack '{culture}' is not loaded."];
+        }
+
+        var errors = LocalizationKeyCatalog.RequiredKeys
+            .Where(key => !pack.Strings.ContainsKey(key))
+            .Select(key => $"Missing required key: {key}")
+            .ToList();
+
+        foreach (var pair in pack.Strings)
+        {
+            try
+            {
+                _ = string.Format(CultureInfo.InvariantCulture, pair.Value, new object?[10]);
+            }
+            catch (FormatException)
+            {
+                errors.Add($"Invalid format string: {pair.Key}");
+            }
+        }
+
+        return errors;
+    }
+
     public string GetString(string key, string? fallback = null)
     {
         if (_current.Strings.TryGetValue(key, out var value))
@@ -135,6 +167,11 @@ public sealed partial class JsonLocalizationService : ILocalizationService
                     throw new JsonException("Language file must contain culture and nativeName.");
                 }
 
+                if ((file.Strings ?? []).Any(pair => !IsValidFormatString(pair.Value)))
+                {
+                    throw new JsonException("Language file contains an invalid format string.");
+                }
+
                 var strings = new Dictionary<string, string>(StringComparer.Ordinal);
                 if (packs.TryGetValue(file.Culture, out var existing))
                 {
@@ -159,6 +196,19 @@ public sealed partial class JsonLocalizationService : ILocalizationService
             {
                 // User-supplied language files must not prevent the extension from starting.
             }
+        }
+    }
+
+    private static bool IsValidFormatString(string value)
+    {
+        try
+        {
+            _ = string.Format(CultureInfo.InvariantCulture, value, new object?[10]);
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
         }
     }
 

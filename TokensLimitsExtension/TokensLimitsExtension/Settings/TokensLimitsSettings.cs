@@ -23,15 +23,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     private readonly ChoiceSetSetting _language;
 
-    private readonly TextSetting _refreshInterval = new(
-        $"{SettingsNamespace}.refreshInterval",
-        "Частота обновления",
-        $"Интервал в секундах, от {MinimumRefreshIntervalSeconds} до {MaximumRefreshIntervalSeconds}.",
-        DefaultRefreshIntervalSeconds.ToString(CultureInfo.InvariantCulture))
-    {
-        IsRequired = true,
-        Placeholder = $"{MinimumRefreshIntervalSeconds}–{MaximumRefreshIntervalSeconds}",
-    };
+    private readonly TextSetting _refreshInterval;
 
     private readonly Dictionary<string, ToggleSetting> _providerToggles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextSetting> _providerFields = new(StringComparer.OrdinalIgnoreCase);
@@ -65,20 +57,27 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             [
                 new ChoiceSetSetting.Choice(_localization.GetString("settings.auto"), "auto"),
                 .. _localization.Languages.Select(language => new ChoiceSetSetting.Choice(language.NativeName, language.Culture)),
-            ])
+            ]);
+        _refreshInterval = new TextSetting(
+            $"{SettingsNamespace}.refreshInterval",
+            string.Empty,
+            string.Empty,
+            DefaultRefreshIntervalSeconds.ToString(CultureInfo.InvariantCulture))
         {
-            Label = _localization.GetString("settings.language"),
-            Description = _localization.GetString("settings.languageDescription"),
+            IsRequired = true,
+            Placeholder = $"{MinimumRefreshIntervalSeconds}–{MaximumRefreshIntervalSeconds}",
         };
         Settings.Add(_language);
         Settings.Add(_refreshInterval);
         AddProviderSettings();
         LoadSettings();
-        _localization.ApplyPreference(_language.Value);
+        _localization.ApplyPreference(_language.Value, notify: false);
+        RefreshLocalizedSettings();
         ValidateRefreshInterval();
         MigrateAndMaskLoadedSecrets();
         _providerConfigurationFingerprint = GetProviderConfigurationFingerprint();
         Settings.SettingsChanged += OnSettingsChanged;
+        _localization.LanguageChanged += OnLanguageChanged;
     }
 
     public TimeSpan RefreshInterval
@@ -158,6 +157,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
         _disposed = true;
         Settings.SettingsChanged -= OnSettingsChanged;
+        _localization.LanguageChanged -= OnLanguageChanged;
         _secretStore.Dispose();
         Changed = null;
         ProviderConfigurationChanged = null;
@@ -251,8 +251,8 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         {
             var toggle = new ToggleSetting(
                 ProviderKey(descriptor.Id),
-                $"Включить {descriptor.DisplayName}",
-                descriptor.SourceDescription ?? $"Показывать данные {descriptor.DisplayName}.",
+                string.Empty,
+                string.Empty,
                 descriptor.DefaultEnabled);
             _providerToggles.Add(descriptor.Id, toggle);
             Settings.Add(toggle);
@@ -261,13 +261,13 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             {
                 var setting = new TextSetting(
                     FieldKey(descriptor.Id, field.Key),
-                    field.Label,
-                    BuildFieldDescription(field),
+                    string.Empty,
+                    string.Empty,
                     field.DefaultValue ?? string.Empty)
                 {
                     IsRequired = false,
                     Placeholder = field.IsSecret
-                        ? "Сохранено; введите новое значение для замены"
+                        ? string.Empty
                         : string.Empty,
                 };
                 _providerFields.Add(setting.Key, setting);
@@ -286,10 +286,47 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     private static string FieldKey(string providerId, string fieldKey)
         => $"{SettingsNamespace}.providers.{providerId}.{fieldKey}";
 
-    private static string BuildFieldDescription(UsageProviderSettingDescriptor field)
-        => string.IsNullOrWhiteSpace(field.EnvironmentVariable)
-            ? field.Description
-            : $"{field.Description} Переменная окружения: {field.EnvironmentVariable}.";
+    private void RefreshLocalizedSettings()
+    {
+        _language.Label = _localization.GetString("settings.language");
+        _language.Description = _localization.GetString("settings.languageDescription");
+        _language.Choices =
+        [
+            new ChoiceSetSetting.Choice(_localization.GetString("settings.auto"), "auto"),
+            .. _localization.Languages.Select(language => new ChoiceSetSetting.Choice(language.NativeName, language.Culture)),
+        ];
+
+        _refreshInterval.Label = _localization.GetString("settings.refreshInterval");
+        _refreshInterval.Description = _localization.Format(
+            "settings.refreshIntervalDescription",
+            MinimumRefreshIntervalSeconds,
+            MaximumRefreshIntervalSeconds);
+
+        foreach (var descriptor in UsageProviderDescriptorRegistry.All)
+        {
+            var toggle = _providerToggles[descriptor.Id];
+            toggle.Label = _localization.Format("settings.enableProvider", descriptor.DisplayName);
+            toggle.Description = _localization.Format("settings.providerSource", descriptor.DisplayName);
+
+            foreach (var field in descriptor.Settings)
+            {
+                var setting = _providerFields[FieldKey(descriptor.Id, field.Key)];
+                setting.Label = _localization.GetString($"settings.field.{field.Key}.label", field.Label);
+                setting.Description = BuildFieldDescription(field);
+                setting.Placeholder = field.IsSecret
+                    ? _localization.GetString("settings.secretPlaceholder")
+                    : string.Empty;
+            }
+        }
+    }
+
+    private string BuildFieldDescription(UsageProviderSettingDescriptor field)
+    {
+        var description = _localization.GetString($"settings.field.{field.Key}.description", field.Description);
+        return string.IsNullOrWhiteSpace(field.EnvironmentVariable)
+            ? description
+            : _localization.Format("settings.field.environmentVariable", description, field.EnvironmentVariable);
+    }
 
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -325,6 +362,18 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
+    private void OnLanguageChanged(object? sender, EventArgs args)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        RefreshLocalizedSettings();
+        ValidateRefreshInterval();
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
     private string GetProviderConfigurationFingerprint()
     {
         // This comparison is intentionally process-local and never logged or persisted.
@@ -351,8 +400,10 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             return true;
         }
 
-        _refreshInterval.ErrorMessage =
-            $"Введите целое число от {MinimumRefreshIntervalSeconds} до {MaximumRefreshIntervalSeconds} секунд.";
+        _refreshInterval.ErrorMessage = _localization.Format(
+            "settings.refreshIntervalError",
+            MinimumRefreshIntervalSeconds,
+            MaximumRefreshIntervalSeconds);
         return false;
     }
 
