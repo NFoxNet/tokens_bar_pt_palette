@@ -107,6 +107,29 @@ public sealed class UsageRefreshCoordinatorTests
         Assert.Equal(TimeSpan.FromSeconds(120), timer.DueTime);
     }
 
+    [Fact]
+    public async Task ForceRefreshDoesNotBypassRetryCooldown()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
+        var provider = new RateLimitedProvider();
+        var settings = new TestSettings(TimeSpan.FromSeconds(60));
+        using var cache = new UsageSnapshotCache(provider, settings, time);
+        using var coordinator = new UsageRefreshCoordinator(settings, time);
+
+        coordinator.UpdateProviders([cache]);
+        await provider.FirstCall.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await time.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await coordinator.RefreshProviderAsync(cache, force: true);
+
+        Assert.Equal(1, provider.CallCount);
+
+        time.Advance(TimeSpan.FromSeconds(120));
+        await coordinator.RefreshProviderAsync(cache, force: true);
+
+        Assert.Equal(2, provider.CallCount);
+    }
+
     private sealed class TestSettings : IUsageRefreshSettings
     {
         public TestSettings(TimeSpan? refreshInterval = null)
@@ -184,13 +207,21 @@ public sealed class UsageRefreshCoordinatorTests
 
     private sealed class RateLimitedProvider : IUsageProvider
     {
+        private int _callCount;
+
         public UsageProviderDescriptor Descriptor { get; } = new("rate-limited", "Rate limited");
+        public int CallCount => Volatile.Read(ref _callCount);
+        public TaskCompletionSource FirstCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
-            => Task.FromException<UsageSnapshot>(new UsageProviderRequestException(
+        {
+            Interlocked.Increment(ref _callCount);
+            FirstCall.TrySetResult();
+            return Task.FromException<UsageSnapshot>(new UsageProviderRequestException(
                 "HTTP 429",
                 retryAfter: TimeSpan.FromSeconds(120),
                 statusCode: HttpStatusCode.TooManyRequests));
+        }
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider

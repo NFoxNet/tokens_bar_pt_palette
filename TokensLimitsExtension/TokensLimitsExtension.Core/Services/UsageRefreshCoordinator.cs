@@ -12,6 +12,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly Dictionary<string, CancellationTokenSource> _providerTokens = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _nextRefreshAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> _cooldownUntil = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _transientFailureCounts = new(StringComparer.OrdinalIgnoreCase);
     private IUsageProviderStateSource[] _providers = [];
     private TimeSpan _refreshInterval;
@@ -44,6 +45,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
                 token.Dispose();
                 _providerTokens.Remove(id);
                 _nextRefreshAt.Remove(id);
+                _cooldownUntil.Remove(id);
                 _transientFailureCounts.Remove(id);
             }
 
@@ -92,6 +94,17 @@ public sealed class UsageRefreshCoordinator : IDisposable
                 return Task.CompletedTask;
             }
 
+            if (force
+                && _cooldownUntil.TryGetValue(provider.Descriptor.Id, out var cooldownUntil))
+            {
+                if (cooldownUntil > _timeProvider.GetUtcNow())
+                {
+                    return Task.CompletedTask;
+                }
+
+                _cooldownUntil.Remove(provider.Descriptor.Id);
+            }
+
             token = source.Token;
         }
 
@@ -117,6 +130,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
             }
             _providerTokens.Clear();
             _nextRefreshAt.Clear();
+            _cooldownUntil.Clear();
             _transientFailureCounts.Clear();
             _providers = [];
         }
@@ -169,7 +183,17 @@ public sealed class UsageRefreshCoordinator : IDisposable
 
             if (_providerTokens.ContainsKey(provider.Descriptor.Id))
             {
-                _nextRefreshAt[provider.Descriptor.Id] = GetNextRefreshAtUnsafe(provider);
+                var nextRefreshAt = GetNextRefreshAtUnsafe(provider);
+                _nextRefreshAt[provider.Descriptor.Id] = nextRefreshAt;
+                if (IsCooldownError(provider.State.ErrorKind)
+                    && nextRefreshAt != DateTimeOffset.MaxValue)
+                {
+                    _cooldownUntil[provider.Descriptor.Id] = nextRefreshAt;
+                }
+                else
+                {
+                    _cooldownUntil.Remove(provider.Descriptor.Id);
+                }
             }
             ScheduleNearestRefreshUnsafe();
         }
@@ -292,4 +316,9 @@ public sealed class UsageRefreshCoordinator : IDisposable
 
     private static DateTimeOffset Max(DateTimeOffset first, DateTimeOffset second)
         => first >= second ? first : second;
+
+    private static bool IsCooldownError(UsageProviderErrorKind errorKind)
+        => errorKind is UsageProviderErrorKind.Network
+            or UsageProviderErrorKind.Timeout
+            or UsageProviderErrorKind.RateLimited;
 }

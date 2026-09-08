@@ -91,6 +91,23 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task SpecializedAdapterPreservesHttpStatusAndRetryAfter()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "test-key")),
+            new HttpClient(new StatusHandler(HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(47))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024 * 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() => provider.GetUsageSnapshotAsync());
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, exception.StatusCode);
+        Assert.Equal(TimeSpan.FromSeconds(47), exception.RetryAfter);
+    }
+
+    [Fact]
     public async Task CallerCancellationIsNotReportedAsAProviderTimeout()
     {
         using var provider = new ConfiguredUsageProvider(
@@ -906,6 +923,19 @@ public sealed class ProviderCatalogTests
                 Content = content,
                 RequestMessage = request,
             });
+        }
+    }
+
+    private sealed class StatusHandler(HttpStatusCode statusCode, TimeSpan retryAfter) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent("rate limited", Encoding.UTF8, "text/plain"),
+            };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(retryAfter);
+            return Task.FromResult(response);
         }
     }
 

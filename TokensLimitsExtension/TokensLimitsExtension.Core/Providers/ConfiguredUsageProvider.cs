@@ -275,6 +275,14 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         return null;
     }
 
+    private static UsageProviderRequestException CreateHttpFailure(
+        string operation,
+        HttpResponseMessage response)
+        => new(
+            $"{operation}: HTTP {(int)response.StatusCode} ({response.StatusCode}).",
+            retryAfter: GetRetryAfter(response.Headers.RetryAfter),
+            statusCode: response.StatusCode);
+
     private HttpRequestMessage CreateRequest(UsageProviderEndpoint endpoint, ResolvedCredential credential)
     {
         var url = ResolveUrl(endpoint);
@@ -708,8 +716,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"OpenCode server function: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure("OpenCode server function", response);
         }
 
         return await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -731,8 +738,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"OpenCode page: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure("OpenCode page", response);
         }
 
         return await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -772,8 +778,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"MiniMax web: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure("MiniMax web", response);
         }
 
         var body = await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -1076,8 +1081,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"Kilo tRPC: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure("Kilo tRPC", response);
         }
 
         var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -1359,8 +1363,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 .ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                throw new UsageProviderRequestException(
-                    $"Ollama API: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+                throw CreateHttpFailure("Ollama API", response);
             }
 
             var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -1378,8 +1381,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         {
             if (!response.IsSuccessStatusCode)
             {
-                throw new UsageProviderRequestException(
-                    $"Локальный Ollama API: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+                throw CreateHttpFailure("Локальный Ollama API", response);
             }
 
             var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -2018,8 +2020,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                throw new UsageProviderRequestException(
-                    $"Ollama API вернул HTTP {(int)response.StatusCode}.");
+                throw CreateHttpFailure("Ollama API", response);
             }
 
             var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -2070,8 +2071,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"Zed profile: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure("Zed profile", response);
         }
 
         var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -2269,8 +2269,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 .ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                throw new UsageProviderRequestException(
-                    $"OpenAI {path}: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+                throw CreateHttpFailure($"OpenAI {path}", response);
             }
 
             var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -2470,8 +2469,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"Amp {endpoint.Name}: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure($"Amp {endpoint.Name}", response);
         }
 
         var body = await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -2616,8 +2614,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"Windsurf GetPlanStatus: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure("Windsurf GetPlanStatus", response);
         }
 
         var bytes = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -3115,8 +3112,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 .ConfigureAwait(false);
             if (!pageResponse.IsSuccessStatusCode)
             {
-                throw new UsageProviderRequestException(
-                    $"Не удалось открыть консоль {Descriptor.DisplayName}: HTTP {(int)pageResponse.StatusCode}.");
+                throw CreateHttpFailure($"Не удалось открыть консоль {Descriptor.DisplayName}", pageResponse);
             }
 
             var page = await ReadBoundedResponseBodyAsync(pageResponse.Content, cancellationToken).ConfigureAwait(false);
@@ -3175,8 +3171,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"{Descriptor.DisplayName} gateway: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure($"{Descriptor.DisplayName} gateway", response);
         }
 
         var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -3201,8 +3196,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"T3 Chat: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure("T3 Chat", response);
         }
 
         var body = await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
@@ -3259,8 +3253,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new UsageProviderRequestException(
-                $"Deepgram: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
+            throw CreateHttpFailure("Deepgram", response);
         }
 
         var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
