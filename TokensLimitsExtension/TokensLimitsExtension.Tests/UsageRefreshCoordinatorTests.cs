@@ -92,6 +92,28 @@ public sealed class UsageRefreshCoordinatorTests
     }
 
     [Fact]
+    public async Task DisposePreventsAQueuedTimerCallbackFromStartingAnotherRefresh()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
+        var provider = new CountingProvider();
+        var settings = new TestSettings(TimeSpan.FromSeconds(60));
+        using var cache = new UsageSnapshotCache(provider, settings, time);
+        var coordinator = new UsageRefreshCoordinator(settings, time);
+
+        coordinator.UpdateProviders([cache]);
+        var timer = await time.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var callsBeforeDispose = provider.CallCount;
+        coordinator.Dispose();
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        timer.Fire();
+        await Task.Yield();
+
+        Assert.Equal(callsBeforeDispose, provider.CallCount);
+    }
+
+    [Fact]
     public async Task UsesRetryAfterBeforeSchedulingAnotherAutomaticRefresh()
     {
         var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
