@@ -349,7 +349,13 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         }
     }
 
-    private void ProviderConfigurationOnChanged(object? sender, EventArgs e) => Clear();
+    private void ProviderConfigurationOnChanged(object? sender, UsageProviderConfigurationChangedEventArgs e)
+    {
+        if (e.ProviderIds.Contains(Descriptor.Id))
+        {
+            Clear();
+        }
+    }
 
     private void UpdateState(bool isRefreshing, UsageProviderErrorKind errorKind, TimeSpan? retryAfter)
     {

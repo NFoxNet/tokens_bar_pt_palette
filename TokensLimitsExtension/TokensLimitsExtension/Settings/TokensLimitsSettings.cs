@@ -95,7 +95,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     public event EventHandler? Changed;
 
-    public event EventHandler? ProviderConfigurationChanged;
+    public event EventHandler<UsageProviderConfigurationChangedEventArgs>? ProviderConfigurationChanged;
 
     public ILocalizationService Localization => _localization;
 
@@ -339,7 +339,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
 
         _handlingSettingsChange = true;
-        var previousFingerprint = _providerConfigurationFingerprint;
+        var previousFingerprints = GetProviderConfigurationFingerprints();
         try
         {
             _localization.ApplyPreference(_language.Value);
@@ -354,10 +354,15 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             _handlingSettingsChange = false;
         }
 
+        var currentFingerprints = GetProviderConfigurationFingerprints();
         _providerConfigurationFingerprint = GetProviderConfigurationFingerprint();
-        if (!string.Equals(previousFingerprint, _providerConfigurationFingerprint, StringComparison.Ordinal))
+        var changedProviderIds = currentFingerprints
+            .Where(pair => !previousFingerprints.TryGetValue(pair.Key, out var previous) || !string.Equals(previous, pair.Value, StringComparison.Ordinal))
+            .Select(pair => pair.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (changedProviderIds.Count > 0)
         {
-            ProviderConfigurationChanged?.Invoke(this, EventArgs.Empty);
+            ProviderConfigurationChanged?.Invoke(this, new UsageProviderConfigurationChangedEventArgs(changedProviderIds));
         }
         Changed?.Invoke(this, EventArgs.Empty);
     }
@@ -391,6 +396,12 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
         return string.Join("\u001F", parts);
     }
+
+    private Dictionary<string, string> GetProviderConfigurationFingerprints()
+        => UsageProviderDescriptorRegistry.All.ToDictionary(
+            descriptor => descriptor.Id,
+            descriptor => string.Join("\u001F", descriptor.Settings.Select(field => $"{field.Key}\u001F{GetValue(descriptor.Id, field.Key) ?? string.Empty}")),
+            StringComparer.OrdinalIgnoreCase);
 
     private bool ValidateRefreshInterval()
     {

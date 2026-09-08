@@ -84,7 +84,7 @@ public sealed class UsageSnapshotCacheTests
 
         var previousGeneration = cache.GetUsageSnapshotAsync();
         await provider.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        settings.RaiseProviderConfigurationChanged();
+        settings.RaiseProviderConfigurationChanged(provider.Descriptor.Id);
         var currentGeneration = cache.GetUsageSnapshotAsync();
         await provider.SecondCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         provider.ReleaseFirstCall.TrySetResult();
@@ -108,7 +108,7 @@ public sealed class UsageSnapshotCacheTests
 
         var refresh = cache.RefreshAsync();
         await provider.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        settings.RaiseProviderConfigurationChanged();
+        settings.RaiseProviderConfigurationChanged(provider.Descriptor.Id);
         provider.ReleaseFirstCall.TrySetResult();
         await refresh;
 
@@ -212,10 +212,24 @@ public sealed class UsageSnapshotCacheTests
         await cache.GetUsageSnapshotAsync();
 
         Assert.Equal(1, provider.CallCount);
-        settings.RaiseProviderConfigurationChanged();
+        settings.RaiseProviderConfigurationChanged(provider.Descriptor.Id);
         Assert.False(cache.TryGetSnapshot(out _));
         await cache.GetUsageSnapshotAsync();
         Assert.Equal(2, provider.CallCount);
+    }
+
+    [Fact]
+    public async Task IgnoresConfigurationChangesForAnotherProvider()
+    {
+        var provider = new CountingProvider();
+        var settings = new ConfigurationAwareSettings(TimeSpan.FromMinutes(10));
+        using var cache = new UsageSnapshotCache(provider, settings, new FixedTimeProvider());
+
+        await cache.GetUsageSnapshotAsync();
+        settings.RaiseProviderConfigurationChanged("other-provider");
+        await cache.GetUsageSnapshotAsync();
+
+        Assert.Equal(1, provider.CallCount);
     }
 
     private sealed class BlockingProvider : IUsageProvider
@@ -357,10 +371,13 @@ public sealed class UsageSnapshotCacheTests
     {
         public TimeSpan RefreshInterval { get; } = refreshInterval;
         public event EventHandler? Changed;
-        public event EventHandler? ProviderConfigurationChanged;
+        public event EventHandler<UsageProviderConfigurationChangedEventArgs>? ProviderConfigurationChanged;
 
         public void RaiseGeneralChanged() => Changed?.Invoke(this, EventArgs.Empty);
-        public void RaiseProviderConfigurationChanged() => ProviderConfigurationChanged?.Invoke(this, EventArgs.Empty);
+        public void RaiseProviderConfigurationChanged(string providerId)
+            => ProviderConfigurationChanged?.Invoke(
+                this,
+                new UsageProviderConfigurationChangedEventArgs(new HashSet<string>([providerId], StringComparer.OrdinalIgnoreCase)));
     }
 
     private sealed class FixedTimeProvider : TimeProvider
