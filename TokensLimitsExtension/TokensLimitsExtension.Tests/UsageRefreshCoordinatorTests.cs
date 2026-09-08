@@ -39,13 +39,71 @@ public sealed class UsageRefreshCoordinatorTests
         Assert.Equal(callsBeforeRefresh, provider.CallCount);
     }
 
-    private sealed class TestSettings(TimeSpan? refreshInterval = null) : IUsageRefreshSettings
+    [Fact]
+    public async Task SchedulesTheNextRefreshFromCompletionWithOneTimer()
     {
-        public TimeSpan RefreshInterval => refreshInterval ?? TimeSpan.FromHours(1);
-        public event EventHandler? Changed
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
+        var provider = new DelayedProvider();
+        var settings = new TestSettings(TimeSpan.FromSeconds(60));
+        using var cache = new UsageSnapshotCache(provider, settings, time);
+        using var coordinator = new UsageRefreshCoordinator(settings, time);
+
+        coordinator.UpdateProviders([cache]);
+        await provider.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        time.Advance(TimeSpan.FromSeconds(2));
+        provider.ReleaseFirstCall.TrySetResult();
+        await provider.FirstCallCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var timer = await time.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await timer.FirstScheduled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(TimeSpan.FromSeconds(60), timer.DueTime);
+
+        time.Advance(TimeSpan.FromSeconds(59));
+        timer.Fire();
+        Assert.Equal(1, provider.CallCount);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        timer.Fire();
+        await provider.SecondCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, provider.CallCount);
+    }
+
+    [Fact]
+    public async Task RecalculatesTheNearestDeadlineAndDisablesTheTimerWhenEmpty()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
+        var provider = new DelayedProvider();
+        var settings = new TestSettings(TimeSpan.FromSeconds(60));
+        using var cache = new UsageSnapshotCache(provider, settings, time);
+        using var coordinator = new UsageRefreshCoordinator(settings, time);
+
+        coordinator.UpdateProviders([cache]);
+        await provider.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        provider.ReleaseFirstCall.TrySetResult();
+        var timer = await time.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await timer.FirstScheduled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        settings.SetRefreshInterval(TimeSpan.FromSeconds(30));
+        Assert.Equal(TimeSpan.FromSeconds(30), timer.DueTime);
+
+        coordinator.UpdateProviders([]);
+        Assert.Equal(Timeout.InfiniteTimeSpan, timer.DueTime);
+    }
+
+    private sealed class TestSettings : IUsageRefreshSettings
+    {
+        public TestSettings(TimeSpan? refreshInterval = null)
         {
-            add { }
-            remove { }
+            RefreshInterval = refreshInterval ?? TimeSpan.FromHours(1);
+        }
+
+        public TimeSpan RefreshInterval { get; private set; }
+        public event EventHandler? Changed;
+
+        public void SetRefreshInterval(TimeSpan interval)
+        {
+            RefreshInterval = interval;
+            Changed?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -70,6 +128,86 @@ public sealed class UsageRefreshCoordinatorTests
 
             throw new InvalidOperationException("Unreachable");
         }
+    }
+
+    private sealed class DelayedProvider : IUsageProvider
+    {
+        private int _callCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("delayed", "Delayed");
+        public TaskCompletionSource FirstCallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource FirstCallCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondCallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            var callCount = Interlocked.Increment(ref _callCount);
+            if (callCount == 1)
+            {
+                FirstCallStarted.TrySetResult();
+                await ReleaseFirstCall.Task.WaitAsync(cancellationToken);
+                FirstCallCompleted.TrySetResult();
+            }
+            else
+            {
+                SecondCallStarted.TrySetResult();
+            }
+
+            return new UsageSnapshot(
+                Descriptor.Id,
+                Descriptor.DisplayName,
+                new UsageWindow(1, DateTimeOffset.UtcNow.AddHours(1), 3600),
+                null,
+                null,
+                false);
+        }
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+
+        public TestTimer? Timer { get; private set; }
+        public TaskCompletionSource<TestTimer> TimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Timer = new TestTimer(callback, state, dueTime, period);
+            TimerCreated.TrySetResult(Timer);
+            return Timer;
+        }
+
+        public void Advance(TimeSpan elapsed) => _now += elapsed;
+    }
+
+    private sealed class TestTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) : ITimer
+    {
+        public TimeSpan DueTime { get; private set; } = dueTime;
+        public TimeSpan Period { get; private set; } = period;
+        public TaskCompletionSource<TimeSpan> FirstScheduled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool Change(TimeSpan dueTime, TimeSpan period)
+        {
+            DueTime = dueTime;
+            Period = period;
+            if (dueTime != Timeout.InfiniteTimeSpan)
+            {
+                FirstScheduled.TrySetResult(dueTime);
+            }
+            return true;
+        }
+
+        public void Fire() => callback(state);
+
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class CountingProvider : IUsageProvider
