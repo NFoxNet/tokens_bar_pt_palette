@@ -194,6 +194,32 @@ public sealed class CodexLocalSessionFallbackTests
         }
     }
 
+    [Fact]
+    public async Task SkipsAnOversizedJsonlLineWithoutHoldingItsContentsInMemory()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var oversizedLine = new string('x', 262_145);
+        await File.WriteAllTextAsync(
+            Path.Combine(sessions, "session.jsonl"),
+            oversizedLine + Environment.NewLine + CreateTokenCountLine(now.AddHours(-1)) + Environment.NewLine);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;

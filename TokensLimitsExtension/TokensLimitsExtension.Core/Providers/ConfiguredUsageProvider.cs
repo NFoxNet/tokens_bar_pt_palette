@@ -1,7 +1,5 @@
 using System.Buffers;
 using System.Globalization;
-using System.Diagnostics;
-using System.ComponentModel;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -35,16 +33,15 @@ public sealed class UsageProviderRequestException(
 public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 {
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan DefaultCliTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan MaximumCancellableTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
     private const int DefaultMaxResponseBodyBytes = 1_048_576;
-    private const int DefaultMaxCliOutputCharacters = 262_144;
     private readonly UsageProviderDescriptor _descriptor;
     private readonly IUsageProviderConfiguration _configuration;
     private readonly HttpClient _httpClient;
     private readonly Action<string> _logger;
     private readonly TimeSpan _requestTimeout;
     private readonly int _maxResponseBodyBytes;
+    private readonly IUsageProviderProcessRunner _processRunner;
     private int _disposed;
 
     public ConfiguredUsageProvider(
@@ -52,7 +49,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         IUsageProviderConfiguration configuration,
         HttpClient httpClient,
         Action<string>? logger = null)
-        : this(descriptor, configuration, httpClient, logger, null, DefaultMaxResponseBodyBytes)
+        : this(descriptor, configuration, httpClient, logger, null, DefaultMaxResponseBodyBytes, null)
     {
     }
 
@@ -66,7 +63,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         HttpClient httpClient,
         Action<string>? logger,
         TimeSpan? requestTimeout,
-        int maxResponseBodyBytes)
+        int maxResponseBodyBytes,
+        IUsageProviderProcessRunner? processRunner = null)
     {
         _descriptor = descriptor ?? throw new ArgumentNullException(nameof(descriptor));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
@@ -83,6 +81,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResponseBodyBytes);
 
         _maxResponseBodyBytes = maxResponseBodyBytes;
+        _processRunner = processRunner ?? new BoundedUsageProviderProcessRunner();
     }
 
     public UsageProviderDescriptor Descriptor => _descriptor;
@@ -1720,7 +1719,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
     {
         var configuredPath = _configuration.GetValue(Descriptor.Id, "cliPath");
         var executable = string.IsNullOrWhiteSpace(configuredPath) ? "kiro-cli.exe" : configuredPath;
-        var result = await RunProcessAsync(
+        var result = await _processRunner.RunAsync(
             executable,
             ["chat", "--no-interactive", "/usage"],
             cancellationToken).ConfigureAwait(false);
@@ -1858,101 +1857,6 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         return now.AddDays(days).AddHours(hours).AddMinutes(minutes);
     }
 
-    private static async Task<ProcessResult> RunProcessAsync(
-        string fileName,
-        IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = fileName,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        try
-        {
-            if (!process.Start())
-            {
-                throw new UsageProviderConfigurationException($"Не удалось запустить {fileName}.");
-            }
-        }
-        catch (Win32Exception)
-        {
-            throw new UsageProviderConfigurationException(
-                $"Не найден {fileName}. Установите Kiro CLI или укажите путь к нему в настройках.");
-        }
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(DefaultCliTimeout);
-        var token = timeoutCts.Token;
-        using var cancellationRegistration = token.Register(() =>
-        {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        });
-        var standardOutput = ReadBoundedProcessOutputAsync(process.StandardOutput, token);
-        var standardError = ReadBoundedProcessOutputAsync(process.StandardError, token);
-        try
-        {
-            await process.WaitForExitAsync(token).ConfigureAwait(false);
-            await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
-            return new ProcessResult(process.ExitCode, standardOutput.Result, standardError.Result);
-        }
-        catch
-        {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
-            try { await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false); } catch { }
-            throw;
-        }
-    }
-
-    private static async Task<string> ReadBoundedProcessOutputAsync(StreamReader reader, CancellationToken cancellationToken)
-    {
-        var buffer = new char[4096];
-        var output = new StringBuilder();
-        while (true)
-        {
-            var read = await reader.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-            {
-                return output.ToString();
-            }
-
-            if (output.Length > DefaultMaxCliOutputCharacters - read)
-            {
-                throw new UsageProviderRequestException("Kiro CLI output exceeds the safe size limit.");
-            }
-
-            output.Append(buffer, 0, read);
-        }
-    }
-
     private static double ParseFlexibleNumber(string raw)
         => double.TryParse(raw.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
             ? value
@@ -2006,8 +1910,6 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             ? DateTimeOffset.FromUnixTimeMilliseconds((long)value)
             : DateTimeOffset.FromUnixTimeSeconds((long)value);
     }
-
-    private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
     private async Task<UsageSnapshot> GetLocalSnapshotAsync(CancellationToken cancellationToken)
     {

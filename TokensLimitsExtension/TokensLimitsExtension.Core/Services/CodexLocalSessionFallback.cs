@@ -17,6 +17,7 @@ public sealed record CodexFallbackOptions(
 
 public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
 {
+    private const int MaxSessionLineCharacters = 262_144;
     private readonly IReadOnlyList<string> _codexHomes;
     private readonly long _fiveHourLimitTokens;
     private readonly long _weeklyLimitTokens;
@@ -248,15 +249,56 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         stream.Seek(startOffset, SeekOrigin.Begin);
         using var reader = new StreamReader(stream);
+        var buffer = new char[4096];
+        var line = new System.Text.StringBuilder();
+        var oversized = false;
         while (true)
         {
-            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-            if (line is null)
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
             {
+                if (!oversized && line.Length > 0)
+                {
+                    yield return line.ToString();
+                }
+
                 yield break;
             }
 
-            yield return line;
+            for (var index = 0; index < read; index++)
+            {
+                var character = buffer[index];
+                if (character == '\n')
+                {
+                    if (!oversized)
+                    {
+                        yield return line.ToString();
+                    }
+
+                    line.Clear();
+                    oversized = false;
+                    continue;
+                }
+
+                if (character == '\r')
+                {
+                    continue;
+                }
+
+                if (oversized)
+                {
+                    continue;
+                }
+
+                if (line.Length >= MaxSessionLineCharacters)
+                {
+                    line.Clear();
+                    oversized = true;
+                    continue;
+                }
+
+                line.Append(character);
+            }
         }
     }
 

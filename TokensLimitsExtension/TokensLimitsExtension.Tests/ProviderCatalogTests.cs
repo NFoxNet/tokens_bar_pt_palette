@@ -882,6 +882,53 @@ public sealed class ProviderCatalogTests
         Assert.Equal("42 zed-token", handler.LastRequest!.Headers.Authorization!.ToString());
     }
 
+    [Fact]
+    public async Task KiroAdapterUsesTheBoundedProcessRunnerBoundary()
+    {
+        var runner = new StubProcessRunner(new UsageProviderProcessResult(
+            0,
+            "Plan: Pro\nCredits (20 of 100 covered)\n",
+            string.Empty));
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "kiro"),
+            new TestConfiguration(("kiro", "cliPath", "kiro-test")),
+            new HttpClient(new StubHandler("{}")),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024 * 1_024,
+            processRunner: runner);
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal("Pro", snapshot.Plan);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Credits used" && metric.Value == "20");
+        Assert.Equal("kiro-test", runner.FileName);
+        Assert.Equal(["chat", "--no-interactive", "/usage"], runner.Arguments);
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerStopsAnOversizedCliOutput()
+    {
+        var powershell = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+        if (!File.Exists(powershell))
+        {
+            return;
+        }
+
+        var runner = new BoundedUsageProviderProcessRunner(
+            timeout: TimeSpan.FromSeconds(5),
+            maxOutputCharacters: 1_024);
+
+        await Assert.ThrowsAsync<UsageProviderRequestException>(() => runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write(('x' * 4096))"],
+            CancellationToken.None));
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {
@@ -923,6 +970,22 @@ public sealed class ProviderCatalogTests
                 Content = content,
                 RequestMessage = request,
             });
+        }
+    }
+
+    private sealed class StubProcessRunner(UsageProviderProcessResult result) : IUsageProviderProcessRunner
+    {
+        public string? FileName { get; private set; }
+        public IReadOnlyList<string> Arguments { get; private set; } = [];
+
+        public Task<UsageProviderProcessResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> arguments,
+            CancellationToken cancellationToken)
+        {
+            FileName = fileName;
+            Arguments = arguments.ToArray();
+            return Task.FromResult(result);
         }
     }
 
