@@ -209,7 +209,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 {
                     failures.Add(new UsageProviderRequestException(
                         $"{endpoint.Name}: HTTP {(int)response.StatusCode} ({response.StatusCode}).",
-                        retryAfter: response.Headers.RetryAfter?.Delta,
+                        retryAfter: GetRetryAfter(response.Headers.RetryAfter),
                         statusCode: response.StatusCode));
                     continue;
                 }
@@ -243,7 +243,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return UsageJsonParser.Merge(_descriptor, snapshots);
         }
 
-        var lastRequestFailure = failures.LastOrDefault() as UsageProviderRequestException;
+        var lastRequestFailure = failures.OfType<UsageProviderRequestException>().LastOrDefault();
         throw new UsageProviderRequestException(
             $"Не удалось получить реальные данные {_descriptor.DisplayName}: {DescribeFailures(failures)}",
             failures.LastOrDefault(),
@@ -255,6 +255,22 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
     {
         Interlocked.Exchange(ref _disposed, 1);
         GC.SuppressFinalize(this);
+    }
+
+    private static TimeSpan? GetRetryAfter(RetryConditionHeaderValue? retryAfter)
+    {
+        if (retryAfter?.Delta is { } delta)
+        {
+            return delta > TimeSpan.Zero ? delta : null;
+        }
+
+        if (retryAfter?.Date is { } date)
+        {
+            var remaining = date - DateTimeOffset.UtcNow;
+            return remaining > TimeSpan.Zero ? remaining : null;
+        }
+
+        return null;
     }
 
     private HttpRequestMessage CreateRequest(UsageProviderEndpoint endpoint, ResolvedCredential credential)
