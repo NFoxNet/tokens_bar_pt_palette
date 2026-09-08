@@ -37,6 +37,12 @@ public interface IUsageProviderStateSource : IRefreshableUsageProvider
     Task RefreshAsync(bool force = false, CancellationToken cancellationToken = default);
 }
 
+/// <summary>Allows the scheduler to stop a shared refresh after provider removal.</summary>
+internal interface IRefreshCancellationSource
+{
+    void CancelRefreshForDeactivation();
+}
+
 internal static class UsageProviderErrorClassifier
 {
     public static UsageProviderErrorKind Classify(Exception exception)

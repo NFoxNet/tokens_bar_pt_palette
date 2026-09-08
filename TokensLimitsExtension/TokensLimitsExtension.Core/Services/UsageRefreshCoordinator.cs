@@ -25,9 +25,14 @@ public sealed class UsageRefreshCoordinator : IDisposable
     {
         ArgumentNullException.ThrowIfNull(providers);
         var next = providers.ToArray();
+        IRefreshCancellationSource[] removedRefreshes;
         lock (_gate)
         {
             var nextIds = next.Select(provider => provider.Descriptor.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            removedRefreshes = _providers
+                .Where(provider => !nextIds.Contains(provider.Descriptor.Id))
+                .OfType<IRefreshCancellationSource>()
+                .ToArray();
             foreach (var (id, token) in _providerTokens.Where(pair => !nextIds.Contains(pair.Key)).ToArray())
             {
                 token.Cancel();
@@ -43,6 +48,11 @@ public sealed class UsageRefreshCoordinator : IDisposable
                     _providerTokens[provider.Descriptor.Id] = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
                 }
             }
+        }
+
+        foreach (var refresh in removedRefreshes)
+        {
+            refresh.CancelRefreshForDeactivation();
         }
 
         RefreshAll();

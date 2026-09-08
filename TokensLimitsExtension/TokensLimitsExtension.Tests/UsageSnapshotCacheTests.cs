@@ -14,13 +14,15 @@ public sealed class UsageSnapshotCacheTests
 
         var first = cache.GetUsageSnapshotAsync();
         await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = cache.GetUsageSnapshotAsync();
+        var remaining = Enumerable.Range(0, 19)
+            .Select(_ => cache.GetUsageSnapshotAsync())
+            .ToArray();
         provider.Release.TrySetResult();
 
-        var snapshots = await Task.WhenAll(first, second);
+        var snapshots = await Task.WhenAll([first, .. remaining]);
 
         Assert.Equal(1, provider.CallCount);
-        Assert.Same(snapshots[0], snapshots[1]);
+        Assert.All(snapshots, snapshot => Assert.Same(snapshots[0], snapshot));
         Assert.NotNull(snapshots[0].FetchedAt);
     }
 
@@ -74,7 +76,49 @@ public sealed class UsageSnapshotCacheTests
     }
 
     [Fact]
-    public async Task ReleasesTheRefreshGateAfterCallerCancellation()
+    public async Task CancelsThePreviousGenerationWhenProviderConfigurationChanges()
+    {
+        var provider = new SequentialBlockingProvider();
+        var settings = new ConfigurationAwareSettings(TimeSpan.FromMinutes(10));
+        using var cache = new UsageSnapshotCache(provider, settings, new FixedTimeProvider());
+
+        var previousGeneration = cache.GetUsageSnapshotAsync();
+        await provider.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        settings.RaiseProviderConfigurationChanged();
+        var currentGeneration = cache.GetUsageSnapshotAsync();
+        await provider.SecondCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        provider.ReleaseFirstCall.TrySetResult();
+        provider.ReleaseSecondCall.TrySetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => previousGeneration);
+        var snapshot = await currentGeneration;
+
+        Assert.Equal(2, provider.CallCount);
+        Assert.Equal("current", snapshot.Plan);
+        Assert.True(cache.TryGetSnapshot(out var cachedSnapshot));
+        Assert.Same(snapshot, cachedSnapshot);
+    }
+
+    [Fact]
+    public async Task ConfigurationChangeDoesNotPublishAnErrorFromAnOldRefresh()
+    {
+        var provider = new SequentialBlockingProvider();
+        var settings = new ConfigurationAwareSettings(TimeSpan.FromMinutes(10));
+        using var cache = new UsageSnapshotCache(provider, settings, new FixedTimeProvider());
+
+        var refresh = cache.RefreshAsync();
+        await provider.FirstCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        settings.RaiseProviderConfigurationChanged();
+        provider.ReleaseFirstCall.TrySetResult();
+        await refresh;
+
+        Assert.Equal(UsageProviderErrorKind.None, cache.State.ErrorKind);
+        Assert.False(cache.State.IsRefreshing);
+        Assert.False(cache.TryGetSnapshot(out _));
+    }
+
+    [Fact]
+    public async Task CancellingOneWaiterDoesNotCancelTheSharedRefresh()
     {
         var provider = new BlockingProvider();
         using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
@@ -82,14 +126,51 @@ public sealed class UsageSnapshotCacheTests
 
         var cancelledRefresh = cache.GetUsageSnapshotAsync(cancellation.Token);
         await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var waitingRefresh = cache.GetUsageSnapshotAsync();
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledRefresh);
         provider.Release.TrySetResult();
-        var snapshot = await cache.GetUsageSnapshotAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var snapshot = await waitingRefresh.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(2, provider.CallCount);
+        Assert.Equal(1, provider.CallCount);
         Assert.NotNull(snapshot.FetchedAt);
+    }
+
+    [Fact]
+    public async Task SharesOneFailedRefreshBetweenConcurrentCallers()
+    {
+        var provider = new BlockingFailureProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+
+        var requests = Enumerable.Range(0, 20)
+            .Select(_ => cache.GetUsageSnapshotAsync())
+            .ToArray();
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        provider.Release.TrySetResult();
+
+        foreach (var request in requests)
+        {
+            await Assert.ThrowsAsync<HttpRequestException>(() => request);
+        }
+
+        Assert.Equal(1, provider.CallCount);
+    }
+
+    [Fact]
+    public async Task CoalescesConcurrentForcedRefreshes()
+    {
+        var provider = new BlockingProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+
+        var refreshes = Enumerable.Range(0, 20)
+            .Select(_ => cache.RefreshAsync(force: true))
+            .ToArray();
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        provider.Release.TrySetResult();
+        await Task.WhenAll(refreshes);
+
+        Assert.Equal(1, provider.CallCount);
     }
 
     [Fact]
@@ -150,6 +231,53 @@ public sealed class UsageSnapshotCacheTests
         {
             CallCount++;
             return Task.FromResult(CreateSnapshot(Descriptor));
+        }
+    }
+
+    private sealed class BlockingFailureProvider : IUsageProvider
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("failure", "Failure");
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int CallCount { get; private set; }
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            throw new HttpRequestException("connection failed");
+        }
+    }
+
+    private sealed class SequentialBlockingProvider : IUsageProvider
+    {
+        private int _callCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("sequential", "Sequential");
+        public TaskCompletionSource FirstCallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondCallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSecondCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            var callNumber = Interlocked.Increment(ref _callCount);
+            if (callNumber == 1)
+            {
+                FirstCallStarted.TrySetResult();
+                // Simulate an adapter that completes a response despite its
+                // cancellation token having been signalled.
+                await ReleaseFirstCall.Task;
+            }
+            else
+            {
+                SecondCallStarted.TrySetResult();
+                await ReleaseSecondCall.Task.WaitAsync(cancellationToken);
+            }
+
+            return CreateSnapshot(Descriptor) with { Plan = "current" };
         }
     }
 
