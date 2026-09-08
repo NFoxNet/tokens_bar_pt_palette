@@ -27,6 +27,25 @@ dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --
 4. После Deploy в Command Palette выполните `Reload` → `Reload Command Palette extensions`.
 5. Для диагностики смотрите Output window в режиме Debug; код пишет сообщения через `Debug.WriteLine` и `ExtensionHost.LogMessage`.
 
+### Локальный baseline процесса
+
+Для сопоставимых измерений запускайте sampler из корня репозитория, когда
+Command Palette уже загрузил расширение:
+
+```powershell
+pwsh -File .\scripts\Measure-ExtensionBaseline.ps1 `
+  -ProcessName TokensLimitsExtension `
+  -DurationSeconds 60 `
+  -SampleIntervalMilliseconds 1000 `
+  -OutputPath .\TokensLimitsExtension\codex_docs\baseline-live.json
+```
+
+Скрипт читает только локальные счётчики процесса: CPU time, private bytes,
+working set, handles/threads, page faults и объём чтения/записи. Он не пишет
+телеметрию и не собирает содержимое файлов или сетевых ответов. В отчёте должны
+быть отдельно отмечены cold start, warm/idle период и сценарий обновления; один
+idle-прогон не является доказательством UI-событий или timer callbacks.
+
 ## Проверенное локальное обновление для проверки UI
 
 Обычная `dotnet build` создаёт DLL, а не installable MSIX. Не регистрируйте
