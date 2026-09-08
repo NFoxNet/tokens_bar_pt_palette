@@ -76,6 +76,23 @@ public sealed class UsageSnapshotCacheTests
     }
 
     [Fact]
+    public async Task DoesNotRaiseStateChangedAfterDisposeCancelsAnInFlightRefresh()
+    {
+        var provider = new BlockingProvider();
+        var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+        var stateChanged = 0;
+        cache.StateChanged += (_, _) => Interlocked.Increment(ref stateChanged);
+
+        var refresh = cache.RefreshAsync();
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Interlocked.Exchange(ref stateChanged, 0);
+        cache.Dispose();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh);
+        Assert.Equal(0, stateChanged);
+    }
+
+    [Fact]
     public async Task CancelsThePreviousGenerationWhenProviderConfigurationChanges()
     {
         var provider = new SequentialBlockingProvider();
@@ -186,6 +203,25 @@ public sealed class UsageSnapshotCacheTests
         Assert.Equal("first", snapshot.Plan);
         Assert.Equal(UsageProviderErrorKind.Network, cache.State.ErrorKind);
         Assert.True(cache.State.IsStale);
+    }
+
+    [Fact]
+    public async Task KeepsStaleErrorVisibleWhileAReplacementRefreshIsRunning()
+    {
+        var provider = new StaleWhileRefreshingProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+
+        await cache.RefreshAsync();
+        await cache.RefreshAsync(force: true);
+        var refresh = cache.RefreshAsync(force: true);
+        await provider.ThirdCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(cache.State.IsRefreshing);
+        Assert.True(cache.State.IsStale);
+        Assert.Equal(UsageProviderErrorKind.Network, cache.State.ErrorKind);
+
+        provider.ReleaseThirdCall.TrySetResult();
+        await refresh;
     }
 
     [Fact]
@@ -345,6 +381,33 @@ public sealed class UsageSnapshotCacheTests
             }
 
             throw new HttpRequestException("connection failed");
+        }
+    }
+
+    private sealed class StaleWhileRefreshingProvider : IUsageProvider
+    {
+        private int _callCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("stale-refresh", "Stale refresh");
+        public TaskCompletionSource ThirdCallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseThirdCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            var call = Interlocked.Increment(ref _callCount);
+            if (call == 1)
+            {
+                return CreateSnapshot(Descriptor) with { Plan = "first" };
+            }
+
+            if (call == 2)
+            {
+                throw new HttpRequestException("connection failed");
+            }
+
+            ThirdCallStarted.TrySetResult();
+            await ReleaseThirdCall.Task.WaitAsync(cancellationToken);
+            throw new HttpRequestException("connection failed again");
         }
     }
 

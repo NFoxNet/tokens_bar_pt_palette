@@ -257,7 +257,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         }
 
         var configurationGeneration = GetConfigurationGeneration();
-        UpdateState(isRefreshing: true, errorKind: UsageProviderErrorKind.None, retryAfter: null);
+        BeginRefresh();
         try
         {
             await GetUsageSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -265,7 +265,8 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
         {
-            UpdateState(isRefreshing: false, errorKind: UsageProviderErrorKind.None, retryAfter: null);
+            var state = State;
+            UpdateState(isRefreshing: false, errorKind: state.ErrorKind, retryAfter: state.RetryAfter);
             throw;
         }
         catch (OperationCanceledException) when (HasConfigurationGenerationChanged(configurationGeneration))
@@ -375,7 +376,35 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         RaiseStateChanged();
     }
 
-    private void RaiseStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);
+    private void BeginRefresh()
+    {
+        lock (_stateGate)
+        {
+            var hasLastKnownSnapshot = _snapshot is not null;
+            _state = _state with
+            {
+                IsRefreshing = true,
+                LastAttemptAt = _timeProvider.GetUtcNow(),
+                ErrorKind = hasLastKnownSnapshot ? _state.ErrorKind : UsageProviderErrorKind.None,
+                RetryAfter = hasLastKnownSnapshot ? _state.RetryAfter : null,
+            };
+        }
+
+        RaiseStateChanged();
+    }
+
+    private void RaiseStateChanged()
+    {
+        lock (_stateGate)
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     private void ThrowIfDisposed()
     {
