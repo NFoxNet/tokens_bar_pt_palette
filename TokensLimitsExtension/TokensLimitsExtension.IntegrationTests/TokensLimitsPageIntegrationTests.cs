@@ -10,6 +10,45 @@ namespace TokensLimitsExtension.IntegrationTests;
 public sealed class TokensLimitsPageIntegrationTests
 {
     [Fact]
+    public void GetItemsDoesNotStartRefreshOrRaiseItemsChanged()
+    {
+        var provider = new BlockingGenericProvider();
+        using var cache = new UsageSnapshotCache(provider);
+        using var detailsPage = new TokensLimitsPage(cache);
+        using var overviewPage = new UsageOverviewPage([cache], [detailsPage]);
+        var detailsItemsChanged = 0;
+        var overviewItemsChanged = 0;
+        detailsPage.ItemsChanged += (_, _) => detailsItemsChanged++;
+        overviewPage.ItemsChanged += (_, _) => overviewItemsChanged++;
+
+        for (var index = 0; index < 1_000; index++)
+        {
+            _ = detailsPage.GetItems();
+            _ = overviewPage.GetItems();
+        }
+
+        Assert.Equal(0, provider.CallCount);
+        Assert.Equal(0, detailsItemsChanged);
+        Assert.Equal(0, overviewItemsChanged);
+    }
+
+    [Fact]
+    public async Task CommandsProviderStartsInitialRefreshWithoutReadingPageItems()
+    {
+        using var testDirectory = new TestDirectory();
+        var usageProvider = new StartingGenericProvider();
+        using var registry = new UsageProviderRegistry([usageProvider]);
+        using var commandsProvider = new TokensLimitsExtensionCommandsProvider(
+            null,
+            registry,
+            new global::TokensLimitsExtension.Settings.TokensLimitsSettings(testDirectory.Path));
+
+        await usageProvider.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(1, usageProvider.CallCount);
+    }
+
+    [Fact]
     public async Task PageReturnsDetailedLimitItemsWithExpectedTitles()
     {
         var now = DateTimeOffset.UtcNow;
@@ -169,6 +208,41 @@ public sealed class TokensLimitsPageIntegrationTests
             => Task.FromResult(Volatile.Read(ref _snapshot));
 
         public void SetSnapshot(UsageSnapshot snapshot) => Volatile.Write(ref _snapshot, snapshot);
+    }
+
+    private sealed class BlockingGenericProvider : IUsageProvider
+    {
+        private int _callCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("blocking", "Blocking");
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _callCount);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("Unreachable");
+        }
+    }
+
+    private sealed class StartingGenericProvider : IUsageProvider
+    {
+        private int _callCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("starting", "Starting");
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _callCount);
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("Unreachable");
+        }
     }
 
     private static UsageSnapshot CreateSnapshot(string id, string displayName, int primaryUsedPercent)

@@ -51,7 +51,6 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     {
         if (IsDisposed) return [];
         if (_stateSource?.State.Snapshot is { } snapshot) SetItems(CreateItems(snapshot), false);
-        else _ = RefreshAsync();
         return Volatile.Read(ref _items);
     }
 

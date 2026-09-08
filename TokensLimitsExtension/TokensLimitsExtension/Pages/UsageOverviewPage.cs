@@ -46,7 +46,6 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     public override IListItem[] GetItems()
     {
         if (Volatile.Read(ref _disposed) != 0) return [];
-        _ = RefreshAsync();
         return Volatile.Read(ref _items);
     }
 
