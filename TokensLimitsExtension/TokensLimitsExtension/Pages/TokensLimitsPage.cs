@@ -81,7 +81,19 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private void ApplyState(UsageProviderState state)
     {
         if (IsDisposed) return;
-        if (state.Snapshot is { } snapshot) SetItems(CreateItems(snapshot), true);
+        if (state.Snapshot is { } snapshot)
+        {
+            var items = new List<IListItem>(CreateItems(snapshot));
+            if (state.IsStale)
+            {
+                items.Insert(0, new ListItem(new NoOpCommand())
+                {
+                    Title = _localization.GetString("status.stale", "Stale"),
+                    Subtitle = _localization.GetString("status.unavailable", "Limits unavailable"),
+                });
+            }
+            SetItems([.. items], true);
+        }
         else if (!state.IsRefreshing) SetItems(CreateUnavailableItems(), true);
     }
     private void SetItems(IListItem[] items, bool notify)

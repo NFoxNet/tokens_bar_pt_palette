@@ -58,7 +58,13 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     }
     internal void Deactivate() => Dispose();
     private void StateSourceOnStateChanged(object? sender, EventArgs e) => ApplyState(_stateSource!.State);
-    private void LocalizationOnLanguageChanged(object? sender, EventArgs e) { if (_stateSource?.State.Snapshot is { } snapshot) ApplySnapshot(snapshot); }
+    private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (_stateSource is not null)
+        {
+            ApplyState(_stateSource.State);
+        }
+    }
     private void ApplyState(UsageProviderState state)
     {
         if (IsDisposed) return;
