@@ -14,7 +14,7 @@
 Из корня репозитория:
 
 ```powershell
-dotnet restore .\TokensLimitsExtension.sln
+dotnet restore .\TokensLimitsExtension.sln --locked-mode
 dotnet build .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore
 dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore
 ```
@@ -46,9 +46,9 @@ $certificatePassword = Read-Host 'PFX password' -AsSecureString
   -CertificatePath C:\secure\tokens-limits-release.pfx `
   -CertificatePassword $certificatePassword `
   -Platform x64 `
-  -OutputDirectory .\artifacts-local
+  -OutputDirectory artifacts\local-upgrade
 
-$package = Resolve-Path .\artifacts-local\TokensLimitsExtension_*.msix
+$package = Resolve-Path ..\artifacts\local-upgrade\TokensLimitsExtension_*.msix
 if ((Get-AuthenticodeSignature $package).Status -ne 'Valid') {
   throw 'MSIX signature validation failed.'
 }
