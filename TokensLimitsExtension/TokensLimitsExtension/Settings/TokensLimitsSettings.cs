@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using TokensLimitsExtension.Core.Services;
 using TokensLimitsExtension.Localization;
@@ -33,7 +35,6 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     private bool _disposed;
     private bool _handlingSettingsChange;
-    private string _providerConfigurationFingerprint = string.Empty;
 
     public TokensLimitsSettings()
         : this(ResolveDefaultStorage())
@@ -75,7 +76,6 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         RefreshLocalizedSettings();
         ValidateRefreshInterval();
         MigrateAndMaskLoadedSecrets();
-        _providerConfigurationFingerprint = GetProviderConfigurationFingerprint();
         Settings.SettingsChanged += OnSettingsChanged;
         _localization.LanguageChanged += OnLanguageChanged;
     }
@@ -355,7 +355,6 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
 
         var currentFingerprints = GetProviderConfigurationFingerprints();
-        _providerConfigurationFingerprint = GetProviderConfigurationFingerprint();
         var changedProviderIds = currentFingerprints
             .Where(pair => !previousFingerprints.TryGetValue(pair.Key, out var previous) || !string.Equals(previous, pair.Value, StringComparison.Ordinal))
             .Select(pair => pair.Key)
@@ -379,29 +378,20 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    private string GetProviderConfigurationFingerprint()
-    {
-        // This comparison is intentionally process-local and never logged or persisted.
-        // It lets us identify a key/account edit after secret values have been moved to DPAPI.
-        var parts = new List<string>();
-        foreach (var descriptor in UsageProviderDescriptorRegistry.All)
-        {
-            parts.Add(descriptor.Id);
-            parts.Add(IsEnabled(descriptor.Id).ToString(CultureInfo.InvariantCulture));
-            foreach (var field in descriptor.Settings)
-            {
-                parts.Add(field.Key);
-                parts.Add(GetValue(descriptor.Id, field.Key) ?? string.Empty);
-            }
-        }
-        return string.Join("\u001F", parts);
-    }
-
     private Dictionary<string, string> GetProviderConfigurationFingerprints()
         => UsageProviderDescriptorRegistry.All.ToDictionary(
             descriptor => descriptor.Id,
-            descriptor => string.Join("\u001F", descriptor.Settings.Select(field => $"{field.Key}\u001F{GetValue(descriptor.Id, field.Key) ?? string.Empty}")),
+            GetProviderConfigurationFingerprint,
             StringComparer.OrdinalIgnoreCase);
+
+    private string GetProviderConfigurationFingerprint(UsageProviderDescriptor descriptor)
+    {
+        var value = string.Join(
+            "\u001F",
+            new[] { IsEnabled(descriptor.Id).ToString(CultureInfo.InvariantCulture) }
+                .Concat(descriptor.Settings.Select(field => $"{field.Key}\u001F{GetValue(descriptor.Id, field.Key) ?? string.Empty}")));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    }
 
     private bool ValidateRefreshInterval()
     {

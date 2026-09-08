@@ -23,6 +23,7 @@
 - API keys, cookies, OAuth tokens и credentials JSON считаются секретами.
 - Не добавляйте их в исходники, тестовые fixtures, логи, screenshots или commit messages.
 - Секретные настройки маскируются в UI и сохраняются через `ProtectedSecretStore`.
+- Изменение настроек одного провайдера очищает только его cache; переключение языка и неизменившийся refresh interval не сбрасывают account data.
 - При диагностике используйте provider ID, HTTP status, размер ответа и тип ошибки; удаляйте значения заголовков и тела.
 - Не расширяйте разрешения и не меняйте endpoint на HTTP. Для Codex usage endpoint применяется HTTPS-проверка.
 

@@ -73,7 +73,7 @@ UsageRefreshCoordinator (one timer)
 
 ## Настройки и реконфигурация
 
-`TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует общее `Changed` и отдельное `ProviderConfigurationChanged`. Настройки и зашифрованные секреты всегда читаются и записываются в едином стабильном каталоге `%LOCALAPPDATA%\TokensLimitsExtension`. При первом запуске после обновления содержимое host/package-local каталога переносится туда, если там найден более новый secret store. При смене языка cache не инвалидируется; при смене ключа, аккаунта, URL или включения провайдера его старый snapshot очищается до нового запроса. `TokensLimitsExtensionCommandsProvider` на событие настроек:
+`TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует общее `Changed` и адресное `ProviderConfigurationChanged` с набором provider ID. Для сравнения конфигурации используются process-local SHA-256 fingerprints отдельных провайдеров; открытые ключи и Cookie не удерживаются в общем fingerprint. Настройки и зашифрованные секреты всегда читаются и записываются в едином стабильном каталоге `%LOCALAPPDATA%\TokensLimitsExtension`. При первом запуске после обновления содержимое host/package-local каталога переносится туда, если там найден более новый secret store. При смене языка cache не инвалидируется; при смене ключа, аккаунта, URL или включения провайдера очищается только его старый snapshot до нового запроса. `TokensLimitsExtensionCommandsProvider` на событие настроек:
 
 1. `UsageSnapshotCache` очищает snapshot только при изменении конфигурации провайдера;
 2. заново вычисляет список включённых провайдеров;
