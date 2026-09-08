@@ -50,6 +50,18 @@ try {
         throw 'A relative repository root was accepted.'
     }
 
+    $rejected = $false
+    try {
+        $null = Get-ValidatedReleaseOutputDirectory -RepositoryRoot $repositoryRoot -OutputDirectory 'artifacts\..\..\repository-copy\release'
+    }
+    catch [System.InvalidOperationException] {
+        $rejected = $true
+    }
+
+    if (-not $rejected) {
+        throw 'An output directory that escapes artifacts through parent traversal was accepted.'
+    }
+
     foreach ($unsafeOutput in @($repositoryRoot, $sourceDirectory, $siblingDirectory, $artifactsRoot)) {
         $rejected = $false
         try {
