@@ -93,6 +93,75 @@ public sealed class TokensLimitsPageIntegrationTests
     }
 
     [Fact]
+    public async Task ChangedValuesReuseDetailsItemsWhenCompositionIsStable()
+    {
+        var provider = new MutableGenericProvider(
+            "stable",
+            "Stable",
+            new UsageSnapshot(
+                "stable",
+                "Stable",
+                new UsageWindow(25, DateTimeOffset.UtcNow.AddDays(2), 3600),
+                null,
+                "pro",
+                false));
+        using var cache = new UsageSnapshotCache(provider);
+        using var page = new TokensLimitsPage(cache);
+
+        await page.RefreshAsync();
+        var firstItems = page.GetItems();
+        provider.SetSnapshot(new UsageSnapshot(
+            "stable",
+            "Stable",
+            new UsageWindow(50, DateTimeOffset.UtcNow.AddDays(2), 3600),
+            null,
+            "pro",
+            false));
+
+        await cache.RefreshAsync(force: true);
+
+        var secondItems = page.GetItems();
+        Assert.Equal(firstItems.Length, secondItems.Length);
+        Assert.All(firstItems.Zip(secondItems), pair => Assert.Same(pair.First, pair.Second));
+        Assert.Contains("50% осталось", secondItems[0].Subtitle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ChangedValuesReuseOverviewItemsWhenProviderCompositionIsStable()
+    {
+        var provider = new MutableGenericProvider(
+            "stable",
+            "Stable",
+            new UsageSnapshot(
+                "stable",
+                "Stable",
+                new UsageWindow(25, DateTimeOffset.UtcNow.AddDays(2), 3600),
+                null,
+                "pro",
+                false));
+        using var cache = new UsageSnapshotCache(provider);
+        using var details = new TokensLimitsPage(cache);
+        using var overview = new UsageOverviewPage([cache], [details]);
+
+        await overview.RefreshAsync();
+        var firstItems = overview.GetItems();
+        provider.SetSnapshot(new UsageSnapshot(
+            "stable",
+            "Stable",
+            new UsageWindow(50, DateTimeOffset.UtcNow.AddDays(2), 3600),
+            null,
+            "pro",
+            false));
+
+        await cache.RefreshAsync(force: true);
+
+        var secondItems = overview.GetItems();
+        Assert.Single(secondItems);
+        Assert.Same(firstItems[0], secondItems[0]);
+        Assert.Contains("50%", secondItems[0].Subtitle, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CommandsProviderExposesExactlyOneCommand()
     {
         using var testDirectory = new TestDirectory();

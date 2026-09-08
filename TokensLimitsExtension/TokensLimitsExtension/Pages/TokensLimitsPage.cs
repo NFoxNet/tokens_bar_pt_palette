@@ -105,6 +105,24 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             return;
         }
 
+        var currentItems = Volatile.Read(ref _items);
+        if (currentItems.Length == items.Length
+            && currentItems.All(item => item is ListItem)
+            && items.All(item => item is ListItem))
+        {
+            for (var index = 0; index < items.Length; index++)
+            {
+                var current = (ListItem)currentItems[index];
+                var updated = (ListItem)items[index];
+                current.Title = updated.Title;
+                current.Subtitle = updated.Subtitle;
+            }
+
+            _renderSignature = signature;
+            if (notify && !IsDisposed) RaiseItemsChanged(items.Length);
+            return;
+        }
+
         _renderSignature = signature;
         Volatile.Write(ref _items, items);
         if (notify && !IsDisposed) RaiseItemsChanged(items.Length);

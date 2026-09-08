@@ -19,6 +19,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     private readonly ILocalizationService _localization;
     private readonly UsageRefreshCoordinator? _coordinator;
     private IListItem[] _items;
+    private string[] _itemProviderIds = [];
     private string? _renderSignature;
     private int _disposed;
 
@@ -115,6 +116,24 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
             return;
         }
 
+        if (entries.Count == _itemProviderIds.Length
+            && entries.Select(entry => entry.Id).SequenceEqual(_itemProviderIds, StringComparer.OrdinalIgnoreCase)
+            && _items.Length == entries.Count
+            && _items.Zip(entries).All(pair => pair.First is ListItem item
+                && ReferenceEquals(item.Command, pair.Second.Page)))
+        {
+            for (var index = 0; index < entries.Count; index++)
+            {
+                var item = (ListItem)_items[index];
+                item.Title = entries[index].Title;
+                item.Subtitle = entries[index].Subtitle;
+            }
+
+            _renderSignature = signature;
+            RaiseItemsChanged(entries.Count);
+            return;
+        }
+
         var items = entries
             .Select(entry => (IListItem)new ListItem(entry.Page)
             {
@@ -127,6 +146,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
             Title = _localization.GetString("overview.empty.title", "No providers enabled"),
             Subtitle = _localization.GetString("overview.empty.subtitle", "Enable providers in the extension settings."),
         });
+        _itemProviderIds = entries.Select(entry => entry.Id).ToArray();
         _renderSignature = signature;
         Volatile.Write(ref _items, items.ToArray());
         RaiseItemsChanged(items.Count);
