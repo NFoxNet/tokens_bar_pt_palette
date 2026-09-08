@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Diagnostics;
 using System.ComponentModel;
@@ -30,10 +31,15 @@ public sealed class UsageProviderRequestException(
 /// </summary>
 public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 {
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan MaximumCancellableTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+    private const int DefaultMaxResponseBodyBytes = 1_048_576;
     private readonly UsageProviderDescriptor _descriptor;
     private readonly IUsageProviderConfiguration _configuration;
     private readonly HttpClient _httpClient;
     private readonly Action<string> _logger;
+    private readonly TimeSpan _requestTimeout;
+    private readonly int _maxResponseBodyBytes;
     private int _disposed;
 
     public ConfiguredUsageProvider(
@@ -41,11 +47,37 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         IUsageProviderConfiguration configuration,
         HttpClient httpClient,
         Action<string>? logger = null)
+        : this(descriptor, configuration, httpClient, logger, null, DefaultMaxResponseBodyBytes)
+    {
+    }
+
+    /// <summary>
+    /// Creates a catalog-backed provider with bounds for its generic HTTP endpoint path.
+    /// Provider-specific adapters are migrated to the same bounded reader separately.
+    /// </summary>
+    public ConfiguredUsageProvider(
+        UsageProviderDescriptor descriptor,
+        IUsageProviderConfiguration configuration,
+        HttpClient httpClient,
+        Action<string>? logger,
+        TimeSpan? requestTimeout,
+        int maxResponseBodyBytes)
     {
         _descriptor = descriptor ?? throw new ArgumentNullException(nameof(descriptor));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _logger = logger ?? (_ => { });
+        _requestTimeout = requestTimeout ?? DefaultRequestTimeout;
+        if (_requestTimeout <= TimeSpan.Zero || _requestTimeout > MaximumCancellableTimeout)
+        {
+#pragma warning disable CA1512 // TimeSpan does not implement INumberBase required by ThrowIfNegativeOrZero.
+            throw new ArgumentOutOfRangeException(nameof(requestTimeout));
+#pragma warning restore CA1512
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResponseBodyBytes);
+
+        _maxResponseBodyBytes = maxResponseBodyBytes;
     }
 
     public UsageProviderDescriptor Descriptor => _descriptor;
@@ -160,11 +192,13 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 continue;
             }
 
+            using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            requestCts.CancelAfter(_requestTimeout);
             try
             {
                 using var request = CreateRequest(endpoint, credential);
                 using var response = await _httpClient
-                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestCts.Token)
                     .ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
@@ -173,7 +207,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                     continue;
                 }
 
-                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var body = await ReadBoundedResponseBodyAsync(response.Content, requestCts.Token).ConfigureAwait(false);
                 var snapshot = UsageJsonParser.ParseText(
                     _descriptor,
                     endpoint.Name,
@@ -185,6 +219,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
+            {
+                failures.Add(new UsageProviderRequestException(
+                    $"{endpoint.Name}: request timed out after {_requestTimeout.TotalSeconds:0.#} seconds."));
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or XmlException or InvalidOperationException or UsageProviderRequestException or UsageProviderConfigurationException)
             {
@@ -3252,6 +3291,62 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         => failures.Count == 0
             ? "источник не отвечает"
             : string.Join("; ", failures.Select(failure => failure.Message).Distinct(StringComparer.Ordinal));
+
+    private async Task<string> ReadBoundedResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is { } contentLength && contentLength > _maxResponseBodyBytes)
+        {
+            throw new UsageProviderRequestException(
+                $"Response exceeds the maximum response size of {_maxResponseBodyBytes} bytes.");
+        }
+
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var bytes = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(81_920);
+        try
+        {
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                if (bytes.Length > _maxResponseBodyBytes - read)
+                {
+                    throw new UsageProviderRequestException(
+                        $"Response exceeds the maximum response size of {_maxResponseBodyBytes} bytes.");
+                }
+
+                await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
+
+            return GetContentEncoding(content).GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static Encoding GetContentEncoding(HttpContent content)
+    {
+        var charset = content.Headers.ContentType?.CharSet;
+        if (!string.IsNullOrWhiteSpace(charset))
+        {
+            try
+            {
+                return Encoding.GetEncoding(charset);
+            }
+            catch (ArgumentException)
+            {
+                // Fall back to UTF-8 for invalid or unsupported response declarations.
+            }
+        }
+
+        return Encoding.UTF8;
+    }
 
     private sealed record ResolvedCredential(string? ApiKey, string? CookieHeader);
 }

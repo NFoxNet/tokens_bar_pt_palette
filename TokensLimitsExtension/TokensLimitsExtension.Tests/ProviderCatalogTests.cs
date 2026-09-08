@@ -9,6 +9,67 @@ namespace TokensLimitsExtension.Tests;
 public sealed class ProviderCatalogTests
 {
     [Fact]
+    public async Task GenericAdapterRejectsAResponseBodyLargerThanItsConfiguredLimit()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StringContent(new string('x', 1_025), Encoding.UTF8, "application/json"))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() => provider.GetUsageSnapshotAsync());
+
+        Assert.Contains("maximum response size", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenericAdapterRejectsAnUnknownLengthResponseBodyThatExceedsItsConfiguredLimit()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StreamContent(new ChunkedReadStream(new string('x', 1_025))))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() => provider.GetUsageSnapshotAsync());
+
+        Assert.Contains("maximum response size", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenericAdapterTimesOutWhileReadingAResponseBodyAfterHeaders()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StreamContent(new DelayedReadStream()))),
+            logger: null,
+            requestTimeout: TimeSpan.FromMilliseconds(25),
+            maxResponseBodyBytes: 1_024 * 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() =>
+            provider.GetUsageSnapshotAsync().WaitAsync(TimeSpan.FromSeconds(1)));
+
+        Assert.Contains("timed out", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GenericAdapterRejectsTimeoutsThatCannotBeScheduled()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new StubHandler("{}")),
+            logger: null,
+            requestTimeout: TimeSpan.FromDays(50),
+            maxResponseBodyBytes: 1_024));
+    }
+
+    [Fact]
     public void MirrorsTheCurrentCodexBarManifest()
     {
         var descriptors = UsageProviderDescriptorRegistry.All;
@@ -783,6 +844,106 @@ public sealed class ProviderCatalogTests
                 RequestMessage = request,
             };
         }
+    }
+
+    private sealed class ContentHandler(HttpContent content) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = content,
+                RequestMessage = request,
+            });
+        }
+    }
+
+    private sealed class DelayedReadStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith(
+                _ => 0,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion,
+                TaskScheduler.Default);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => new(Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith(
+                _ => 0,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion,
+                TaskScheduler.Default));
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class ChunkedReadStream : Stream
+    {
+        private readonly byte[] _bytes;
+        private int _offset;
+
+        public ChunkedReadStream(string value) => _bytes = Encoding.UTF8.GetBytes(value);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Math.Min(Math.Min(buffer.Length, 512), _bytes.Length - _offset);
+            _bytes.AsMemory(_offset, count).CopyTo(buffer);
+            _offset += count;
+            return ValueTask.FromResult(count);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class RoutingStubHandler(Func<HttpRequestMessage, string> responseFactory) : HttpMessageHandler
