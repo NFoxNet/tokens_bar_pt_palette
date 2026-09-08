@@ -75,6 +75,22 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task SpecializedAdapterRejectsAResponseBodyLargerThanItsConfiguredLimit()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StringContent(new string('x', 1_025), Encoding.UTF8, "application/json"))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() => provider.GetUsageSnapshotAsync());
+
+        Assert.Contains("maximum response size", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void GenericAdapterRejectsTimeoutsThatCannotBeScheduled()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new ConfiguredUsageProvider(

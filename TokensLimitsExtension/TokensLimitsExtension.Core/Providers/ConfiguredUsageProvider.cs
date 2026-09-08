@@ -686,7 +686,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"OpenCode server function: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        return await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<string> GetOpenCodePageTextAsync(
@@ -709,7 +709,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"OpenCode page: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        return await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
     }
 
     private static UsageWindow? ParseOpenCodeWindow(
@@ -750,7 +750,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"MiniMax web: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var body = await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
         if (TryParseMiniMaxWebJson(body, now, out var snapshot))
         {
@@ -1307,7 +1307,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 .ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
             {
-                var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var html = await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
                 try
                 {
                     var snapshot = ParseOllamaCloudHtml(html, DateTimeOffset.UtcNow, settingsUri.AbsoluteUri);
@@ -2405,7 +2405,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Amp {endpoint.Name}: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var body = await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
         var displayText = body;
         if (endpoint.Name.Equals("balance-api", StringComparison.OrdinalIgnoreCase))
         {
@@ -2551,7 +2551,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Windsurf GetPlanStatus: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        var bytes = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
         var status = DecodeWindsurfResponse(bytes);
         var metrics = new List<UsageMetric>();
         if (!string.IsNullOrWhiteSpace(status.PlanName))
@@ -3050,7 +3050,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                     $"Не удалось открыть консоль {Descriptor.DisplayName}: HTTP {(int)pageResponse.StatusCode}.");
             }
 
-            var page = await pageResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var page = await ReadBoundedResponseBodyAsync(pageResponse.Content, cancellationToken).ConfigureAwait(false);
             secToken = ExtractSecToken(page);
         }
 
@@ -3136,7 +3136,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"T3 Chat: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var body = await ReadBoundedResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
         foreach (var line in body.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
             try
@@ -3317,6 +3317,12 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
     private async Task<string> ReadBoundedResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
     {
+        var bytes = await ReadBoundedResponseBytesAsync(content, cancellationToken).ConfigureAwait(false);
+        return GetContentEncoding(content).GetString(bytes);
+    }
+
+    private async Task<byte[]> ReadBoundedResponseBytesAsync(HttpContent content, CancellationToken cancellationToken)
+    {
         if (content.Headers.ContentLength is { } contentLength && contentLength > _maxResponseBodyBytes)
         {
             throw new UsageProviderRequestException(
@@ -3345,7 +3351,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             }
 
-            return GetContentEncoding(content).GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+            return bytes.ToArray();
         }
         finally
         {
