@@ -14,6 +14,7 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
@@ -22,12 +23,14 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.400'
+          cache: true
+          cache-dependency-path: TokensLimitsExtension/**/packages.lock.json
       - name: Restore locked dependencies
-        run: dotnet restore 'TokensLimitsExtension/TokensLimitsExtension.sln' --locked-mode -p:Platform=x64 -p:RuntimeIdentifier=win-x64 -p:PublishReadyToRun=true
+        run: dotnet restore 'TokensLimitsExtension/TokensLimitsExtension.sln' --locked-mode -p:Platform=x64 -p:PublishReadyToRun=true
       - name: Test release commit
         run: |
           dotnet build 'TokensLimitsExtension/TokensLimitsExtension.sln' --configuration Debug -p:Platform=x64 --no-restore -warnaserror
-          dotnet test 'TokensLimitsExtension/TokensLimitsExtension.sln' --configuration Debug -p:Platform=x64 --no-restore --no-build
+          dotnet test 'TokensLimitsExtension/TokensLimitsExtension.sln' --configuration Debug -p:Platform=x64 --no-restore --no-build --logger "trx;LogFileName=release-debug-tests.trx" --results-directory 'TokensLimitsExtension/TestResults'
       - name: Validate tag and manifest version
         run: |
           [xml]$manifest = Get-Content 'TokensLimitsExtension/TokensLimitsExtension/Package.appxmanifest'
@@ -88,6 +91,13 @@ jobs:
           & .\scripts\Test-ReleasePackage.ps1 `
             -PackagePath (Join-Path $releaseDirectory "TokensLimitsExtension_${version}_arm64.msix") `
             -ExpectedVersion $version -ExpectedArchitecture arm64 -ExpectedPublisher $manifest.Package.Identity.Publisher
+      - name: Upload release diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results
+          path: TokensLimitsExtension/TestResults/
+          if-no-files-found: ignore
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:

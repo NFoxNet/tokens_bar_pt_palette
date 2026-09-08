@@ -278,6 +278,34 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         return null;
     }
 
+    private static string SerializeAlibabaParameters(string apiName, Uri dashboardUrl, bool isQwen)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("Api", apiName);
+            writer.WriteString("V", "1.0");
+            writer.WriteStartObject("Data");
+            writer.WriteStartObject("cornerstoneParam");
+            writer.WriteString("feTraceId", Guid.NewGuid().ToString().ToLowerInvariant());
+            writer.WriteString("feURL", dashboardUrl.AbsoluteUri);
+            writer.WriteString("protocol", "V2");
+            writer.WriteString("console", "ONE_CONSOLE");
+            writer.WriteString("productCode", "p_efm");
+            writer.WriteString("domain", dashboardUrl.Host);
+            writer.WriteString("consoleSite", isQwen ? "QWENCLOUD" : "MODELSTUDIO_ALBABACLOUD");
+            writer.WriteString("userNickName", string.Empty);
+            writer.WriteString("userPrincipalName", string.Empty);
+            writer.WriteString("xsp_lang", "en-US");
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
     private static UsageProviderRequestException CreateHttpFailure(
         string operation,
         HttpResponseMessage response)
@@ -3033,25 +3061,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
         var action = isQwen ? "IntlBroadScopeAspnGateway" : "IntlBroadScopeAspnGateway";
         var apiName = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage";
-        var cornerstone = new Dictionary<string, object?>
-        {
-            ["feTraceId"] = Guid.NewGuid().ToString().ToLowerInvariant(),
-            ["feURL"] = dashboardUrl.AbsoluteUri,
-            ["protocol"] = "V2",
-            ["console"] = "ONE_CONSOLE",
-            ["productCode"] = "p_efm",
-            ["domain"] = dashboardUrl.Host,
-            ["consoleSite"] = isQwen ? "QWENCLOUD" : "MODELSTUDIO_ALBABACLOUD",
-            ["userNickName"] = "",
-            ["userPrincipalName"] = "",
-            ["xsp_lang"] = "en-US",
-        };
-        var parameters = JsonSerializer.Serialize(new Dictionary<string, object?>
-        {
-            ["Api"] = apiName,
-            ["V"] = "1.0",
-            ["Data"] = new Dictionary<string, object?> { ["cornerstoneParam"] = cornerstone },
-        });
+        var parameters = SerializeAlibabaParameters(apiName, dashboardUrl, isQwen);
         var form = new Dictionary<string, string>
         {
             ["product"] = "sfm_bailian",

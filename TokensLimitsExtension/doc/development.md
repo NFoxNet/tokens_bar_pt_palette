@@ -94,7 +94,9 @@ dotnet build .\TokensLimitsExtension.sln --configuration Release -p:GenerateAppx
 dotnet build .\TokensLimitsExtension.sln --configuration Release -p:GenerateAppxPackageOnBuild=true -p:Platform=ARM64
 ```
 
-Release включает trimming, поэтому проверяйте предупреждения AOT/trim. Профили публикации находятся в `TokensLimitsExtension/Properties/PublishProfiles/`.
+Release включает trimming, поэтому проверяйте предупреждения AOT/trim. Собственные IL2026/ILLink предупреждения считаются ошибками; IL2104 от внешних WinRT reference assemblies разрешён как известное ограничение SDK и остаётся видимым в логе. Профили публикации находятся в `TokensLimitsExtension/Properties/PublishProfiles/`.
+
+Lock-файлы общих Core/test проектов не привязаны к одному RID, поэтому один и тот же locked restore используется для x64 и ARM64. Runtime выбирается только на этапе build через publish profile; приложение содержит обе архитектуры в своём lock-графе.
 
 Для публичного GitHub-релиза используйте `scripts/Build-Release.ps1`. Скрипт требует PFX, чей subject в точности совпадает с `Publisher` в `Package.appxmanifest`, подписывает x64 и ARM64 MSIX и создаёт SHA-256 checksums. PFX и пароль не должны попадать в репозиторий или логи. Полная процедура — в [release.md](release.md).
 

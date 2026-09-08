@@ -2,11 +2,12 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Globalization;
 
 namespace TokensLimitsExtension.Core.Services;
 
-public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodexAccountIdentityProvider, IDisposable
+public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodexAccountIdentityProvider, IDisposable
 {
     private const string RefreshEndpoint = "https://auth.openai.com/oauth/token";
     private const string ClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -163,13 +164,9 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
 
     private async Task<RefreshedToken> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.Serialize(new
-        {
-            client_id = ClientId,
-            grant_type = "refresh_token",
-            refresh_token = refreshToken,
-            scope = "openid profile email",
-        });
+        var payload = JsonSerializer.Serialize(
+            new RefreshTokenRequest(ClientId, "refresh_token", refreshToken, "openid profile email"),
+            CodexAuthJsonContext.Default.RefreshTokenRequest);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, RefreshEndpoint)
         {
@@ -422,4 +419,15 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         string AccessToken,
         string? RefreshToken,
         DateTimeOffset? ExpiresAt);
+
+    private sealed record RefreshTokenRequest(
+        [property: JsonPropertyName("client_id")] string ClientId,
+        [property: JsonPropertyName("grant_type")] string GrantType,
+        [property: JsonPropertyName("refresh_token")] string RefreshToken,
+        [property: JsonPropertyName("scope")] string Scope);
+
+    [JsonSerializable(typeof(RefreshTokenRequest))]
+    private sealed partial class CodexAuthJsonContext : JsonSerializerContext
+    {
+    }
 }

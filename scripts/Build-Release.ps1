@@ -37,8 +37,7 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 Push-Location $repositoryRoot
 try {
     foreach ($architecture in $Platform) {
-        $runtimeIdentifier = "win-$($architecture.ToLowerInvariant())"
-        dotnet restore $solutionPath -p:Platform=$architecture -p:RuntimeIdentifier=$runtimeIdentifier -p:PublishReadyToRun=true
+        dotnet restore $solutionPath --locked-mode -p:Platform=$architecture -p:PublishReadyToRun=true
         if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed for $architecture." }
     }
 
