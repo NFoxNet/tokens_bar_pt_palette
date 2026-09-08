@@ -125,6 +125,7 @@ public sealed class TokensLimitsPageIntegrationTests
         });
         using var cache = new UsageSnapshotCache(provider);
         using var page = new TokensLimitsPage(cache);
+        using var overview = new UsageOverviewPage([cache], [page]);
 
         await page.RefreshAsync();
         using var dock = new UsageDockBandItem(cache);
@@ -137,6 +138,7 @@ public sealed class TokensLimitsPageIntegrationTests
         Assert.DoesNotContain(items, item => item.Subtitle.Contains("test-token", StringComparison.Ordinal));
         Assert.Contains(items, item => item.Title == "Stale");
         Assert.Contains("Offline", dock.DockSubtitle, StringComparison.Ordinal);
+        Assert.Contains(overview.GetItems(), item => item.Subtitle.Contains("Stale", StringComparison.Ordinal));
     }
 
     [Fact]
