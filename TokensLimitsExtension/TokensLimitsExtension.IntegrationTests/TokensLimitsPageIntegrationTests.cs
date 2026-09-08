@@ -58,12 +58,56 @@ public sealed class TokensLimitsPageIntegrationTests
         await page.RefreshAsync();
         var items = page.GetItems();
 
-        Assert.Equal(3, items.Length);
+        Assert.Equal(6, items.Length);
         Assert.Contains(items, item => item.Title == "5ч");
         Assert.Contains(items, item => item.Title == "Еженедельно");
         Assert.Contains(items, item => item.Subtitle.Contains("62% осталось", StringComparison.Ordinal));
         Assert.Contains(items, item => item.Subtitle.Contains("через", StringComparison.Ordinal));
         Assert.Contains(items, item => item.Title == "План" && item.Subtitle == "pro");
+        Assert.Contains(items, item => item.Title == "Refresh" && item.Command is AnonymousCommand);
+        var diagnostics = Assert.Single(items, item => item.Title == "Copy safe diagnostics");
+        Assert.IsType<CopyTextCommand>(diagnostics.Command);
+        Assert.DoesNotContain("test-token", ((CopyTextCommand)diagnostics.Command!).Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnavailableDetailsExplainHowToFixMissingConfiguration()
+    {
+        using var cache = new UsageSnapshotCache(new MissingConfigurationProvider());
+        using var page = new TokensLimitsPage(cache);
+
+        await page.RefreshAsync();
+
+        var status = Assert.Single(page.GetItems(), item => item.Title == "Missing configuration");
+        Assert.Contains("settings", status.Subtitle, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task DetailsExposeOnlyHttpsDashboardActions()
+    {
+        var snapshot = new UsageSnapshot(
+            "dashboard",
+            "Dashboard",
+            new UsageWindow(10, DateTimeOffset.UtcNow.AddHours(1), 3600),
+            null,
+            null,
+            false);
+        using var securePage = new TokensLimitsPage(new FakeGenericProvider(
+            "dashboard",
+            "Dashboard",
+            snapshot,
+            "https://provider.example/usage"));
+        using var insecurePage = new TokensLimitsPage(new FakeGenericProvider(
+            "dashboard-http",
+            "Dashboard HTTP",
+            snapshot with { ProviderId = "dashboard-http" },
+            "http://provider.example/usage"));
+
+        await securePage.RefreshAsync();
+        await insecurePage.RefreshAsync();
+
+        Assert.Single(securePage.GetItems(), item => item.Command is OpenUrlCommand);
+        Assert.DoesNotContain(insecurePage.GetItems(), item => item.Command is OpenUrlCommand);
     }
 
     [Fact]
@@ -285,9 +329,10 @@ public sealed class TokensLimitsPageIntegrationTests
     private sealed class FakeGenericProvider(
         string id,
         string displayName,
-        UsageSnapshot snapshot) : IUsageProvider
+        UsageSnapshot snapshot,
+        string? dashboardUrl = null) : IUsageProvider
     {
-        public UsageProviderDescriptor Descriptor { get; } = new(id, displayName);
+        public UsageProviderDescriptor Descriptor { get; } = new(id, displayName, dashboardUrl: dashboardUrl);
 
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(snapshot);
@@ -319,6 +364,14 @@ public sealed class TokensLimitsPageIntegrationTests
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             throw new InvalidOperationException("Unreachable");
         }
+    }
+
+    private sealed class MissingConfigurationProvider : IUsageProvider
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("missing-configuration", "Missing configuration");
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+            => throw new UsageProviderConfigurationException("test-token is required");
     }
 
     private sealed class StartingGenericProvider : IUsageProvider
