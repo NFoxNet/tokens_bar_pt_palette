@@ -111,6 +111,35 @@ public sealed class TokensLimitsPageIntegrationTests
     }
 
     [Fact]
+    public async Task StaleDetailsShowSafeSourceAndLastSuccessfulRefresh()
+    {
+        var provider = new FlakyGenericProvider(new UsageSnapshot(
+            "stale-source",
+            "Stale source",
+            new UsageWindow(10, DateTimeOffset.UtcNow.AddHours(1), 3600),
+            null,
+            null,
+            false)
+        {
+            Source = "https://provider.example/usage?access_token=test-token",
+        });
+        using var cache = new UsageSnapshotCache(provider);
+        using var page = new TokensLimitsPage(cache);
+
+        await page.RefreshAsync();
+        using var dock = new UsageDockBandItem(cache);
+        provider.Fail = true;
+        await cache.RefreshAsync(force: true);
+
+        var items = page.GetItems();
+        Assert.Contains(items, item => item.Title == "Source" && item.Subtitle == "https://provider.example/usage");
+        Assert.Contains(items, item => item.Title == "Last successful refresh");
+        Assert.DoesNotContain(items, item => item.Subtitle.Contains("test-token", StringComparison.Ordinal));
+        Assert.Contains(items, item => item.Title == "Stale");
+        Assert.Contains("Offline", dock.DockSubtitle, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task IdenticalRefreshStateKeepsDetailsItemsStable()
     {
         var snapshot = new UsageSnapshot(
@@ -372,6 +401,18 @@ public sealed class TokensLimitsPageIntegrationTests
 
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
             => throw new UsageProviderConfigurationException("test-token is required");
+    }
+
+    private sealed class FlakyGenericProvider(UsageSnapshot snapshot) : IUsageProvider
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("stale-source", "Stale source");
+
+        public bool Fail { get; set; }
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+            => Fail
+                ? throw new UsageProviderRequestException("temporary failure", failureKind: UsageProviderFailureKind.Network)
+                : Task.FromResult(snapshot);
     }
 
     private sealed class StartingGenericProvider : IUsageProvider

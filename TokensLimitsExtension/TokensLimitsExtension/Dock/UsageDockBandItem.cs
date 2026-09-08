@@ -73,12 +73,29 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
             ApplySnapshot(snapshot);
             if (state.IsStale)
             {
-                DockSubtitle = $"{DockSubtitle} · {_localization.GetString("status.stale", "Stale")}";
+                DockSubtitle = $"{DockSubtitle} · {GetStatusWarning(state)}";
                 Subtitle = DockSubtitle;
             }
         }
-        else if (!state.IsRefreshing) ApplyUnavailable();
+        else if (!state.IsRefreshing) ApplyUnavailable(state);
     }
     private void ApplySnapshot(UsageSnapshot snapshot) { if (IsDisposed) return; Title = snapshot.ProviderDisplayName; DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization); Subtitle = DockSubtitle; }
-    private void ApplyUnavailable() { Subtitle = _localization.GetString("status.unavailable", "Limits unavailable"); DockSubtitle = Subtitle; }
+    private void ApplyUnavailable(UsageProviderState? state = null)
+    {
+        var unavailable = _localization.GetString("status.unavailable", "Limits unavailable");
+        var suffix = state is { ErrorKind: not UsageProviderErrorKind.None } ? $" · {GetStatusWarning(state)}" : string.Empty;
+        Subtitle = unavailable + suffix;
+        DockSubtitle = Subtitle;
+    }
+
+    private string GetStatusWarning(UsageProviderState state)
+        => state.ErrorKind switch
+        {
+            UsageProviderErrorKind.MissingConfiguration => _localization.GetString("status.dock.configure", "Configure"),
+            UsageProviderErrorKind.Authentication => _localization.GetString("status.dock.authentication", "Sign in"),
+            UsageProviderErrorKind.RateLimited => _localization.GetString("status.dock.rateLimited", "Rate limited"),
+            UsageProviderErrorKind.Timeout or UsageProviderErrorKind.Network => _localization.GetString("status.dock.network", "Offline"),
+            UsageProviderErrorKind.UnsupportedResponse => _localization.GetString("status.dock.unsupported", "Unsupported response"),
+            _ => _localization.GetString("status.stale", "Stale"),
+        };
 }

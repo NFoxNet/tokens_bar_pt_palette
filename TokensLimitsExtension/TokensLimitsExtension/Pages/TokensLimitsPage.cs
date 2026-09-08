@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -159,6 +160,24 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         if (!string.IsNullOrWhiteSpace(snapshot.Plan)) items.Add(new ListItem(new NoOpCommand()) { Title = _localization.GetString("details.plan", "Plan"), Subtitle = snapshot.Plan });
         foreach (var additionalLimit in snapshot.AdditionalRateLimits) items.Add(new ListItem(new NoOpCommand()) { Title = additionalLimit.Name, Subtitle = FormatAdditionalLimit(additionalLimit, now, estimatePrefix) });
         foreach (var metric in snapshot.Metrics) items.Add(new ListItem(new NoOpCommand()) { Title = UsageDisplayFormatter.GetMetricName(metric, _localization), Subtitle = UsageDisplayFormatter.FormatMetric(metric, _localization.Culture) });
+        if (!string.IsNullOrWhiteSpace(snapshot.Source))
+        {
+            items.Add(new ListItem(new NoOpCommand())
+            {
+                Title = _localization.GetString("details.source", "Source"),
+                Subtitle = FormatSafeSource(snapshot.Source),
+            });
+        }
+
+        if (state?.IsStale == true && (state.LastSuccessfulRefreshAt ?? snapshot.FetchedAt) is { } lastSuccessfulRefreshAt)
+        {
+            items.Add(new ListItem(new NoOpCommand())
+            {
+                Title = _localization.GetString("details.lastSuccess", "Last successful refresh"),
+                Subtitle = lastSuccessfulRefreshAt.ToLocalTime().ToString("g", _localization.Culture),
+            });
+        }
+
         items.AddRange(CreateActionItems(state));
         return items.ToArray();
     }
@@ -231,6 +250,37 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         => command is CopyTextCommand copy
             ? $"copy:{copy.Text}"
             : command?.GetType().FullName ?? string.Empty;
+
+    private static string FormatSafeSource(string source)
+    {
+        var sources = source
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(FormatSafeSourcePart)
+            .Where(part => part.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var formatted = string.Join(", ", sources);
+        return formatted.Length <= 256 ? formatted : string.Concat(formatted.AsSpan(0, 253), "…");
+    }
+
+    private static string FormatSafeSourcePart(string source)
+    {
+        if (Uri.TryCreate(source, UriKind.Absolute, out var uri))
+        {
+            return uri.IsFile
+                ? Path.GetFileName(uri.LocalPath)
+                : uri.GetLeftPart(UriPartial.Path);
+        }
+
+        if (Path.IsPathFullyQualified(source))
+        {
+            return Path.GetFileName(source);
+        }
+
+        var queryIndex = source.IndexOfAny(['?', '#']);
+        return queryIndex >= 0 ? source[..queryIndex] : source;
+    }
+
     private string FormatAdditionalLimit(AdditionalUsageLimit limit, DateTimeOffset now, string estimatePrefix)
     {
         var primaryLabel = UsageDisplayFormatter.GetWindowLabel(limit.PrimaryWindow, _localization.GetString("details.primary", "Primary"), _localization);
