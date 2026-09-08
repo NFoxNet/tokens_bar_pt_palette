@@ -76,6 +76,12 @@ jobs:
               throw "SHA256SUMS.txt does not contain the current checksum for '$name'."
             }
           }
+          & .\scripts\Test-ReleasePackage.ps1 `
+            -PackagePath (Join-Path $releaseDirectory "TokensLimitsExtension_${version}_x64.msix") `
+            -ExpectedVersion $version -ExpectedArchitecture x64 -ExpectedPublisher $manifest.Package.Identity.Publisher
+          & .\scripts\Test-ReleasePackage.ps1 `
+            -PackagePath (Join-Path $releaseDirectory "TokensLimitsExtension_${version}_arm64.msix") `
+            -ExpectedVersion $version -ExpectedArchitecture arm64 -ExpectedPublisher $manifest.Package.Identity.Publisher
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:

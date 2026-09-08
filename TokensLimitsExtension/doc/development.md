@@ -98,6 +98,8 @@ Release включает trimming, поэтому проверяйте пред�
 
 Для публичного GitHub-релиза используйте `scripts/Build-Release.ps1`. Скрипт требует PFX, чей subject в точности совпадает с `Publisher` в `Package.appxmanifest`, подписывает x64 и ARM64 MSIX и создаёт SHA-256 checksums. PFX и пароль не должны попадать в репозиторий или логи. Полная процедура — в [release.md](release.md).
 
+После сборки проверяйте оба готовых пакета через `scripts/Test-ReleasePackage.ps1`. Проверка читает только локальный MSIX и подтверждает подпись, publisher/version/architecture, COM CLSID, обязательные assets и `lang/en.json`/`lang/ru.json`; она не устанавливает пакет и не требует сетевого доступа.
+
 ## Тестовые уровни
 
 - `TokensLimitsExtension.Tests` — парсинг, нормализация, auth, fallback, cache, registry и каталог провайдеров.
