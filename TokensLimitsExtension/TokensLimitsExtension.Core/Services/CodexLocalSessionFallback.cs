@@ -273,18 +273,20 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
                 return false;
             }
 
+            if (info.TryGetProperty("total_token_usage", out var totalUsage)
+                && TryGetLong(totalUsage, "total_tokens", out var cumulative))
+            {
+                delta = cumulative >= previousCumulative
+                    ? cumulative - previousCumulative
+                    : cumulative;
+                previousCumulative = cumulative;
+                return delta > 0;
+            }
+
             if (info.TryGetProperty("last_token_usage", out var lastUsage)
                 && TryGetLong(lastUsage, "total_tokens", out var lastDelta))
             {
                 delta = Math.Max(0, lastDelta);
-                return delta > 0;
-            }
-
-            if (info.TryGetProperty("total_token_usage", out var totalUsage)
-                && TryGetLong(totalUsage, "total_tokens", out var cumulative))
-            {
-                delta = Math.Max(0, cumulative - previousCumulative);
-                previousCumulative = Math.Max(previousCumulative, cumulative);
                 return delta > 0;
             }
         }

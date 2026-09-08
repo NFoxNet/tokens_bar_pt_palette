@@ -142,6 +142,32 @@ public sealed class CodexLocalSessionFallbackTests
         }
     }
 
+    [Fact]
+    public async Task PrefersCumulativeCountersAndAccountsForCounterReset()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        await File.WriteAllLinesAsync(Path.Combine(sessions, "session.jsonl"), [
+            $"{{\"timestamp\":\"{now.AddHours(-2):O}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"total_tokens\":100}},\"last_token_usage\":{{\"total_tokens\":999}}}}}}}}",
+            $"{{\"timestamp\":\"{now.AddHours(-1):O}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"total_tokens\":150}}}}}}}}",
+            $"{{\"timestamp\":\"{now.AddMinutes(-30):O}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"total_tokens\":20}}}}}}}}",
+        ]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(170, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
