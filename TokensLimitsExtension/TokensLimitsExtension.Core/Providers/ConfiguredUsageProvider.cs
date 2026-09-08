@@ -35,8 +35,10 @@ public sealed class UsageProviderRequestException(
 public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 {
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan DefaultCliTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan MaximumCancellableTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
     private const int DefaultMaxResponseBodyBytes = 1_048_576;
+    private const int DefaultMaxCliOutputCharacters = 262_144;
     private readonly UsageProviderDescriptor _descriptor;
     private readonly IUsageProviderConfiguration _configuration;
     private readonly HttpClient _httpClient;
@@ -1886,7 +1888,10 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Не найден {fileName}. Установите Kiro CLI или укажите путь к нему в настройках.");
         }
 
-        using var cancellationRegistration = cancellationToken.Register(() =>
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(DefaultCliTimeout);
+        var token = timeoutCts.Token;
+        using var cancellationRegistration = token.Register(() =>
         {
             try
             {
@@ -1899,11 +1904,51 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             {
             }
         });
-        var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
-        return new ProcessResult(process.ExitCode, standardOutput.Result, standardError.Result);
+        var standardOutput = ReadBoundedProcessOutputAsync(process.StandardOutput, token);
+        var standardError = ReadBoundedProcessOutputAsync(process.StandardError, token);
+        try
+        {
+            await process.WaitForExitAsync(token).ConfigureAwait(false);
+            await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
+            return new ProcessResult(process.ExitCode, standardOutput.Result, standardError.Result);
+        }
+        catch
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            try { await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false); } catch { }
+            throw;
+        }
+    }
+
+    private static async Task<string> ReadBoundedProcessOutputAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var buffer = new char[4096];
+        var output = new StringBuilder();
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return output.ToString();
+            }
+
+            if (output.Length > DefaultMaxCliOutputCharacters - read)
+            {
+                throw new UsageProviderRequestException("Kiro CLI output exceeds the safe size limit.");
+            }
+
+            output.Append(buffer, 0, read);
+        }
     }
 
     private static double ParseFlexibleNumber(string raw)
