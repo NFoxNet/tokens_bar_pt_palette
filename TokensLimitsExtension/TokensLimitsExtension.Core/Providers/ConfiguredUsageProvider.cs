@@ -89,24 +89,24 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
         if (_descriptor.Id.Equals("jetbrains", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetJetBrainsSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetJetBrainsSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("kiro", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetKiroSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetKiroSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("ollama", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetOllamaSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetOllamaSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("opencode", StringComparison.OrdinalIgnoreCase)
             || (_descriptor.Id.Equals("opencodego", StringComparison.OrdinalIgnoreCase)
                 && string.IsNullOrWhiteSpace(ResolveCredential().ApiKey)))
         {
-            return await GetOpenCodeSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetOpenCodeSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("minimax", StringComparison.OrdinalIgnoreCase))
@@ -115,54 +115,56 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             if (string.IsNullOrWhiteSpace(miniMaxCredential.ApiKey)
                 && !string.IsNullOrWhiteSpace(miniMaxCredential.CookieHeader))
             {
-                return await GetMiniMaxWebSnapshotAsync(miniMaxCredential, cancellationToken).ConfigureAwait(false);
+                return await ExecuteWithDeadlineAsync(
+                    token => GetMiniMaxWebSnapshotAsync(miniMaxCredential, token),
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
         if (_descriptor.Id.Equals("kilo", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetKiloSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetKiloSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.AuthKind == UsageProviderAuthKind.Local)
         {
-            return await GetLocalSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetLocalSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("zed", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetZedSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetZedSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetOpenAiSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetOpenAiSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("amp", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetAmpSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetAmpSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetWindsurfSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetWindsurfSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("deepgram", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetDeepgramSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetDeepgramSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("qwencloud", StringComparison.OrdinalIgnoreCase)
             || _descriptor.Id.Equals("alibabatokenplan", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetAlibabaGatewaySnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetAlibabaGatewaySnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("t3chat", StringComparison.OrdinalIgnoreCase))
         {
-            return await GetT3ChatSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(GetT3ChatSnapshotAsync, cancellationToken).ConfigureAwait(false);
         }
 
         var endpoints = UsageProviderEndpointCatalog.For(_descriptor.Id);
@@ -3291,6 +3293,27 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         => failures.Count == 0
             ? "источник не отвечает"
             : string.Join("; ", failures.Select(failure => failure.Message).Distinct(StringComparer.Ordinal));
+
+    private async Task<UsageSnapshot> ExecuteWithDeadlineAsync(
+        Func<CancellationToken, Task<UsageSnapshot>> operation,
+        CancellationToken cancellationToken)
+    {
+        using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadlineCts.CancelAfter(_requestTimeout);
+        try
+        {
+            return await operation(deadlineCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested)
+        {
+            throw new UsageProviderRequestException(
+                $"{Descriptor.DisplayName}: request timed out after {_requestTimeout.TotalSeconds:0.#} seconds.");
+        }
+    }
 
     private async Task<string> ReadBoundedResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
     {

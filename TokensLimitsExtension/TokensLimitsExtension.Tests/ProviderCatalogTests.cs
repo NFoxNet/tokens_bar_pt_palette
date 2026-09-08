@@ -58,6 +58,23 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task SpecializedAdapterTimesOutWhileReadingAResponseBodyAfterHeaders()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StreamContent(new DelayedReadStream()))),
+            logger: null,
+            requestTimeout: TimeSpan.FromMilliseconds(25),
+            maxResponseBodyBytes: 1_024 * 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() =>
+            provider.GetUsageSnapshotAsync().WaitAsync(TimeSpan.FromSeconds(1)));
+
+        Assert.Contains("timed out", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void GenericAdapterRejectsTimeoutsThatCannotBeScheduled()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new ConfiguredUsageProvider(
