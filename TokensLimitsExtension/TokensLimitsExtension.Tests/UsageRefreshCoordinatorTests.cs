@@ -130,6 +130,23 @@ public sealed class UsageRefreshCoordinatorTests
     }
 
     [Fact]
+    public async Task AppliesBoundedJitterToTransientBackoff()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
+        var provider = new FailingProvider();
+        var settings = new TestSettings(TimeSpan.FromMinutes(1));
+        using var cache = new UsageSnapshotCache(provider, settings, time);
+        using var coordinator = new UsageRefreshCoordinator(settings, time, jitterSource: () => 0);
+
+        coordinator.UpdateProviders([cache]);
+        await provider.FirstCall.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var timer = await time.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await timer.FirstScheduled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(TimeSpan.FromSeconds(2.5), timer.DueTime);
+    }
+
+    [Fact]
     public async Task ForceRefreshDoesNotBypassRetryCooldown()
     {
         var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
@@ -243,6 +260,18 @@ public sealed class UsageRefreshCoordinatorTests
                 "HTTP 429",
                 retryAfter: TimeSpan.FromSeconds(120),
                 statusCode: HttpStatusCode.TooManyRequests));
+        }
+    }
+
+    private sealed class FailingProvider : IUsageProvider
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("failing", "Failing");
+        public TaskCompletionSource FirstCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            FirstCall.TrySetResult();
+            return Task.FromException<UsageSnapshot>(new HttpRequestException("transport failure"));
         }
     }
 

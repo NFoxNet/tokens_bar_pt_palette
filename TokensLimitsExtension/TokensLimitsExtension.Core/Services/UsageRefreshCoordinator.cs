@@ -8,6 +8,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
 {
     private readonly IUsageRefreshSettings _settings;
     private readonly TimeProvider _timeProvider;
+    private readonly Func<double> _jitterSource;
     private readonly object _gate = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly Dictionary<string, CancellationTokenSource> _providerTokens = new(StringComparer.OrdinalIgnoreCase);
@@ -19,10 +20,14 @@ public sealed class UsageRefreshCoordinator : IDisposable
     private ITimer? _timer;
     private int _disposed;
 
-    public UsageRefreshCoordinator(IUsageRefreshSettings settings, TimeProvider? timeProvider = null)
+    public UsageRefreshCoordinator(
+        IUsageRefreshSettings settings,
+        TimeProvider? timeProvider = null,
+        Func<double>? jitterSource = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _jitterSource = jitterSource ?? Random.Shared.NextDouble;
         _refreshInterval = GetRefreshInterval();
         _settings.Changed += SettingsOnChanged;
     }
@@ -231,7 +236,14 @@ public sealed class UsageRefreshCoordinator : IDisposable
                 : 1;
             _transientFailureCounts[provider.Descriptor.Id] = failures;
             var backoffSeconds = Math.Min(60, 5 * Math.Pow(2, failures - 1));
-            return now + TimeSpan.FromSeconds(backoffSeconds);
+            var jitter = _jitterSource();
+            if (double.IsNaN(jitter) || double.IsInfinity(jitter))
+            {
+                jitter = 0.5;
+            }
+
+            jitter = Math.Clamp(jitter, 0, 1);
+            return now + TimeSpan.FromSeconds(backoffSeconds * (0.5 + jitter));
         }
 
         _transientFailureCounts.Remove(provider.Descriptor.Id);
