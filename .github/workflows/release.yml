@@ -7,6 +7,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-latest
@@ -47,6 +51,31 @@ jobs:
         run: |
           $password = ConvertTo-SecureString $env:MSIX_CERTIFICATE_PASSWORD -AsPlainText -Force
           .\scripts\Build-Release.ps1 -CertificatePath $env:PFX_PATH -CertificatePassword $password
+      - name: Validate release artifacts
+        run: |
+          [xml]$manifest = Get-Content 'TokensLimitsExtension/TokensLimitsExtension/Package.appxmanifest'
+          $version = $manifest.Package.Identity.Version
+          $releaseDirectory = Join-Path $env:GITHUB_WORKSPACE 'artifacts/release'
+          $expectedNames = @(
+            "TokensLimitsExtension_${version}_x64.msix",
+            "TokensLimitsExtension_${version}_ARM64.msix",
+            'NFoxNet.TokensLimitsExtension.cer',
+            'Install-TokensLimitsExtension.cmd',
+            'Install-TokensLimitsExtension.ps1',
+            'SHA256SUMS.txt')
+          $actualNames = @(Get-ChildItem -LiteralPath $releaseDirectory -File | ForEach-Object Name | Sort-Object)
+          $difference = Compare-Object -ReferenceObject ($expectedNames | Sort-Object) -DifferenceObject $actualNames
+          if ($difference) {
+            throw "Release artifacts differ from the allowlist: $($difference | Out-String)"
+          }
+          $checksumPath = Join-Path $releaseDirectory 'SHA256SUMS.txt'
+          $checksumLines = @(Get-Content -LiteralPath $checksumPath)
+          foreach ($name in $expectedNames | Where-Object { $_ -ne 'SHA256SUMS.txt' }) {
+            $hash = (Get-FileHash -LiteralPath (Join-Path $releaseDirectory $name) -Algorithm SHA256).Hash
+            if ($checksumLines -notcontains "$hash *$name") {
+              throw "SHA256SUMS.txt does not contain the current checksum for '$name'."
+            }
+          }
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
