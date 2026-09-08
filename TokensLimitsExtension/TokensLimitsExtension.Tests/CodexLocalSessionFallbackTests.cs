@@ -25,9 +25,10 @@ public sealed class CodexLocalSessionFallbackTests
             var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
 
             Assert.True(snapshot.IsEstimate);
-            Assert.Equal(10, snapshot.PrimaryUsedPercent);
-            Assert.Equal(1, snapshot.SecondaryUsedPercent);
-            Assert.Equal(now.AddHours(5), snapshot.PrimaryResetAt);
+            Assert.False(snapshot.HasPrimaryWindow);
+            Assert.False(snapshot.HasSecondaryWindow);
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
         }
         finally
         {
@@ -55,7 +56,7 @@ public sealed class CodexLocalSessionFallbackTests
 
             var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
 
-            Assert.Equal(10, snapshot.PrimaryUsedPercent);
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
         }
         finally
         {
@@ -85,9 +86,9 @@ public sealed class CodexLocalSessionFallbackTests
                 CreateTokenCountLine(now.AddMinutes(-30)) + Environment.NewLine);
             var third = await provider.GetSnapshotAsync(CancellationToken.None);
 
-            Assert.Equal(first.PrimaryUsedPercent, second.PrimaryUsedPercent);
-            Assert.Equal(10, first.PrimaryUsedPercent);
-            Assert.Equal(20, third.PrimaryUsedPercent);
+            Assert.Equal(first.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue, second.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(1000, first.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(2000, third.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
         }
         finally
         {
@@ -132,8 +133,8 @@ public sealed class CodexLocalSessionFallbackTests
 
             var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
 
-            Assert.Equal(100, snapshot.PrimaryUsedPercent);
-            Assert.Equal(100, snapshot.SecondaryUsedPercent);
+            Assert.Equal(long.MaxValue, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(long.MaxValue, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
         }
         finally
         {

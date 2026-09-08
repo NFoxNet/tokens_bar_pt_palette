@@ -92,12 +92,12 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
                             cancellationToken.ThrowIfCancellationRequested();
                             if (tokenEvent.Timestamp >= weeklyCutoff && tokenEvent.Timestamp <= now)
                             {
-                                weeklyTokens = AddSaturated(weeklyTokens, tokenEvent.Delta, _weeklyLimitTokens);
+                                weeklyTokens = AddSaturated(weeklyTokens, tokenEvent.Delta);
                             }
 
                             if (tokenEvent.Timestamp >= fiveHourCutoff && tokenEvent.Timestamp <= now)
                             {
-                                fiveHourTokens = AddSaturated(fiveHourTokens, tokenEvent.Delta, _fiveHourLimitTokens);
+                                fiveHourTokens = AddSaturated(fiveHourTokens, tokenEvent.Delta);
                             }
                         }
                     }
@@ -136,12 +136,20 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         }
 
         return new CodexUsageSnapshot(
-            Percent(fiveHourTokens, _fiveHourLimitTokens),
-            now.AddHours(5),
-            Percent(weeklyTokens, _weeklyLimitTokens),
-            now.AddDays(7),
+            0,
+            default,
+            0,
+            default,
             "local session estimate",
-            true);
+            true)
+        {
+            HasPrimaryWindow = false,
+            HasSecondaryWindow = false,
+            Metrics = [
+                new UsageMetric("Tokens за 5 часов", fiveHourTokens.ToString(CultureInfo.InvariantCulture), "tokens", NumericValue: fiveHourTokens, SemanticKey: "tokens5h"),
+                new UsageMetric("Tokens за 7 дней", weeklyTokens.ToString(CultureInfo.InvariantCulture), "tokens", NumericValue: weeklyTokens, SemanticKey: "tokens7d"),
+            ],
+        };
     }
 
     public void Dispose()
@@ -288,17 +296,15 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         return false;
     }
 
-    private static long AddSaturated(long current, long delta, long limit)
+    private static long AddSaturated(long current, long delta)
     {
-        if (delta <= 0 || current >= limit)
+        if (delta <= 0 || current == long.MaxValue)
         {
-            return Math.Min(current, limit);
+            return current;
         }
 
-        return delta >= limit - current ? limit : current + delta;
+        return delta >= long.MaxValue - current ? long.MaxValue : current + delta;
     }
-
-    private static double Percent(long used, long limit) => Math.Clamp(used * 100d / limit, 0d, 100d);
 
     private static string? GetString(JsonElement parent, string propertyName)
         => parent.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
