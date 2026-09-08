@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CommandPalette.Extensions;
@@ -18,6 +19,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     private readonly ILocalizationService _localization;
     private readonly UsageRefreshCoordinator? _coordinator;
     private IListItem[] _items;
+    private string? _renderSignature;
     private int _disposed;
 
     public UsageOverviewPage(
@@ -95,20 +97,37 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         IReadOnlyList<UsageSnapshotCache> caches;
         IReadOnlyList<TokensLimitsPage> pages;
         lock (_providerGate) { caches = _caches; pages = _pages; }
-        var items = new List<IListItem>();
+        var entries = new List<(string Id, ListPage Page, string Title, string Subtitle)>();
         for (var index = 0; index < caches.Count; index++)
         {
             var state = caches[index].State;
             var subtitle = state.Snapshot is not null
                 ? FormatSnapshotSubtitle(state)
                 : GetStatusText(state);
-            items.Add(new ListItem(pages[index]) { Title = caches[index].Descriptor.DisplayName, Subtitle = subtitle });
+            entries.Add((caches[index].Descriptor.Id, pages[index], caches[index].Descriptor.DisplayName, subtitle));
         }
+        var signature = entries.Count == 0
+            ? "empty"
+            : string.Join('\u001f', entries.Select(entry =>
+                $"{entry.Id}\u001e{RuntimeHelpers.GetHashCode(entry.Page)}\u001e{entry.Title}\u001e{entry.Subtitle}"));
+        if (string.Equals(signature, _renderSignature, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var items = entries
+            .Select(entry => (IListItem)new ListItem(entry.Page)
+            {
+                Title = entry.Title,
+                Subtitle = entry.Subtitle,
+            })
+            .ToList();
         if (items.Count == 0) items.Add(new ListItem(new NoOpCommand())
         {
             Title = _localization.GetString("overview.empty.title", "No providers enabled"),
             Subtitle = _localization.GetString("overview.empty.subtitle", "Enable providers in the extension settings."),
         });
+        _renderSignature = signature;
         Volatile.Write(ref _items, items.ToArray());
         RaiseItemsChanged(items.Count);
     }

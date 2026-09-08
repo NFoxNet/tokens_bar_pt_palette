@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CommandPalette.Extensions;
@@ -21,6 +22,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private readonly Action<string> _logger;
     private readonly ILocalizationService _localization;
     private IListItem[] _items;
+    private string? _renderSignature;
     private int _disposed;
 
     public TokensLimitsPage(CodexUsageService usageService, Action<string>? logger = null, IUsageRefreshSettings? refreshSettings = null)
@@ -50,7 +52,6 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     public override IListItem[] GetItems()
     {
         if (IsDisposed) return [];
-        if (_stateSource?.State.Snapshot is { } snapshot) SetItems(CreateItems(snapshot), false);
         return Volatile.Read(ref _items);
     }
 
@@ -98,6 +99,13 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     }
     private void SetItems(IListItem[] items, bool notify)
     {
+        var signature = string.Join('\u001f', items.Select(item => $"{item.Title}\u001e{item.Subtitle}"));
+        if (string.Equals(signature, _renderSignature, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _renderSignature = signature;
         Volatile.Write(ref _items, items);
         if (notify && !IsDisposed) RaiseItemsChanged(items.Length);
     }

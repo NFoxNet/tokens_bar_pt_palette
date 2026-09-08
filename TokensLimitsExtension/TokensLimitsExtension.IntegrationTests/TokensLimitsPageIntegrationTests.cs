@@ -67,6 +67,32 @@ public sealed class TokensLimitsPageIntegrationTests
     }
 
     [Fact]
+    public async Task IdenticalRefreshStateKeepsDetailsItemsStable()
+    {
+        var snapshot = new UsageSnapshot(
+            "stable",
+            "Stable",
+            new UsageWindow(25, DateTimeOffset.UtcNow.AddDays(2), 3600),
+            null,
+            "pro",
+            false);
+        using var cache = new UsageSnapshotCache(new MutableGenericProvider("stable", "Stable", snapshot));
+        using var page = new TokensLimitsPage(cache);
+
+        await page.RefreshAsync();
+        var firstItems = page.GetItems();
+        var itemsChanged = 0;
+        page.ItemsChanged += (_, _) => itemsChanged++;
+
+        await cache.RefreshAsync(force: true);
+
+        var secondItems = page.GetItems();
+        Assert.Equal(0, itemsChanged);
+        Assert.Equal(firstItems.Length, secondItems.Length);
+        Assert.All(firstItems.Zip(secondItems), pair => Assert.Same(pair.First, pair.Second));
+    }
+
+    [Fact]
     public void CommandsProviderExposesExactlyOneCommand()
     {
         using var testDirectory = new TestDirectory();
