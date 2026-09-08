@@ -46,8 +46,8 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/*.msix
-            artifacts/*.cer
-            artifacts/*.txt
-            artifacts/Install-TokensLimitsExtension.cmd
-            artifacts/Install-TokensLimitsExtension.ps1
+            artifacts/release/*.msix
+            artifacts/release/*.cer
+            artifacts/release/*.txt
+            artifacts/release/Install-TokensLimitsExtension.cmd
+            artifacts/release/Install-TokensLimitsExtension.ps1

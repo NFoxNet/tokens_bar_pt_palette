@@ -62,7 +62,13 @@ The release workflow is already prepared for the latter through `MSIX_CERTIFICAT
    .\scripts\Build-Release.ps1 -CertificatePath C:\secure\tokens-limits.pfx -CertificatePassword $password
    ```
 
-4. The MSIX build signs the package through `PackageCertificateThumbprint`; do not run `signtool sign` on the completed `.msix` again. Verify the package structure, checksums and installation, test both package architectures on suitable machines, then attach `artifacts/` files to a `vX.Y.Z.W` GitHub Release.
+4. The MSIX build signs the package through `PackageCertificateThumbprint`; do not run `signtool sign` on the completed `.msix` again. Verify the package structure, checksums and installation, test both package architectures on suitable machines, then attach `artifacts/release/` files to a `vX.Y.Z.W` GitHub Release.
 5. For automated releases, add the PFX encoded as Base64 to `MSIX_CERTIFICATE_BASE64` and the password to `MSIX_CERTIFICATE_PASSWORD`, then push the matching annotated tag.
 
 Do not commit a PFX, password, tokens, cookies or provider settings. A public `.cer` is safe to distribute.
+
+## Release output directory
+
+`Build-Release.ps1` writes to `artifacts/release/` by default. It accepts only a strict child directory of the repository's `artifacts/` directory and refuses the repository root, `artifacts/` itself, other source paths, paths outside the repository and existing reparse points. This limits recursive cleanup to the intended release directory.
+
+An explicitly supplied relative `-OutputDirectory` is resolved from the repository root. The script validates the directory again immediately before deletion and rejects any existing reparse point inside it. PowerShell cannot bind this scan-and-delete sequence to a verified directory handle, so this is not a defence against a concurrent process with write access to `artifacts/`: it could replace a path during validation or deletion. Run releases only from a trusted local checkout with exclusive write access to the output tree, and do not modify the output path while a build is running.

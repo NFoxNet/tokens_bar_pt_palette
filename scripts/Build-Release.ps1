@@ -12,13 +12,14 @@ param(
 
     [string]$Configuration = 'Release',
 
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\artifacts')
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\artifacts\release')
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+. (Join-Path $PSScriptRoot 'Build-Release.Helpers.ps1')
+$OutputDirectory = Get-ValidatedReleaseOutputDirectory -RepositoryRoot $repositoryRoot -OutputDirectory $OutputDirectory
 $solutionPath = Join-Path $repositoryRoot 'TokensLimitsExtension\TokensLimitsExtension.sln'
 $manifestPath = Join-Path $repositoryRoot 'TokensLimitsExtension\TokensLimitsExtension\Package.appxmanifest'
 $certificate = Import-PfxCertificate -FilePath $CertificatePath -Password $CertificatePassword -CertStoreLocation 'Cert:\CurrentUser\My'
@@ -29,15 +30,7 @@ if ($certificate.Subject -ne $publisher) {
     throw "The certificate subject '$($certificate.Subject)' must exactly match manifest Publisher '$publisher'."
 }
 
-if (Test-Path -LiteralPath $OutputDirectory) {
-    $resolvedOutput = (Resolve-Path -LiteralPath $OutputDirectory).Path
-    $resolvedRepository = (Resolve-Path -LiteralPath $repositoryRoot).Path
-    if (-not $resolvedOutput.StartsWith($resolvedRepository, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to remove an output directory outside the repository: $resolvedOutput"
-    }
-
-    Remove-Item -LiteralPath $resolvedOutput -Recurse -Force
-}
+Remove-ValidatedReleaseOutputDirectory -RepositoryRoot $repositoryRoot -OutputDirectory $OutputDirectory
 
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
