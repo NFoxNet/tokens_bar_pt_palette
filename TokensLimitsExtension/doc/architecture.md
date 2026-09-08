@@ -30,7 +30,7 @@ Dock представлен одним стабильным band с истори
 Папка `TokensLimitsExtension.Core/` не должна зависеть от UI:
 
 - `Models/` содержит `UsageSnapshot`, `UsageWindow`, `UsageMetric` и Codex-специфичные модели.
-- `Providers/` содержит `IUsageProvider`, дескрипторы, registry и конфигурацию.
+- `Providers/` содержит `IUsageProvider`, дескрипторы, registry и конфигурацию. Provider transport/configuration находится в `ConfiguredUsageProvider.cs`, а чистые JSON/XML-нормализаторы вынесены в `UsageJsonParser.cs`.
 - `Services/` содержит получение snapshot, кэш, форматирование, auth, HTTP-клиент и fallback.
 
 ## Контракт данных
