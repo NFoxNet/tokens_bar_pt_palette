@@ -64,7 +64,12 @@ internal static class UsageProviderErrorClassifier
 
         if (exception is UsageProviderRequestException providerException)
         {
-            return ClassifyMessage(providerException.Message, UsageProviderErrorKind.UnsupportedResponse);
+            return providerException.StatusCode switch
+            {
+                HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => UsageProviderErrorKind.Authentication,
+                HttpStatusCode.TooManyRequests => UsageProviderErrorKind.RateLimited,
+                _ => ClassifyMessage(providerException.Message, UsageProviderErrorKind.UnsupportedResponse),
+            };
         }
 
         return ClassifyMessage(exception.Message, UsageProviderErrorKind.Unknown);

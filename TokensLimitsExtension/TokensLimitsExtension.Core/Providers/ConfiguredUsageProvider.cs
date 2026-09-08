@@ -18,10 +18,13 @@ public sealed class UsageProviderConfigurationException(string message) : Invali
 public sealed class UsageProviderRequestException(
     string message,
     Exception? innerException = null,
-    TimeSpan? retryAfter = null)
+    TimeSpan? retryAfter = null,
+    HttpStatusCode? statusCode = null)
     : InvalidOperationException(message, innerException)
 {
     public TimeSpan? RetryAfter { get; } = retryAfter;
+
+    public HttpStatusCode? StatusCode { get; } = statusCode;
 }
 
 /// <summary>
@@ -205,7 +208,9 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 if (!response.IsSuccessStatusCode)
                 {
                     failures.Add(new UsageProviderRequestException(
-                        $"{endpoint.Name}: HTTP {(int)response.StatusCode} ({response.StatusCode})."));
+                        $"{endpoint.Name}: HTTP {(int)response.StatusCode} ({response.StatusCode}).",
+                        retryAfter: response.Headers.RetryAfter?.Delta,
+                        statusCode: response.StatusCode));
                     continue;
                 }
 
@@ -238,9 +243,12 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return UsageJsonParser.Merge(_descriptor, snapshots);
         }
 
+        var lastRequestFailure = failures.LastOrDefault() as UsageProviderRequestException;
         throw new UsageProviderRequestException(
             $"Не удалось получить реальные данные {_descriptor.DisplayName}: {DescribeFailures(failures)}",
-            failures.LastOrDefault());
+            failures.LastOrDefault(),
+            lastRequestFailure?.RetryAfter,
+            lastRequestFailure?.StatusCode);
     }
 
     public void Dispose()

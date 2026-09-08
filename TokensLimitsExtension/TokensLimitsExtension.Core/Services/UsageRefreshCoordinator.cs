@@ -12,6 +12,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly Dictionary<string, CancellationTokenSource> _providerTokens = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _nextRefreshAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _transientFailureCounts = new(StringComparer.OrdinalIgnoreCase);
     private IUsageProviderStateSource[] _providers = [];
     private TimeSpan _refreshInterval;
     private ITimer? _timer;
@@ -43,6 +44,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
                 token.Dispose();
                 _providerTokens.Remove(id);
                 _nextRefreshAt.Remove(id);
+                _transientFailureCounts.Remove(id);
             }
 
             _providers = next;
@@ -115,6 +117,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
             }
             _providerTokens.Clear();
             _nextRefreshAt.Clear();
+            _transientFailureCounts.Clear();
             _providers = [];
         }
         _lifetimeCts.Dispose();
@@ -166,7 +169,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
 
             if (_providerTokens.ContainsKey(provider.Descriptor.Id))
             {
-                _nextRefreshAt[provider.Descriptor.Id] = _timeProvider.GetUtcNow() + _refreshInterval;
+                _nextRefreshAt[provider.Descriptor.Id] = GetNextRefreshAtUnsafe(provider);
             }
             ScheduleNearestRefreshUnsafe();
         }
@@ -174,6 +177,42 @@ public sealed class UsageRefreshCoordinator : IDisposable
 
     private bool IsCurrentProviderUnsafe(IUsageProviderStateSource provider)
         => _providers.Any(current => ReferenceEquals(current, provider));
+
+    private DateTimeOffset GetNextRefreshAtUnsafe(IUsageProviderStateSource provider)
+    {
+        var now = _timeProvider.GetUtcNow();
+        var state = provider.State;
+        if (state.ErrorKind == UsageProviderErrorKind.None)
+        {
+            _transientFailureCounts.Remove(provider.Descriptor.Id);
+            return now + _refreshInterval;
+        }
+
+        if (state.ErrorKind == UsageProviderErrorKind.MissingConfiguration)
+        {
+            _transientFailureCounts.Remove(provider.Descriptor.Id);
+            return DateTimeOffset.MaxValue;
+        }
+
+        if (state.RetryAfter is { } retryAfter && retryAfter > TimeSpan.Zero)
+        {
+            _transientFailureCounts.Remove(provider.Descriptor.Id);
+            return now + retryAfter;
+        }
+
+        if (state.ErrorKind is UsageProviderErrorKind.Network or UsageProviderErrorKind.Timeout or UsageProviderErrorKind.RateLimited)
+        {
+            var failures = _transientFailureCounts.TryGetValue(provider.Descriptor.Id, out var previousFailures)
+                ? previousFailures + 1
+                : 1;
+            _transientFailureCounts[provider.Descriptor.Id] = failures;
+            var backoffSeconds = Math.Min(60, 5 * Math.Pow(2, failures - 1));
+            return now + TimeSpan.FromSeconds(backoffSeconds);
+        }
+
+        _transientFailureCounts.Remove(provider.Descriptor.Id);
+        return now + _refreshInterval;
+    }
 
     private void ResetScheduleForChangedInterval()
     {

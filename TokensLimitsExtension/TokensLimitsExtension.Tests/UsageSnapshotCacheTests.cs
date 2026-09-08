@@ -189,6 +189,18 @@ public sealed class UsageSnapshotCacheTests
     }
 
     [Fact]
+    public async Task PreservesTypedRateLimitStatusAndRetryAfter()
+    {
+        var provider = new RateLimitedProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+
+        await cache.RefreshAsync();
+
+        Assert.Equal(UsageProviderErrorKind.RateLimited, cache.State.ErrorKind);
+        Assert.Equal(TimeSpan.FromSeconds(120), cache.State.RetryAfter);
+    }
+
+    [Fact]
     public async Task LanguageStyleChangeDoesNotInvalidateButConfigurationChangeClearsSnapshot()
     {
         var provider = new CountingProvider();
@@ -320,6 +332,17 @@ public sealed class UsageSnapshotCacheTests
 
             throw new HttpRequestException("connection failed");
         }
+    }
+
+    private sealed class RateLimitedProvider : IUsageProvider
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("rate-limited", "Rate limited");
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<UsageSnapshot>(new UsageProviderRequestException(
+                "provider returned an error",
+                retryAfter: TimeSpan.FromSeconds(120),
+                statusCode: System.Net.HttpStatusCode.TooManyRequests));
     }
 
     private sealed class TestRefreshSettings(TimeSpan refreshInterval) : IUsageRefreshSettings

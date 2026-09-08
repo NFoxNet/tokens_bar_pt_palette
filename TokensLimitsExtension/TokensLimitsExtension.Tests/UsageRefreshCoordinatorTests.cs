@@ -1,3 +1,4 @@
+using System.Net;
 using TokensLimitsExtension.Core.Models;
 using TokensLimitsExtension.Core.Providers;
 using TokensLimitsExtension.Core.Services;
@@ -90,6 +91,22 @@ public sealed class UsageRefreshCoordinatorTests
         Assert.Equal(Timeout.InfiniteTimeSpan, timer.DueTime);
     }
 
+    [Fact]
+    public async Task UsesRetryAfterBeforeSchedulingAnotherAutomaticRefresh()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
+        var provider = new RateLimitedProvider();
+        var settings = new TestSettings(TimeSpan.FromSeconds(60));
+        using var cache = new UsageSnapshotCache(provider, settings, time);
+        using var coordinator = new UsageRefreshCoordinator(settings, time);
+
+        coordinator.UpdateProviders([cache]);
+
+        var timer = await time.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await timer.FirstScheduled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(TimeSpan.FromSeconds(120), timer.DueTime);
+    }
+
     private sealed class TestSettings : IUsageRefreshSettings
     {
         public TestSettings(TimeSpan? refreshInterval = null)
@@ -163,6 +180,17 @@ public sealed class UsageRefreshCoordinatorTests
                 null,
                 false);
         }
+    }
+
+    private sealed class RateLimitedProvider : IUsageProvider
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("rate-limited", "Rate limited");
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<UsageSnapshot>(new UsageProviderRequestException(
+                "HTTP 429",
+                retryAfter: TimeSpan.FromSeconds(120),
+                statusCode: HttpStatusCode.TooManyRequests));
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
