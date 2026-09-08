@@ -11,7 +11,8 @@ public sealed class CodexUsageClientOptions
         Uri? usageEndpoint = null,
         string userAgent = "codex-cli",
         TimeSpan? requestTimeout = null,
-        int maxAttempts = 3)
+        int maxAttempts = 3,
+        int maxResponseBodyBytes = 1_048_576)
     {
         UsageEndpoint = usageEndpoint ?? new Uri("https://chatgpt.com/backend-api/wham/usage");
         UserAgent = string.IsNullOrWhiteSpace(userAgent)
@@ -19,6 +20,7 @@ public sealed class CodexUsageClientOptions
             : userAgent;
         RequestTimeout = requestTimeout ?? TimeSpan.FromSeconds(15);
         MaxAttempts = maxAttempts;
+        MaxResponseBodyBytes = maxResponseBodyBytes;
 
         if (!UsageEndpoint.IsAbsoluteUri || !string.Equals(UsageEndpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
@@ -34,6 +36,11 @@ public sealed class CodexUsageClientOptions
         {
             throw new ArgumentOutOfRangeException(nameof(maxAttempts), "At least one request attempt is required.");
         }
+
+        if (MaxResponseBodyBytes < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxResponseBodyBytes), "The maximum response body size must be positive.");
+        }
     }
 
     public Uri UsageEndpoint { get; }
@@ -43,4 +50,6 @@ public sealed class CodexUsageClientOptions
     public TimeSpan RequestTimeout { get; }
 
     public int MaxAttempts { get; }
+
+    public int MaxResponseBodyBytes { get; }
 }

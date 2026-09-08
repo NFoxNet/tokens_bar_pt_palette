@@ -106,6 +106,21 @@ public sealed class CodexUsageClientTests
     }
 
     [Fact]
+    public async Task RejectsOversizedResponseBodiesBeforeParsing()
+    {
+        var options = new CodexUsageClientOptions(maxResponseBodyBytes: 64, maxAttempts: 1);
+        var client = new CodexUsageClient(
+            new StubHandler(new string('x', 128)),
+            options: options);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() =>
+            client.FetchUsageAsync("test-token", CancellationToken.None));
+
+        Assert.Equal(UsageProviderFailureKind.UnsupportedResponse, exception.FailureKind);
+        Assert.Contains("maximum response size", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RetriesRateLimitedResponsesWithoutLoggingResponseBody()
     {
         const string json = """
