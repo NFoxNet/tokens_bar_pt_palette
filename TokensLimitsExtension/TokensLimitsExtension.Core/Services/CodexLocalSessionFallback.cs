@@ -177,9 +177,11 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             return cached.Events;
         }
 
-        var events = new List<TokenEvent>();
-        var previousCumulative = 0L;
-        await foreach (var line in ReadLinesSharedAsync(file, cancellationToken).ConfigureAwait(false))
+        var canAppend = cached is not null && length > cached.Length;
+        var events = canAppend ? new List<TokenEvent>(cached!.Events) : [];
+        var previousCumulative = canAppend ? cached!.PreviousCumulative : 0L;
+        var startOffset = canAppend ? cached!.Length : 0L;
+        await foreach (var line in ReadLinesSharedAsync(file, startOffset, cancellationToken).ConfigureAwait(false))
         {
             if (TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
             {
@@ -187,7 +189,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             }
         }
 
-        _fileCache[file] = new CachedSessionFile(length, lastWriteTimeUtc, events);
+        _fileCache[file] = new CachedSessionFile(length, lastWriteTimeUtc, previousCumulative, events);
         return events;
     }
 
@@ -229,6 +231,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
 
     private static async IAsyncEnumerable<string> ReadLinesSharedAsync(
         string file,
+        long startOffset,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(
@@ -238,6 +241,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             FileShare.ReadWrite | FileShare.Delete,
             64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+        stream.Seek(startOffset, SeekOrigin.Begin);
         using var reader = new StreamReader(stream);
         while (true)
         {
@@ -365,6 +369,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
     private sealed record CachedSessionFile(
         long Length,
         DateTime LastWriteTimeUtc,
+        long PreviousCumulative,
         IReadOnlyList<TokenEvent> Events);
 
     private sealed record TokenEvent(DateTimeOffset Timestamp, long Delta);
