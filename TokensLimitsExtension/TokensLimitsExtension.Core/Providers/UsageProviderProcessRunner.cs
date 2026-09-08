@@ -82,9 +82,19 @@ public sealed class BoundedUsageProviderProcessRunner : IUsageProviderProcessRun
         using var cancellationRegistration = token.Register(() => KillProcessTree(process));
         var standardOutput = ReadBoundedOutputAsync(process.StandardOutput, token);
         var standardError = ReadBoundedOutputAsync(process.StandardError, token);
+        var processExit = process.WaitForExitAsync(token);
         try
         {
-            await process.WaitForExitAsync(token).ConfigureAwait(false);
+            // A bounded reader can fail before the process exits. Observe the first
+            // completed task so oversized output terminates the process immediately
+            // instead of waiting for the deadline while it keeps producing data.
+            var firstCompleted = await Task.WhenAny(processExit, standardOutput, standardError).ConfigureAwait(false);
+            if (firstCompleted == standardOutput || firstCompleted == standardError)
+            {
+                await firstCompleted.ConfigureAwait(false);
+            }
+
+            await processExit.ConfigureAwait(false);
             await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
             return new UsageProviderProcessResult(process.ExitCode, standardOutput.Result, standardError.Result);
         }

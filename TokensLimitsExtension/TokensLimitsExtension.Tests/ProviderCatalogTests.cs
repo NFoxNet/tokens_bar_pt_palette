@@ -923,12 +923,8 @@ public sealed class ProviderCatalogTests
     [Fact]
     public async Task BoundedProcessRunnerStopsAnOversizedCliOutput()
     {
-        var powershell = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "WindowsPowerShell",
-            "v1.0",
-            "powershell.exe");
-        if (!File.Exists(powershell))
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
         {
             return;
         }
@@ -941,6 +937,106 @@ public sealed class ProviderCatalogTests
             powershell,
             ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write(('x' * 4096))"],
             CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerKillsAnUnboundedWriterWhenOutputLimitIsHit()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 1_024);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAsync<UsageProviderRequestException>(() => runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "while ($true) { [Console]::Write(('x' * 4096)) }"],
+            CancellationToken.None));
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3), $"Runner waited {stopwatch.Elapsed} after the output limit was reached.");
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerReturnsBothOutputStreamsAndExitCode()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 4_096);
+        var result = await runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write('ok'); [Console]::Error.Write('warn'); exit 7"],
+            CancellationToken.None);
+
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal("ok", result.StandardOutput);
+        Assert.Equal("warn", result.StandardError);
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerReportsMissingExecutableWithoutLeakingOutput()
+    {
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 4_096);
+        var missing = Path.Combine(Path.GetTempPath(), $"tokens-limits-missing-{Guid.NewGuid():N}.exe");
+
+        var exception = await Assert.ThrowsAsync<UsageProviderConfigurationException>(() => runner.RunAsync(
+            missing,
+            [],
+            CancellationToken.None));
+
+        Assert.Contains("Не найден", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerStopsAProcessWhenDeadlineExpires()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromMilliseconds(100), 4_096);
+        var request = runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"],
+            CancellationToken.None);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerHonorsCallerCancellation()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 4_096);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"],
+            cancellation.Token));
+    }
+
+    private static string? GetWindowsPowerShellPath()
+    {
+        var path = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+        return File.Exists(path) ? path : null;
     }
 
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
