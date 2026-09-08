@@ -17,7 +17,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.400'
+      - name: Restore locked dependencies
+        run: dotnet restore 'TokensLimitsExtension/TokensLimitsExtension.sln' --locked-mode -p:Platform=x64 -p:RuntimeIdentifier=win-x64 -p:PublishReadyToRun=true
+      - name: Test release commit
+        run: |
+          dotnet build 'TokensLimitsExtension/TokensLimitsExtension.sln' --configuration Debug -p:Platform=x64 --no-restore -warnaserror
+          dotnet test 'TokensLimitsExtension/TokensLimitsExtension.sln' --configuration Debug -p:Platform=x64 --no-restore --no-build
       - name: Validate tag and manifest version
         run: |
           [xml]$manifest = Get-Content 'TokensLimitsExtension/TokensLimitsExtension/Package.appxmanifest'
