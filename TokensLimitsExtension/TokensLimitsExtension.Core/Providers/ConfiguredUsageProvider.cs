@@ -1054,8 +1054,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Kilo tRPC: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(content);
         var root = document.RootElement;
         var creditObjects = EnumerateJsonObjects(root)
             .Where(item => item.TryGetProperty("amount_mUsd", out _)
@@ -1337,8 +1337,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                     $"Ollama API: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
             }
 
-            await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(content);
             var snapshot = UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
             _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from cloud model catalog.");
             return snapshot with { Source = tagsUri.AbsoluteUri, Plan = "Ollama Cloud" };
@@ -1356,8 +1356,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                     $"Локальный Ollama API: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
             }
 
-            await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(content);
             var snapshot = UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
             _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from local model catalog.");
             return snapshot with { Source = localUri.AbsoluteUri };
@@ -1953,8 +1953,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                     $"Ollama API вернул HTTP {(int)response.StatusCode}.");
             }
 
-            await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(content);
             return UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
         }
 
@@ -2005,8 +2005,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Zed profile: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(content);
         var root = document.RootElement;
         var metrics = new List<UsageMetric>();
         var plan = root.TryGetProperty("plan", out var planObject) && planObject.ValueKind == JsonValueKind.Object
@@ -2204,8 +2204,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                     $"OpenAI {path}: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
             }
 
-            await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(content);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("data", out var data)
@@ -3110,8 +3110,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"{Descriptor.DisplayName} gateway: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(content);
         var snapshot = UsageJsonParser.Parse(Descriptor, "token-plan/usage", document.RootElement, DateTimeOffset.UtcNow);
         _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from token-plan gateway.");
         return snapshot;
@@ -3194,8 +3194,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 $"Deepgram: HTTP {(int)response.StatusCode} ({response.StatusCode}).");
         }
 
-        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(content);
         return document.RootElement.Clone();
     }
 
