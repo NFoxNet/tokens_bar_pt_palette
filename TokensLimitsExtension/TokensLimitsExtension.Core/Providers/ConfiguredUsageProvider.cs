@@ -121,7 +121,15 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
         if (_descriptor.AuthKind == UsageProviderAuthKind.Local)
         {
-            return await ExecuteWithDeadlineAsync(GetLocalSnapshotAsync, cancellationToken).ConfigureAwait(false);
+            return await ExecuteWithDeadlineAsync(
+                token => LocalUsageProviderAdapter.GetSnapshotAsync(
+                    _descriptor,
+                    _configuration,
+                    _httpClient,
+                    CreateHttpFailure,
+                    ReadBoundedResponseBytesAsync,
+                    token),
+                cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("zed", StringComparison.OrdinalIgnoreCase))
@@ -1782,49 +1790,6 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         => double.TryParse(raw.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
             ? value
             : 0;
-
-    private async Task<UsageSnapshot> GetLocalSnapshotAsync(CancellationToken cancellationToken)
-    {
-        var endpoints = UsageProviderEndpointCatalog.For(Descriptor.Id);
-        var endpoint = endpoints.Count == 0 ? null : endpoints[0];
-        if (Descriptor.Id.Equals("ollama", StringComparison.OrdinalIgnoreCase)
-            && endpoint?.Url is not null)
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint.Url);
-            using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw CreateHttpFailure("Ollama API", response);
-            }
-
-            var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
-            using var document = JsonDocument.Parse(content);
-            return UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
-        }
-
-        var path = _configuration.GetValue(Descriptor.Id, "dataPath");
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new UsageProviderConfigurationException(
-                $"Для локального провайдера {Descriptor.DisplayName} укажите путь к файлу данных.");
-        }
-
-        if (!File.Exists(path))
-        {
-            throw new UsageProviderConfigurationException($"Файл данных {path} не найден.");
-        }
-
-        var raw = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
-        try
-        {
-            using var documentFromFile = JsonDocument.Parse(raw);
-            return UsageJsonParser.Parse(Descriptor, "local", documentFromFile.RootElement, DateTimeOffset.UtcNow);
-        }
-        catch (JsonException)
-        {
-            return UsageJsonParser.ParseXml(Descriptor, "local", raw, DateTimeOffset.UtcNow);
-        }
-    }
 
     private async Task<UsageSnapshot> GetZedSnapshotAsync(CancellationToken cancellationToken)
     {
