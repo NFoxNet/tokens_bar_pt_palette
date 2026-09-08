@@ -210,20 +210,31 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
                 return;
             }
 
-            oldDockItems = _dockBandItems;
-            oldPages = _pages;
-            oldDockPages = _dockPages;
+            var currentPages = _pages.ToDictionary(page => page.Id, StringComparer.OrdinalIgnoreCase);
+            var currentDockPages = _dockPages.ToDictionary(page => page.Id, StringComparer.OrdinalIgnoreCase);
+            var currentDockItems = _dockBandItems
+                .Zip(_dockPages, (item, page) => new { item, page.Id })
+                .ToDictionary(pair => pair.Id, pair => pair.item, StringComparer.OrdinalIgnoreCase);
             _pages = enabledCaches
-                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, localization: _settings.Localization, coordinator: _refreshCoordinator))
+                .Select(cache => currentPages.Remove(GetPageId(cache.Descriptor.Id), out var page)
+                    ? page
+                    : new TokensLimitsPage(cache, LogMessage, _settings, localization: _settings.Localization, coordinator: _refreshCoordinator))
                 .ToArray();
             _dockPages = enabledCaches
-                .Select(cache => new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock", localization: _settings.Localization, coordinator: _refreshCoordinator))
+                .Select(cache => currentDockPages.Remove(GetPageId(cache.Descriptor.Id, "dock"), out var page)
+                    ? page
+                    : new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock", localization: _settings.Localization, coordinator: _refreshCoordinator))
                 .ToArray();
             _dockBandItems = enabledCaches
                 .Zip(
                     _dockPages,
-                    (cache, page) => CreateDockItem(cache, LogMessage, page, _settings, _settings.Localization, _refreshCoordinator))
+                    (cache, page) => currentDockItems.Remove(GetPageId(cache.Descriptor.Id, "dock"), out var item)
+                        ? item
+                        : CreateDockItem(cache, LogMessage, page, _settings, _settings.Localization, _refreshCoordinator))
                 .ToArray();
+            oldDockItems = currentDockItems.Values.ToArray();
+            oldPages = currentPages.Values.ToArray();
+            oldDockPages = currentDockPages.Values.ToArray();
             _enabledProviderIds = enabledIds;
             _overviewPage.UpdateProviders(enabledCaches, _pages);
             _dockBandPage.UpdateItems(_dockBandItems);
@@ -249,6 +260,14 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             page.Deactivate();
         }
 
+    }
+
+    private static string GetPageId(string providerId, string? suffix = null)
+    {
+        var baseId = providerId.Equals("codex", StringComparison.OrdinalIgnoreCase)
+            ? "com.tokenslimits.codex.limits"
+            : $"com.tokenslimits.provider.{providerId}.limits";
+        return string.IsNullOrWhiteSpace(suffix) ? baseId : $"{baseId}.{suffix}";
     }
 
     private static CodexUsageService CreateDefaultService()
