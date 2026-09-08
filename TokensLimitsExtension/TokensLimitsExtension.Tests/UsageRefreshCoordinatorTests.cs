@@ -169,6 +169,22 @@ public sealed class UsageRefreshCoordinatorTests
         Assert.Equal(2, provider.CallCount);
     }
 
+    [Fact]
+    public async Task ObservesUnexpectedProviderRefreshExceptions()
+    {
+        var provider = new ThrowingStateSource();
+        var settings = new TestSettings(TimeSpan.FromMinutes(1));
+        using var coordinator = new UsageRefreshCoordinator(settings);
+
+        coordinator.UpdateProviders([provider]);
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var refresh = coordinator.RefreshProviderAsync(provider, force: true);
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, provider.CallCount);
+    }
+
     private sealed class TestSettings : IUsageRefreshSettings
     {
         public TestSettings(TimeSpan? refreshInterval = null)
@@ -260,6 +276,45 @@ public sealed class UsageRefreshCoordinatorTests
                 "HTTP 429",
                 retryAfter: TimeSpan.FromSeconds(120),
                 statusCode: HttpStatusCode.TooManyRequests));
+        }
+    }
+
+    private sealed class ThrowingStateSource : IUsageProviderStateSource
+    {
+        private int _callCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("throwing-state", "Throwing state");
+
+        public UsageProviderState State { get; } = new(null, null, null, false);
+
+        public event EventHandler? StateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<UsageSnapshot>(new InvalidOperationException("not used"));
+
+        public bool TryGetSnapshot(out UsageSnapshot snapshot)
+        {
+            snapshot = null!;
+            return false;
+        }
+
+        public void Invalidate()
+        {
+        }
+
+        public Task RefreshAsync(bool force = false, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _callCount);
+            Started.TrySetResult();
+            return Task.FromException(new InvalidOperationException("unexpected provider failure"));
         }
     }
 

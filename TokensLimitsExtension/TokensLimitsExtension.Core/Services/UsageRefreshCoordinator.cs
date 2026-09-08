@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace TokensLimitsExtension.Core.Services;
 
 /// <summary>
@@ -162,6 +164,13 @@ public sealed class UsageRefreshCoordinator : IDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Disabling a provider cancels its in-flight request by design.
+        }
+        catch (Exception exception)
+        {
+            // RefreshAll is intentionally fire-and-forget. Observe an unexpected
+            // provider failure here so it cannot become an unobserved task fault;
+            // the cache normally classifies its own provider failures.
+            Debug.WriteLine($"[TokensLimits] coordinator refresh failed for {provider.Descriptor.Id}: {exception.GetType().Name}");
         }
         finally
         {
