@@ -21,9 +21,27 @@ public sealed class UsageRefreshCoordinatorTests
         await provider.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    private sealed class TestSettings : IUsageRefreshSettings
+    [Fact]
+    public async Task DoesNotRefreshAProviderRemovedFromTheSchedule()
     {
-        public TimeSpan RefreshInterval => TimeSpan.FromHours(1);
+        var provider = new CountingProvider();
+        var settings = new TestSettings();
+        using var cache = new UsageSnapshotCache(provider, settings);
+        using var coordinator = new UsageRefreshCoordinator(settings);
+
+        coordinator.UpdateProviders([cache]);
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        coordinator.UpdateProviders([]);
+        var callsBeforeRefresh = provider.CallCount;
+        coordinator.RefreshAll();
+
+        Assert.Equal(callsBeforeRefresh, provider.CallCount);
+    }
+
+    private sealed class TestSettings(TimeSpan? refreshInterval = null) : IUsageRefreshSettings
+    {
+        public TimeSpan RefreshInterval => refreshInterval ?? TimeSpan.FromHours(1);
         public event EventHandler? Changed
         {
             add { }
@@ -51,6 +69,29 @@ public sealed class UsageRefreshCoordinatorTests
             }
 
             throw new InvalidOperationException("Unreachable");
+        }
+    }
+
+    private sealed class CountingProvider : IUsageProvider
+    {
+        private int _callCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("counting", "Counting");
+
+        public int CallCount => Volatile.Read(ref _callCount);
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _callCount);
+            Started.TrySetResult();
+            return Task.FromResult(new UsageSnapshot(
+                Descriptor.Id,
+                Descriptor.DisplayName,
+                new UsageWindow(1, DateTimeOffset.UtcNow.AddHours(1), 3600),
+                null,
+                null,
+                false));
         }
     }
 }
