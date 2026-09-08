@@ -33,6 +33,8 @@ public sealed class InvariantLocalizationService : ILocalizationService
             "details.plan" => "План",
             "details.primary" => "Основное",
             "details.secondary" => "Дополнительное",
+            "metrics.tokens5h" => "Токены за 5 часов",
+            "metrics.tokens7d" => "Токены за 7 дней",
             "status.estimate" => "Оценка: ",
             "status.unavailable" => "Лимиты недоступны",
             "status.remaining" => "{0}% осталось",

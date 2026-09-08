@@ -120,7 +120,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         if (snapshot.SecondaryWindow is not null) items.Add(new ListItem(new NoOpCommand()) { Title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase) ? _localization.GetString("window.weekly", "Weekly") : UsageDisplayFormatter.GetWindowLabel(snapshot.SecondaryWindow, _localization.GetString("details.secondary", "Additional"), _localization), Subtitle = $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.SecondaryWindow, now, _localization)}" });
         if (!string.IsNullOrWhiteSpace(snapshot.Plan)) items.Add(new ListItem(new NoOpCommand()) { Title = _localization.GetString("details.plan", "Plan"), Subtitle = snapshot.Plan });
         foreach (var additionalLimit in snapshot.AdditionalRateLimits) items.Add(new ListItem(new NoOpCommand()) { Title = additionalLimit.Name, Subtitle = FormatAdditionalLimit(additionalLimit, now, estimatePrefix) });
-        foreach (var metric in snapshot.Metrics) items.Add(new ListItem(new NoOpCommand()) { Title = string.Equals(metric.SemanticKey, "totalBalance", StringComparison.OrdinalIgnoreCase) ? _localization.GetString("metrics.totalBalance", "Total balance") : metric.Name, Subtitle = UsageDisplayFormatter.FormatMetric(metric, _localization.Culture) });
+        foreach (var metric in snapshot.Metrics) items.Add(new ListItem(new NoOpCommand()) { Title = UsageDisplayFormatter.GetMetricName(metric, _localization), Subtitle = UsageDisplayFormatter.FormatMetric(metric, _localization.Culture) });
         return items.ToArray();
     }
     private string FormatAdditionalLimit(AdditionalUsageLimit limit, DateTimeOffset now, string estimatePrefix)

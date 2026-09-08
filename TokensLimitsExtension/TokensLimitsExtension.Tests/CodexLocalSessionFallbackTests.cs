@@ -169,6 +169,35 @@ public sealed class CodexLocalSessionFallbackTests
     }
 
     [Fact]
+    public async Task IncludesWindowBoundaryAndIgnoresFutureOrExpiredEvents()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        await File.WriteAllLinesAsync(Path.Combine(sessions, "session.jsonl"), [
+            CreateTokenCountLine(now - TimeSpan.FromHours(5), 1000),
+            CreateTokenCountLine(now.AddHours(-1), 2000),
+            CreateTokenCountLine(now.AddDays(-8), 4000),
+            CreateTokenCountLine(now.AddMinutes(1), 8000),
+        ]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(3000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(3000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ReReadsAFormerPartialLineWhenItIsCompleted()
     {
         var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
@@ -225,7 +254,7 @@ public sealed class CodexLocalSessionFallbackTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private static string CreateTokenCountLine(DateTimeOffset timestamp)
+    private static string CreateTokenCountLine(DateTimeOffset timestamp, long totalTokens = 1000)
         => JsonSerializer.Serialize(new
         {
             timestamp,
@@ -235,7 +264,7 @@ public sealed class CodexLocalSessionFallbackTests
                 type = "token_count",
                 info = new
                 {
-                    last_token_usage = new { total_tokens = 1000 },
+                    last_token_usage = new { total_tokens = totalTokens },
                 },
             },
         });

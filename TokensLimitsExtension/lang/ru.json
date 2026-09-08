@@ -16,6 +16,8 @@
     "details.primary": "Основное",
     "details.secondary": "Дополнительное",
     "metrics.totalBalance": "Общий баланс",
+    "metrics.tokens5h": "Токены за 5 часов",
+    "metrics.tokens7d": "Токены за 7 дней",
     "metrics.currency": "Валюта",
     "status.estimate": "Оценка: ",
     "status.unavailable": "Лимиты недоступны",

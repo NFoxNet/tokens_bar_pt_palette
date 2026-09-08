@@ -28,6 +28,8 @@ public static class LocalizationKeyCatalog
         "details.primary",
         "details.secondary",
         "metrics.totalBalance",
+        "metrics.tokens5h",
+        "metrics.tokens7d",
         "metrics.currency",
         "status.estimate",
         "status.unavailable",

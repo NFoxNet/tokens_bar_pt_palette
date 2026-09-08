@@ -5,6 +5,19 @@ namespace TokensLimitsExtension.Core.Services;
 
 public static class UsageDisplayFormatter
 {
+    public static string GetMetricName(UsageMetric metric, ILocalizationService localization)
+    {
+        ArgumentNullException.ThrowIfNull(metric);
+        ArgumentNullException.ThrowIfNull(localization);
+        return metric.SemanticKey?.ToLowerInvariant() switch
+        {
+            "tokens5h" => localization.GetString("metrics.tokens5h", metric.Name),
+            "tokens7d" => localization.GetString("metrics.tokens7d", metric.Name),
+            "totalbalance" => localization.GetString("metrics.totalBalance", metric.Name),
+            _ => metric.Name,
+        };
+    }
+
     public static string FormatRemainingPercent(double usedPercent, ILocalizationService? localization = null)
     {
         var rounded = GetRemainingPercent(usedPercent);
@@ -36,7 +49,7 @@ public static class UsageDisplayFormatter
         {
             var metrics = snapshot.Metrics
                 .Take(2)
-                .Select(metric => $"{metric.Name}: {TrimMetricValue(FormatMetric(metric, localization.Culture))}");
+                .Select(metric => $"{GetMetricName(metric, localization)}: {TrimMetricValue(FormatMetric(metric, localization.Culture))}");
             return estimatePrefix + string.Join(", ", metrics);
         }
 
