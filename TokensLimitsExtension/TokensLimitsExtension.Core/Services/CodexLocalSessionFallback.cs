@@ -18,6 +18,7 @@ public sealed record CodexFallbackOptions(
 public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
 {
     private const int MaxSessionLineCharacters = 262_144;
+    private const int MaxCachedTokenEventsPerFile = 100_000;
     private readonly IReadOnlyList<string> _codexHomes;
     private readonly long _fiveHourLimitTokens;
     private readonly long _weeklyLimitTokens;
@@ -110,6 +111,10 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
                     {
                         _logger?.Invoke($"[TokensLimits] Skipping inaccessible session file '{file}': {ex.Message}");
                     }
+                    catch (InvalidDataException ex)
+                    {
+                        _logger?.Invoke($"[TokensLimits] Skipping session file '{file}': {ex.Message}");
+                    }
                 }
             }
             catch (IOException ex)
@@ -186,6 +191,12 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         {
             if (TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
             {
+                if (events.Count >= MaxCachedTokenEventsPerFile)
+                {
+                    throw new InvalidDataException(
+                        $"Codex session file exceeds the {MaxCachedTokenEventsPerFile} event cache limit.");
+                }
+
                 events.Add(new TokenEvent(timestamp, delta));
             }
         }

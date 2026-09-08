@@ -169,6 +169,33 @@ public sealed class CodexLocalSessionFallbackTests
     }
 
     [Fact]
+    public async Task CumulativeCounterUsesTheWindowBaselineInsteadOfHistoricalTotal()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        await File.WriteAllLinesAsync(Path.Combine(sessions, "session.jsonl"), [
+            CreateCumulativeTokenCountLine(now.AddDays(-30), 100),
+            CreateCumulativeTokenCountLine(now.AddHours(-1), 150),
+        ]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(50, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(50, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task IncludesWindowBoundaryAndIgnoresFutureOrExpiredEvents()
     {
         var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
@@ -249,6 +276,34 @@ public sealed class CodexLocalSessionFallbackTests
         }
     }
 
+    [Fact]
+    public async Task RejectsAFileThatExceedsTheCachedEventBudget()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        await using (var writer = new StreamWriter(file, append: false))
+        {
+            for (var index = 0; index < 100_001; index++)
+            {
+                await writer.WriteLineAsync(CreateTokenCountLine(now.AddMinutes(-1), 1));
+            }
+        }
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+
+            await Assert.ThrowsAsync<InvalidDataException>(() => provider.GetSnapshotAsync(CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
@@ -265,6 +320,20 @@ public sealed class CodexLocalSessionFallbackTests
                 info = new
                 {
                     last_token_usage = new { total_tokens = totalTokens },
+                },
+            },
+        });
+
+    private static string CreateCumulativeTokenCountLine(DateTimeOffset timestamp, long totalTokens)
+        => JsonSerializer.Serialize(new
+        {
+            timestamp,
+            payload = new
+            {
+                type = "token_count",
+                info = new
+                {
+                    total_token_usage = new { total_tokens = totalTokens },
                 },
             },
         });
