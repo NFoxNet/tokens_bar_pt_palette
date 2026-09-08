@@ -168,6 +168,32 @@ public sealed class CodexLocalSessionFallbackTests
         }
     }
 
+    [Fact]
+    public async Task ReReadsAFormerPartialLineWhenItIsCompleted()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var line = CreateTokenCountLine(now.AddHours(-1));
+        await File.WriteAllTextAsync(file, line[..^1]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            await Assert.ThrowsAsync<InvalidDataException>(() => provider.GetSnapshotAsync(CancellationToken.None));
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;

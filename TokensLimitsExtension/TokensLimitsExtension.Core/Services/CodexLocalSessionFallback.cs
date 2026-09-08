@@ -177,7 +177,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             return cached.Events;
         }
 
-        var canAppend = cached is not null && length > cached.Length;
+        var canAppend = cached is not null && cached.EndsWithNewline && length > cached.Length;
         var events = canAppend ? new List<TokenEvent>(cached!.Events) : [];
         var previousCumulative = canAppend ? cached!.PreviousCumulative : 0L;
         var startOffset = canAppend ? cached!.Length : 0L;
@@ -189,7 +189,12 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             }
         }
 
-        _fileCache[file] = new CachedSessionFile(length, lastWriteTimeUtc, previousCumulative, events);
+        _fileCache[file] = new CachedSessionFile(
+            length,
+            lastWriteTimeUtc,
+            previousCumulative,
+            await EndsWithNewlineAsync(file, length, cancellationToken).ConfigureAwait(false),
+            events);
         return events;
     }
 
@@ -312,6 +317,26 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         return delta >= long.MaxValue - current ? long.MaxValue : current + delta;
     }
 
+    private static async Task<bool> EndsWithNewlineAsync(string file, long length, CancellationToken cancellationToken)
+    {
+        if (length == 0)
+        {
+            return true;
+        }
+
+        await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.Asynchronous);
+        stream.Seek(-1, SeekOrigin.End);
+        var buffer = new byte[1];
+        var bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+        if (bytesRead != 1)
+        {
+            return false;
+        }
+
+        var value = buffer[0];
+        return value is (byte)'\n' or (byte)'\r';
+    }
+
     private static string? GetString(JsonElement parent, string propertyName)
         => parent.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
@@ -370,6 +395,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         long Length,
         DateTime LastWriteTimeUtc,
         long PreviousCumulative,
+        bool EndsWithNewline,
         IReadOnlyList<TokenEvent> Events);
 
     private sealed record TokenEvent(DateTimeOffset Timestamp, long Delta);
