@@ -74,6 +74,25 @@ public sealed class UsageSnapshotCacheTests
     }
 
     [Fact]
+    public async Task ReleasesTheRefreshGateAfterCallerCancellation()
+    {
+        var provider = new BlockingProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+        using var cancellation = new CancellationTokenSource();
+
+        var cancelledRefresh = cache.GetUsageSnapshotAsync(cancellation.Token);
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledRefresh);
+        provider.Release.TrySetResult();
+        var snapshot = await cache.GetUsageSnapshotAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, provider.CallCount);
+        Assert.NotNull(snapshot.FetchedAt);
+    }
+
+    [Fact]
     public async Task KeepsLastSuccessfulSnapshotWhenRefreshFails()
     {
         var provider = new SucceedsThenFailsProvider();

@@ -91,6 +91,24 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task CallerCancellationIsNotReportedAsAProviderTimeout()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StreamContent(new DelayedReadStream()))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024 * 1_024);
+        using var cancellation = new CancellationTokenSource();
+
+        var request = provider.GetUsageSnapshotAsync(cancellation.Token);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+    }
+
+    [Fact]
     public void GenericAdapterRejectsTimeoutsThatCannotBeScheduled()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new ConfiguredUsageProvider(
