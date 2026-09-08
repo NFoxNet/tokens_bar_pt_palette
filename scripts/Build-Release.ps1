@@ -22,38 +22,49 @@ $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $OutputDirectory = Get-ValidatedReleaseOutputDirectory -RepositoryRoot $repositoryRoot -OutputDirectory $OutputDirectory
 $solutionPath = Join-Path $repositoryRoot 'TokensLimitsExtension\TokensLimitsExtension.sln'
 $manifestPath = Join-Path $repositoryRoot 'TokensLimitsExtension\TokensLimitsExtension\Package.appxmanifest'
-$certificate = Import-PfxCertificate -FilePath $CertificatePath -Password $CertificatePassword -CertStoreLocation 'Cert:\CurrentUser\My'
-[xml]$manifest = Get-Content -LiteralPath $manifestPath
-$publisher = $manifest.Package.Identity.Publisher
+$certificateStorePath = 'Cert:\CurrentUser\My'
+$existingCertificateThumbprints = @(Get-ChildItem -LiteralPath $certificateStorePath | ForEach-Object Thumbprint)
+$certificate = Import-PfxCertificate -FilePath $CertificatePath -Password $CertificatePassword -CertStoreLocation $certificateStorePath
+$importedCertificateThumbprint = if ($certificate -and $existingCertificateThumbprints -notcontains $certificate.Thumbprint) { $certificate.Thumbprint } else { $null }
 
-if ($certificate.Subject -ne $publisher) {
-    throw "The certificate subject '$($certificate.Subject)' must exactly match manifest Publisher '$publisher'."
-}
-
-Remove-ValidatedReleaseOutputDirectory -RepositoryRoot $repositoryRoot -OutputDirectory $OutputDirectory
-
-New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-
-Push-Location $repositoryRoot
 try {
-    foreach ($architecture in $Platform) {
-        dotnet restore $solutionPath --locked-mode -p:Platform=$architecture -p:PublishReadyToRun=true
-        if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed for $architecture." }
+    [xml]$manifest = Get-Content -LiteralPath $manifestPath
+    $publisher = $manifest.Package.Identity.Publisher
+
+    if ($certificate.Subject -ne $publisher) {
+        throw "The certificate subject '$($certificate.Subject)' must exactly match manifest Publisher '$publisher'."
     }
 
-    foreach ($architecture in $Platform) {
-        $packageDirectory = Join-Path $OutputDirectory "$architecture\\"
-        dotnet build $solutionPath --configuration $Configuration --no-restore `
-            -p:Platform=$architecture `
-            -p:GenerateAppxPackageOnBuild=true `
-            -p:AppxPackageDir=$packageDirectory `
-            -p:PackageCertificateThumbprint=$certificate.Thumbprint
+    Remove-ValidatedReleaseOutputDirectory -RepositoryRoot $repositoryRoot -OutputDirectory $OutputDirectory
 
-        if ($LASTEXITCODE -ne 0) { throw "MSIX build failed for $architecture." }
+    New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+
+    Push-Location $repositoryRoot
+    try {
+        foreach ($architecture in $Platform) {
+            dotnet restore $solutionPath --locked-mode -p:Platform=$architecture -p:PublishReadyToRun=true
+            if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed for $architecture." }
+        }
+
+        foreach ($architecture in $Platform) {
+            $packageDirectory = Join-Path $OutputDirectory "$architecture\\"
+            dotnet build $solutionPath --configuration $Configuration --no-restore `
+                -p:Platform=$architecture `
+                -p:GenerateAppxPackageOnBuild=true `
+                -p:AppxPackageDir=$packageDirectory `
+                -p:PackageCertificateThumbprint=$certificate.Thumbprint
+
+            if ($LASTEXITCODE -ne 0) { throw "MSIX build failed for $architecture." }
+        }
+    }
+    finally {
+        Pop-Location
     }
 }
 finally {
-    Pop-Location
+    if ($importedCertificateThumbprint) {
+        Remove-Item -LiteralPath (Join-Path $certificateStorePath $importedCertificateThumbprint) -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $packages = @(Get-ChildItem -LiteralPath $OutputDirectory -Recurse -Filter '*.msix' |

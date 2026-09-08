@@ -91,6 +91,12 @@ jobs:
           & .\scripts\Test-ReleasePackage.ps1 `
             -PackagePath (Join-Path $releaseDirectory "TokensLimitsExtension_${version}_arm64.msix") `
             -ExpectedVersion $version -ExpectedArchitecture arm64 -ExpectedPublisher $manifest.Package.Identity.Publisher
+      - name: Cleanup signing material
+        if: always()
+        run: |
+          if ($env:PFX_PATH -and (Test-Path -LiteralPath $env:PFX_PATH)) {
+            Remove-Item -LiteralPath $env:PFX_PATH -Force -ErrorAction SilentlyContinue
+          }
       - name: Upload release diagnostics
         if: always()
         uses: actions/upload-artifact@v4
