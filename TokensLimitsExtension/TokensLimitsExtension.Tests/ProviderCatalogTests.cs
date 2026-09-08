@@ -181,6 +181,20 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task GenericAdapterUsesStableProductUserAgent()
+    {
+        var handler = new StubHandler("{\"data\": {\"five_hour\": {\"used_percent\": 15}}}");
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "groq"),
+            new TestConfiguration(("groq", "apiKey", "test-key")),
+            new HttpClient(handler));
+
+        await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal("TokensLimitsExtension", handler.LastRequest!.Headers.GetValues("User-Agent").Single());
+    }
+
+    [Fact]
     public async Task MissingCredentialIsReportedBeforeMakingARequest()
     {
         var handler = new StubHandler("{}");

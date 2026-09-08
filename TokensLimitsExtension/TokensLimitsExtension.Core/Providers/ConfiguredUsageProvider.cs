@@ -32,6 +32,7 @@ public sealed class UsageProviderRequestException(
 /// </summary>
 public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 {
+    private const string ProductUserAgent = "TokensLimitsExtension";
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan MaximumCancellableTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
     private const int DefaultMaxResponseBodyBytes = 1_048_576;
@@ -394,7 +395,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         if (endpoint.Name.Equals("usage", StringComparison.OrdinalIgnoreCase)
             && endpoint.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase))
         {
-            request.Headers.TryAddWithoutValidation("User-Agent", "TokensLimitsExtension/0.0.2");
+            request.Headers.TryAddWithoutValidation("User-Agent", ProductUserAgent);
         }
 
         return request;

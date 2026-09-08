@@ -7,6 +7,9 @@ obj/
 TestResults/
 AppPackages/
 artifacts/
+artifacts-local*/
+artifacts-release*/
+/TokensLimitsExtension/codex_docs/
 *.pfx
 *.p12
 *.snk

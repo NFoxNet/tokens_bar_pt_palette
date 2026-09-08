@@ -31,7 +31,13 @@ jobs:
       - name: Validate tag and manifest version
         run: |
           [xml]$manifest = Get-Content 'TokensLimitsExtension/TokensLimitsExtension/Package.appxmanifest'
+          [xml]$project = Get-Content 'TokensLimitsExtension/TokensLimitsExtension/TokensLimitsExtension.csproj'
           $version = $manifest.Package.Identity.Version
+          $projectVersion = @($project.Project.PropertyGroup | ForEach-Object Version | Where-Object { $_ })[0]
+          $appxPackageVersion = @($project.Project.PropertyGroup | ForEach-Object AppxPackageVersion | Where-Object { $_ })[0]
+          if ($projectVersion -ne $version -or $appxPackageVersion -ne $version) {
+            throw "Manifest version $version does not match project version/AppxPackageVersion."
+          }
           if ("v$version" -ne '${{ github.ref_name }}') {
             throw "Tag ${{ github.ref_name }} does not match manifest version $version."
           }
