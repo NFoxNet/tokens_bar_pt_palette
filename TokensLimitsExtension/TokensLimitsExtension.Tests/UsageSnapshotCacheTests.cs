@@ -237,6 +237,17 @@ public sealed class UsageSnapshotCacheTests
     }
 
     [Fact]
+    public async Task PreservesTypedNetworkFailureWithoutParsingTheMessage()
+    {
+        var provider = new TypedFailureProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+
+        await cache.RefreshAsync();
+
+        Assert.Equal(UsageProviderErrorKind.Network, cache.State.ErrorKind);
+    }
+
+    [Fact]
     public async Task LanguageStyleChangeDoesNotInvalidateButConfigurationChangeClearsSnapshot()
     {
         var provider = new CountingProvider();
@@ -420,6 +431,16 @@ public sealed class UsageSnapshotCacheTests
                 "provider returned an error",
                 retryAfter: TimeSpan.FromSeconds(120),
                 statusCode: System.Net.HttpStatusCode.TooManyRequests));
+    }
+
+    private sealed class TypedFailureProvider : IUsageProvider
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("typed-failure", "Typed failure");
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<UsageSnapshot>(new UsageProviderRequestException(
+                "локализованное сообщение без кода",
+                failureKind: UsageProviderFailureKind.Network));
     }
 
     private sealed class TestRefreshSettings(TimeSpan refreshInterval) : IUsageRefreshSettings

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TokensLimitsExtension.Core.Models;
+using TokensLimitsExtension.Core.Providers;
 
 namespace TokensLimitsExtension.Core.Services;
 
@@ -67,7 +68,13 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
                         continue;
                     }
 
-                    throw new HttpRequestException($"Codex usage request failed with HTTP {(int)response.StatusCode}.");
+                    throw new UsageProviderRequestException(
+                        $"Codex usage request failed with HTTP {(int)response.StatusCode}.",
+                        retryAfter: GetRetryAfter(response.Headers.RetryAfter),
+                        statusCode: response.StatusCode,
+                        failureKind: IsTransient(response.StatusCode)
+                            ? UsageProviderFailureKind.Network
+                            : UsageProviderFailureKind.UnsupportedResponse);
                 }
 
                 try
@@ -314,6 +321,22 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
                 : TimeSpan.FromMilliseconds(DefaultRetryDelay.TotalMilliseconds * Math.Pow(2, attempt - 1)));
         delay = TimeSpan.FromMilliseconds(Math.Clamp(delay.TotalMilliseconds, 0, 10_000));
         await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static TimeSpan? GetRetryAfter(RetryConditionHeaderValue? retryAfter)
+    {
+        if (retryAfter?.Delta is { } delta)
+        {
+            return delta > TimeSpan.Zero ? delta : null;
+        }
+
+        if (retryAfter?.Date is { } date)
+        {
+            var remaining = date - DateTimeOffset.UtcNow;
+            return remaining > TimeSpan.Zero ? remaining : null;
+        }
+
+        return null;
     }
 
     private void ThrowIfDisposed()

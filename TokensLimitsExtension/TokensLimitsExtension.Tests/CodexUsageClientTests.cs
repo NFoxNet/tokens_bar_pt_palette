@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using TokensLimitsExtension.Core.Providers;
 using TokensLimitsExtension.Core.Services;
 
 namespace TokensLimitsExtension.Tests;
@@ -55,9 +56,10 @@ public sealed class CodexUsageClientTests
         var handler = new StubHandler("{\"error\":\"unauthorized\"}", HttpStatusCode.Unauthorized);
         var client = new CodexUsageClient(handler);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() =>
             client.FetchUsageAsync("secret-token", CancellationToken.None));
 
+        Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
         Assert.Contains("401", exception.Message, StringComparison.Ordinal);
     }
 

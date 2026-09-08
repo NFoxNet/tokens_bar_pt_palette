@@ -17,12 +17,15 @@ public sealed class UsageProviderRequestException(
     string message,
     Exception? innerException = null,
     TimeSpan? retryAfter = null,
-    HttpStatusCode? statusCode = null)
+    HttpStatusCode? statusCode = null,
+    UsageProviderFailureKind failureKind = UsageProviderFailureKind.Unknown)
     : InvalidOperationException(message, innerException)
 {
     public TimeSpan? RetryAfter { get; } = retryAfter;
 
     public HttpStatusCode? StatusCode { get; } = statusCode;
+
+    public UsageProviderFailureKind FailureKind { get; } = failureKind;
 }
 
 /// <summary>
@@ -3276,7 +3279,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested)
         {
             throw new UsageProviderRequestException(
-                $"{Descriptor.DisplayName}: request timed out after {_requestTimeout.TotalSeconds:0.#} seconds.");
+                $"{Descriptor.DisplayName}: request timed out after {_requestTimeout.TotalSeconds:0.#} seconds.",
+                failureKind: UsageProviderFailureKind.Timeout);
         }
     }
 

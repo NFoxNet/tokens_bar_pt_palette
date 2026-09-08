@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.Json;
+using System.Xml;
 using TokensLimitsExtension.Core.Models;
 using TokensLimitsExtension.Core.Providers;
 
@@ -57,22 +59,43 @@ internal static class UsageProviderErrorClassifier
             return UsageProviderErrorKind.Timeout;
         }
 
-        if (exception is HttpRequestException requestException)
+        if (exception is HttpRequestException)
         {
-            return ClassifyMessage(requestException.Message, UsageProviderErrorKind.Network);
+            return UsageProviderErrorKind.Network;
         }
 
         if (exception is UsageProviderRequestException providerException)
         {
-            return providerException.StatusCode switch
+            var statusKind = providerException.StatusCode switch
             {
                 HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => UsageProviderErrorKind.Authentication,
                 HttpStatusCode.TooManyRequests => UsageProviderErrorKind.RateLimited,
-                _ => ClassifyMessage(providerException.Message, UsageProviderErrorKind.UnsupportedResponse),
+                _ => (UsageProviderErrorKind?)null,
+            };
+            if (statusKind is { } resolvedStatusKind)
+            {
+                return resolvedStatusKind;
+            }
+
+            return providerException.FailureKind switch
+            {
+                UsageProviderFailureKind.Authentication => UsageProviderErrorKind.Authentication,
+                UsageProviderFailureKind.RateLimited => UsageProviderErrorKind.RateLimited,
+                UsageProviderFailureKind.Timeout => UsageProviderErrorKind.Timeout,
+                UsageProviderFailureKind.Network => UsageProviderErrorKind.Network,
+                UsageProviderFailureKind.UnsupportedResponse => UsageProviderErrorKind.UnsupportedResponse,
+                UsageProviderFailureKind.Unknown when providerException.InnerException is not null
+                    => Classify(providerException.InnerException),
+                _ => UsageProviderErrorKind.UnsupportedResponse,
             };
         }
 
-        return ClassifyMessage(exception.Message, UsageProviderErrorKind.Unknown);
+        if (exception is JsonException or InvalidDataException or FormatException or XmlException)
+        {
+            return UsageProviderErrorKind.UnsupportedResponse;
+        }
+
+        return UsageProviderErrorKind.Unknown;
     }
 
     public static TimeSpan? GetRetryAfter(Exception exception)
@@ -80,27 +103,4 @@ internal static class UsageProviderErrorClassifier
             ? retryAfter
             : null;
 
-    private static UsageProviderErrorKind ClassifyMessage(string? message, UsageProviderErrorKind fallback)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            return fallback;
-        }
-
-        if (message.Contains("401", StringComparison.Ordinal)
-            || message.Contains("403", StringComparison.Ordinal)
-            || message.Contains("unauthor", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("forbidden", StringComparison.OrdinalIgnoreCase))
-        {
-            return UsageProviderErrorKind.Authentication;
-        }
-
-        if (message.Contains("429", StringComparison.Ordinal)
-            || message.Contains("rate limit", StringComparison.OrdinalIgnoreCase))
-        {
-            return UsageProviderErrorKind.RateLimited;
-        }
-
-        return fallback;
-    }
 }
