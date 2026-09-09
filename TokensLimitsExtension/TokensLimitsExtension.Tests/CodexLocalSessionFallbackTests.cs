@@ -251,6 +251,35 @@ public sealed class CodexLocalSessionFallbackTests
     }
 
     [Fact]
+    public async Task ResumesAfterTheLastCompleteLineWhenAPartialTailGrows()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var firstLine = CreateTokenCountLine(now.AddHours(-2), 1000);
+        var secondLine = CreateTokenCountLine(now.AddHours(-1), 2000);
+        await File.WriteAllTextAsync(file, firstLine + Environment.NewLine + secondLine[..^1]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            var initial = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(1000, initial.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(3000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SkipsAnOversizedJsonlLineWithoutHoldingItsContentsInMemory()
     {
         var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");

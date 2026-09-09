@@ -183,10 +183,14 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             return cached.Events;
         }
 
-        var canAppend = cached is not null && cached.EndsWithNewline && length > cached.Length;
+        var canAppend = cached is not null && length > cached.Length;
         var events = canAppend ? new List<TokenEvent>(cached!.Events) : [];
         var previousCumulative = canAppend ? cached!.PreviousCumulative : 0L;
-        var startOffset = canAppend ? cached!.Length : 0L;
+        var startOffset = canAppend
+            ? cached!.EndsWithNewline
+                ? cached.Length
+                : await FindIncompleteLineStartAsync(file, cached.Length, cancellationToken).ConfigureAwait(false)
+            : 0L;
         await foreach (var line in ReadLinesSharedAsync(file, startOffset, cancellationToken).ConfigureAwait(false))
         {
             if (TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
@@ -388,6 +392,52 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
 
         var value = buffer[0];
         return value is (byte)'\n' or (byte)'\r';
+    }
+
+    private static async Task<long> FindIncompleteLineStartAsync(
+        string file,
+        long previousLength,
+        CancellationToken cancellationToken)
+    {
+        if (previousLength <= 0)
+        {
+            return 0;
+        }
+
+        var searchStart = Math.Max(0, previousLength - MaxSessionLineCharacters - 1);
+        var bytesToRead = checked((int)(previousLength - searchStart));
+        var buffer = new byte[bytesToRead];
+        await using var stream = new FileStream(
+            file,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        stream.Seek(searchStart, SeekOrigin.Begin);
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(offset), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            offset += read;
+        }
+
+        for (var index = offset - 1; index >= 0; index--)
+        {
+            if (buffer[index] is (byte)'\n' or (byte)'\r')
+            {
+                return searchStart + index + 1;
+            }
+        }
+
+        // A line longer than the safety limit has no useful JSON prefix to
+        // resume. Re-reading from zero preserves the existing safe skip path.
+        return 0;
     }
 
     private static string? GetString(JsonElement parent, string propertyName)
