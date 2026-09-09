@@ -280,6 +280,44 @@ public sealed class CodexLocalSessionFallbackTests
     }
 
     [Fact]
+    public async Task PartialTailAppendReadsOnlyTheBoundedTailAfterTheInitialPass()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var lines = Enumerable.Range(0, 3_000)
+            .Select(index => CreateTokenCountLine(now.AddMinutes(-index), 1))
+            .ToArray();
+        var partialLine = CreateTokenCountLine(now, 1);
+        await File.WriteAllTextAsync(file, string.Join(Environment.NewLine, lines) + Environment.NewLine + partialLine[..^1]);
+
+        try
+        {
+            var reads = new List<long>();
+            var provider = new CodexLocalSessionFallback(
+                home,
+                timeProvider: new FixedTimeProvider(now),
+                readBytesObserver: bytes => reads.Add(bytes));
+
+            await provider.GetSnapshotAsync(CancellationToken.None);
+            var initialBytes = reads.Sum();
+            reads.Clear();
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+            await provider.GetSnapshotAsync(CancellationToken.None);
+            var appendBytes = reads.Sum();
+
+            Assert.True(initialBytes > 300_000, $"Initial pass read only {initialBytes} bytes.");
+            Assert.True(appendBytes < initialBytes, $"Append pass read {appendBytes} bytes after an initial {initialBytes}-byte pass.");
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SkipsAnOversizedJsonlLineWithoutHoldingItsContentsInMemory()
     {
         var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");

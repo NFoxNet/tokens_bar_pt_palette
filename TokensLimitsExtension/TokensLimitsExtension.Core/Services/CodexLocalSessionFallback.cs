@@ -24,6 +24,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
     private readonly long _weeklyLimitTokens;
     private readonly TimeProvider _timeProvider;
     private readonly Action<string>? _logger;
+    private readonly Action<long>? _readBytesObserver;
     private readonly ConcurrentDictionary<string, CachedSessionFile> _fileCache = new(StringComparer.OrdinalIgnoreCase);
     private int _disposed;
 
@@ -34,7 +35,8 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         long fiveHourLimitTokens = 100_000,
         long weeklyLimitTokens = 500_000,
         TimeProvider? timeProvider = null,
-        Action<string>? logger = null)
+        Action<string>? logger = null,
+        Action<long>? readBytesObserver = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(fiveHourLimitTokens);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(weeklyLimitTokens);
@@ -47,19 +49,22 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         _weeklyLimitTokens = Limits.WeeklyLimitTokens;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger;
+        _readBytesObserver = readBytesObserver;
     }
 
     public CodexLocalSessionFallback(
         string? codexHome,
         CodexFallbackOptions limits,
         TimeProvider? timeProvider = null,
-        Action<string>? logger = null)
+        Action<string>? logger = null,
+        Action<long>? readBytesObserver = null)
         : this(
             codexHome,
             limits?.FiveHourLimitTokens ?? throw new ArgumentNullException(nameof(limits)),
             limits.WeeklyLimitTokens,
             timeProvider,
-            logger)
+            logger,
+            readBytesObserver)
     {
     }
 
@@ -189,9 +194,9 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         var startOffset = canAppend
             ? cached!.EndsWithNewline
                 ? cached.Length
-                : await FindIncompleteLineStartAsync(file, cached.Length, cancellationToken).ConfigureAwait(false)
+                : await FindIncompleteLineStartAsync(file, cached.Length, _readBytesObserver, cancellationToken).ConfigureAwait(false)
             : 0L;
-        await foreach (var line in ReadLinesSharedAsync(file, startOffset, cancellationToken).ConfigureAwait(false))
+        await foreach (var line in ReadLinesSharedAsync(file, startOffset, _readBytesObserver, cancellationToken).ConfigureAwait(false))
         {
             if (TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
             {
@@ -209,7 +214,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             length,
             lastWriteTimeUtc,
             previousCumulative,
-            await EndsWithNewlineAsync(file, length, cancellationToken).ConfigureAwait(false),
+            await EndsWithNewlineAsync(file, length, _readBytesObserver, cancellationToken).ConfigureAwait(false),
             events);
         return events;
     }
@@ -253,6 +258,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
     private static async IAsyncEnumerable<string> ReadLinesSharedAsync(
         string file,
         long startOffset,
+        Action<long>? readBytesObserver,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(
@@ -269,7 +275,14 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         var oversized = false;
         while (true)
         {
+            var streamPosition = stream.Position;
             var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            var bytesRead = stream.Position - streamPosition;
+            if (bytesRead > 0)
+            {
+                readBytesObserver?.Invoke(bytesRead);
+            }
+
             if (read == 0)
             {
                 if (!oversized && line.Length > 0)
@@ -374,7 +387,11 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         return delta >= long.MaxValue - current ? long.MaxValue : current + delta;
     }
 
-    private static async Task<bool> EndsWithNewlineAsync(string file, long length, CancellationToken cancellationToken)
+    private static async Task<bool> EndsWithNewlineAsync(
+        string file,
+        long length,
+        Action<long>? readBytesObserver,
+        CancellationToken cancellationToken)
     {
         if (length == 0)
         {
@@ -385,6 +402,11 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         stream.Seek(-1, SeekOrigin.End);
         var buffer = new byte[1];
         var bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+        if (bytesRead > 0)
+        {
+            readBytesObserver?.Invoke(bytesRead);
+        }
+
         if (bytesRead != 1)
         {
             return false;
@@ -397,6 +419,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
     private static async Task<long> FindIncompleteLineStartAsync(
         string file,
         long previousLength,
+        Action<long>? readBytesObserver,
         CancellationToken cancellationToken)
     {
         if (previousLength <= 0)
@@ -425,6 +448,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             }
 
             offset += read;
+            readBytesObserver?.Invoke(read);
         }
 
         for (var index = offset - 1; index >= 0; index--)
