@@ -30,7 +30,7 @@ Dock представлен одним стабильным band с истори
 Папка `TokensLimitsExtension.Core/` не должна зависеть от UI:
 
 - `Models/` содержит `UsageSnapshot`, `UsageWindow`, `UsageMetric` и Codex-специфичные модели.
-- `Providers/` содержит `IUsageProvider`, дескрипторы, registry и конфигурацию. Provider transport/configuration находится в `ConfiguredUsageProvider.cs`, а чистые JSON/XML-нормализаторы вынесены в `UsageJsonParser.cs`.
+- `Providers/` содержит `IUsageProvider`, дескрипторы, registry и конфигурацию. Общая маршрутизация и transport остаются в `ConfiguredUsageProvider.cs`; выделенные границы Kiro CLI, локального источника и Amp text parser находятся в `KiroUsageProviderAdapter.cs`, `LocalUsageProviderAdapter.cs` и `AmpUsageDisplayParser.cs`. Чистые JSON/XML-нормализаторы вынесены в `UsageJsonParser.cs`.
 - `Services/` содержит получение snapshot, кэш, форматирование, auth, HTTP-клиент и fallback.
 
 ## Контракт данных
