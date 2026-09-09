@@ -1,10 +1,20 @@
 using TokensLimitsExtension.Core.Services;
+using TokensLimitsExtension.Core.Models;
+using System.Diagnostics;
 using System.Text.Json;
+using Xunit.Abstractions;
 
 namespace TokensLimitsExtension.Tests;
 
 public sealed class CodexLocalSessionFallbackTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public CodexLocalSessionFallbackTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
     [Fact]
     public async Task CountsRecentTokenDeltasAndMarksSnapshotAsEstimate()
     {
@@ -296,7 +306,7 @@ public sealed class CodexLocalSessionFallbackTests
         try
         {
             var reads = new List<long>();
-            var provider = new CodexLocalSessionFallback(
+            using var provider = new CodexLocalSessionFallback(
                 home,
                 timeProvider: new FixedTimeProvider(now),
                 readBytesObserver: bytes => reads.Add(bytes));
@@ -310,6 +320,58 @@ public sealed class CodexLocalSessionFallbackTests
 
             Assert.True(initialBytes > 300_000, $"Initial pass read only {initialBytes} bytes.");
             Assert.True(appendBytes < initialBytes, $"Append pass read {appendBytes} bytes after an initial {initialBytes}-byte pass.");
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReportsInitialAndAppendReadResourceMeasurements()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var lines = Enumerable.Range(0, 3_000)
+            .Select(index => CreateTokenCountLine(now.AddMinutes(-index), 1))
+            .ToArray();
+        var partialLine = CreateTokenCountLine(now, 1);
+        await File.WriteAllTextAsync(file, string.Join(Environment.NewLine, lines) + Environment.NewLine + partialLine[..^1]);
+
+        try
+        {
+            var reads = new List<long>();
+            var provider = new CodexLocalSessionFallback(
+                home,
+                timeProvider: new FixedTimeProvider(now),
+                readBytesObserver: bytes => reads.Add(bytes));
+
+            var initial = await MeasureAsync(
+                () => provider.GetSnapshotAsync(CancellationToken.None),
+                reads);
+            reads.Clear();
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+            var append = await MeasureAsync(
+                () => provider.GetSnapshotAsync(CancellationToken.None),
+                reads);
+
+            Assert.True(initial.BytesRead > 300_000);
+            Assert.True(append.BytesRead < initial.BytesRead);
+            Assert.True(initial.Elapsed >= TimeSpan.Zero);
+            Assert.True(append.Elapsed >= TimeSpan.Zero);
+            Assert.Equal(302, (await provider.GetSnapshotAsync(CancellationToken.None))
+                .Metrics.Single(metric => metric.SemanticKey == "tokens5h")
+                .NumericValue);
+
+            _output.WriteLine(
+                $"Codex JSONL initial: bytes={initial.BytesRead}, elapsedMs={initial.Elapsed.TotalMilliseconds:F2}, " +
+                $"allocatedBytes={initial.AllocatedBytes}, privateBytesDelta={initial.PrivateBytesDelta}");
+            _output.WriteLine(
+                $"Codex JSONL append: bytes={append.BytesRead}, elapsedMs={append.Elapsed.TotalMilliseconds:F2}, " +
+                $"allocatedBytes={append.AllocatedBytes}, privateBytesDelta={append.PrivateBytesDelta}");
         }
         finally
         {
@@ -404,4 +466,31 @@ public sealed class CodexLocalSessionFallbackTests
                 },
             },
         });
+
+    private static async Task<ReadMeasurement> MeasureAsync(
+        Func<Task<CodexUsageSnapshot>> operation,
+        IReadOnlyList<long> reads)
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var allocatedBefore = GC.GetTotalAllocatedBytes(true);
+        var privateBytesBefore = Process.GetCurrentProcess().PrivateMemorySize64;
+        var stopwatch = Stopwatch.StartNew();
+        await operation();
+        stopwatch.Stop();
+        var allocatedAfter = GC.GetTotalAllocatedBytes(false);
+        var privateBytesAfter = Process.GetCurrentProcess().PrivateMemorySize64;
+        return new ReadMeasurement(
+            reads.Sum(),
+            stopwatch.Elapsed,
+            Math.Max(0, allocatedAfter - allocatedBefore),
+            privateBytesAfter - privateBytesBefore);
+    }
+
+    private readonly record struct ReadMeasurement(
+        long BytesRead,
+        TimeSpan Elapsed,
+        long AllocatedBytes,
+        long PrivateBytesDelta);
 }
