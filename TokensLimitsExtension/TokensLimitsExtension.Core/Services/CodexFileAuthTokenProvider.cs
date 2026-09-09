@@ -1,9 +1,11 @@
+using System.Buffers;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Globalization;
+using TokensLimitsExtension.Core.Providers;
 
 namespace TokensLimitsExtension.Core.Services;
 
@@ -12,6 +14,7 @@ public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
     private const string RefreshEndpoint = "https://auth.openai.com/oauth/token";
     private const string ClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
+    private const int MaxRefreshResponseBodyBytes = 64 * 1024;
     private readonly string _authFilePath;
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
@@ -190,30 +193,88 @@ public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
 
         using (response)
         {
-            var responseBody = await response.Content.ReadAsStringAsync(requestCts.Token).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+            var responseBody = await ReadBoundedResponseBodyAsync(response.Content, requestCts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException($"Codex token refresh failed with HTTP {(int)response.StatusCode}.");
+            }
+
+            using var document = JsonDocument.Parse(responseBody);
+            var refreshedToken = GetString(document.RootElement, "access_token");
+            if (string.IsNullOrWhiteSpace(refreshedToken))
+            {
+                throw new InvalidDataException("Codex token refresh response does not contain access_token.");
+            }
+
+            var expiresAt = GetDateTimeOffset(document.RootElement, "expires_at")
+                ?? GetDateTimeOffset(document.RootElement, "expiresAt");
+            if (expiresAt is null && TryGetInt64(document.RootElement, "expires_in", out var expiresInSeconds))
+            {
+                expiresAt = _timeProvider.GetUtcNow().AddSeconds(Math.Max(0, expiresInSeconds));
+            }
+
+            return new RefreshedToken(
+                refreshedToken,
+                GetString(document.RootElement, "refresh_token") ?? GetString(document.RootElement, "refreshToken"),
+                expiresAt);
+        }
+    }
+
+    private static async Task<string> ReadBoundedResponseBodyAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is { } contentLength && contentLength > MaxRefreshResponseBodyBytes)
         {
-            throw new HttpRequestException($"Codex token refresh failed with HTTP {(int)response.StatusCode}.");
+            throw new UsageProviderRequestException(
+                $"Codex token refresh response exceeds the maximum response size of {MaxRefreshResponseBodyBytes} bytes.",
+                failureKind: UsageProviderFailureKind.UnsupportedResponse);
         }
 
-        using var document = JsonDocument.Parse(responseBody);
-        var refreshedToken = GetString(document.RootElement, "access_token");
-        if (string.IsNullOrWhiteSpace(refreshedToken))
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var bytes = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
         {
-            throw new InvalidDataException("Codex token refresh response does not contain access_token.");
-        }
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
 
-        var expiresAt = GetDateTimeOffset(document.RootElement, "expires_at")
-            ?? GetDateTimeOffset(document.RootElement, "expiresAt");
-        if (expiresAt is null && TryGetInt64(document.RootElement, "expires_in", out var expiresInSeconds))
+                if (bytes.Length > MaxRefreshResponseBodyBytes - read)
+                {
+                    throw new UsageProviderRequestException(
+                        $"Codex token refresh response exceeds the maximum response size of {MaxRefreshResponseBodyBytes} bytes.",
+                        failureKind: UsageProviderFailureKind.UnsupportedResponse);
+                }
+
+                await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
+
+            var charset = content.Headers.ContentType?.CharSet;
+            var encoding = string.IsNullOrWhiteSpace(charset)
+                ? Encoding.UTF8
+                : TryGetEncoding(charset);
+            return encoding.GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+        }
+        finally
         {
-            expiresAt = _timeProvider.GetUtcNow().AddSeconds(Math.Max(0, expiresInSeconds));
+            ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
 
-        return new RefreshedToken(
-            refreshedToken,
-            GetString(document.RootElement, "refresh_token") ?? GetString(document.RootElement, "refreshToken"),
-            expiresAt);
+    private static Encoding TryGetEncoding(string charset)
+    {
+        try
+        {
+            return Encoding.GetEncoding(charset);
+        }
+        catch (ArgumentException)
+        {
+            return Encoding.UTF8;
         }
     }
 
