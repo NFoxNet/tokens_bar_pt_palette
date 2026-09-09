@@ -1,5 +1,7 @@
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
+using System.Collections;
+using System.Reflection;
 using TokensLimitsExtension;
 using TokensLimitsExtension.Core.Models;
 using TokensLimitsExtension.Core.Providers;
@@ -351,6 +353,51 @@ public sealed class TokensLimitsPageIntegrationTests
         Assert.Contains("96%", dockItem.Subtitle, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RepeatedProviderTogglePreservesNormalSurfacesAndDisposeIsIdempotent()
+    {
+        using var testDirectory = new TestDirectory();
+        using var settings = new global::TokensLimitsExtension.Settings.TokensLimitsSettings(testDirectory.Path);
+        var codex = new FakeGenericProvider(
+            "codex",
+            "Codex",
+            CreateSnapshot("codex", "Codex", primaryUsedPercent: 10));
+        var amp = new FakeGenericProvider(
+            "amp",
+            "Amp",
+            CreateSnapshot("amp", "Amp", primaryUsedPercent: 20));
+        using var registry = new UsageProviderRegistry([codex, amp]);
+        using var provider = new TokensLimitsExtensionCommandsProvider(
+            null,
+            registry,
+            settings,
+            settingsDrivenProviders: true);
+
+        var ampToggle = GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.providers.amp.enabled");
+        ampToggle.Value = false;
+        InvokeSettingsChanged(provider, settings);
+        var initialPages = GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages");
+        var codexPage = Assert.Single(initialPages, page => page.Id.Contains("codex", StringComparison.OrdinalIgnoreCase));
+
+        for (var iteration = 0; iteration < 8; iteration++)
+        {
+            ampToggle.Value = true;
+            InvokeSettingsChanged(provider, settings);
+            ampToggle.Value = false;
+            InvokeSettingsChanged(provider, settings);
+
+            var currentPage = Assert.Single(
+                GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages"),
+                page => page.Id.Contains("codex", StringComparison.OrdinalIgnoreCase));
+            Assert.Same(codexPage, currentPage);
+        }
+
+        var dockPage = Assert.Single(GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_dockPages"));
+        Assert.NotSame(codexPage, dockPage);
+        provider.Dispose();
+        provider.Dispose();
+    }
+
     private sealed class FakeUsageProvider(CodexUsageSnapshot snapshot) : ICodexUsageProvider
     {
         public Task<CodexUsageSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
@@ -464,5 +511,35 @@ public sealed class TokensLimitsPageIntegrationTests
                 Directory.Delete(Path, recursive: true);
             }
         }
+    }
+
+    private static void InvokeSettingsChanged(
+        TokensLimitsExtensionCommandsProvider provider,
+        global::TokensLimitsExtension.Settings.TokensLimitsSettings settings)
+    {
+        var method = typeof(TokensLimitsExtensionCommandsProvider).GetMethod(
+            "SettingsOnChanged",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method!.Invoke(provider, [settings, EventArgs.Empty]);
+    }
+
+    private static T[] GetPrivateSurfaceArray<T>(object instance, string fieldName)
+    {
+        var field = instance.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsType<T[]>(field!.GetValue(instance));
+    }
+
+    private static T GetRegisteredSetting<T>(
+        global::TokensLimitsExtension.Settings.TokensLimitsSettings settings,
+        string key)
+        where T : class
+    {
+        var field = typeof(Microsoft.CommandPalette.Extensions.Toolkit.Settings).GetField(
+            "_settings",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var registeredSettings = Assert.IsAssignableFrom<IDictionary>(field?.GetValue(settings.Settings));
+        return Assert.IsType<T>(registeredSettings[key]);
     }
 }

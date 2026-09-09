@@ -50,14 +50,15 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     internal TokensLimitsExtensionCommandsProvider(
         ICodexUsageProvider? usageService,
         UsageProviderRegistry? providerRegistry,
-        TokensLimitsSettings? settings)
+        TokensLimitsSettings? settings,
+        bool settingsDrivenProviders = false)
     {
         DisplayName = "Tokens Limits";
         Id = "com.tokenslimits.extension";
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         _settings = settings ?? new TokensLimitsSettings();
         Settings = _settings.Settings;
-        _settingsDrivenProviders = providerRegistry is null;
+        _settingsDrivenProviders = providerRegistry is null || settingsDrivenProviders;
         _ownsProviderRegistry = providerRegistry is null;
         _ownedProviderHttpClient = providerRegistry is null
             ? new HttpClient { Timeout = TimeSpan.FromSeconds(20) }
