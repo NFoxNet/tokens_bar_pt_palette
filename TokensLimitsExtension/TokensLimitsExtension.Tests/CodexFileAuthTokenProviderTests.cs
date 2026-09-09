@@ -184,6 +184,24 @@ public sealed class CodexFileAuthTokenProviderTests
     }
 
     [Fact]
+    public async Task RejectsAnOversizedLocalAuthFile()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(authPath, new string('x', 1024 * 1024 + 1));
+            using var provider = new CodexFileAuthTokenProvider(authPath);
+
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => provider.GetValidAccessTokenAsync(CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(authPath);
+        }
+    }
+
+    [Fact]
     public async Task ReloadsAnUnexpiredTokenWhenCodexUpdatesAuthFile()
     {
         var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");

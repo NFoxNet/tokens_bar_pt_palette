@@ -15,6 +15,7 @@ public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
     private const string ClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
     private const int MaxRefreshResponseBodyBytes = 64 * 1024;
+    private const int MaxAuthFileBytes = 1024 * 1024;
     private readonly string _authFilePath;
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
@@ -104,14 +105,8 @@ public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
         }
 
         var authFileLastWriteTimeUtc = GetAuthFileLastWriteTimeUtc();
-        await using var stream = new FileStream(
-            _authFilePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            4096,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var raw = await ReadBoundedAuthFileAsync(_authFilePath, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(raw);
         var root = document.RootElement;
         var tokenObject = TryGetObject(root, "tokens") ?? root;
 
@@ -147,7 +142,6 @@ public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
         // Release the source file before atomically replacing it with a rotated
         // credential set below. The values needed for the refresh are already copied.
         document.Dispose();
-        await stream.DisposeAsync().ConfigureAwait(false);
         var refreshed = await RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(refreshed.RefreshToken))
         {
@@ -278,6 +272,53 @@ public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
         }
     }
 
+    private static async Task<string> ReadBoundedAuthFileAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        var fileInfo = new FileInfo(path);
+        if (fileInfo.Exists && fileInfo.Length > MaxAuthFileBytes)
+        {
+            throw new InvalidDataException(
+                $"Codex auth file exceeds the maximum size of {MaxAuthFileBytes} bytes.");
+        }
+
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            16 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var bytes = new MemoryStream(capacity: Math.Min(MaxAuthFileBytes, checked((int)Math.Max(0, stream.Length))));
+        var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
+        {
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                if (bytes.Length > MaxAuthFileBytes - read)
+                {
+                    throw new InvalidDataException(
+                        $"Codex auth file exceeds the maximum size of {MaxAuthFileBytes} bytes.");
+                }
+
+                await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
+
+            return Encoding.UTF8.GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
     private bool HasCurrentCachedAccessToken(DateTimeOffset now)
     {
         return !string.IsNullOrWhiteSpace(_cachedAccessToken)
@@ -318,7 +359,7 @@ public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider
         var temporaryPath = $"{_authFilePath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            var raw = await File.ReadAllTextAsync(_authFilePath, cancellationToken).ConfigureAwait(false);
+            var raw = await ReadBoundedAuthFileAsync(_authFilePath, cancellationToken).ConfigureAwait(false);
             var root = JsonNode.Parse(raw) as JsonObject
                 ?? throw new InvalidDataException("Codex auth.json root is not an object.");
             var tokenObject = root["tokens"] as JsonObject ?? root;
