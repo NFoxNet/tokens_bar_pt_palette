@@ -806,6 +806,29 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task JetBrainsQuotaFileRejectsAnOversizedLocalInput()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"AIAssistantQuotaManager2-{Guid.NewGuid():N}.xml");
+        try
+        {
+            await File.WriteAllTextAsync(path, new string('x', 1024 * 1024 + 1));
+            using var provider = new ConfiguredUsageProvider(
+                UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "jetbrains"),
+                new TestConfiguration(("jetbrains", "dataPath", path)),
+                new HttpClient());
+
+            var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(
+                () => provider.GetUsageSnapshotAsync());
+
+            Assert.Equal(UsageProviderFailureKind.UnsupportedResponse, exception.FailureKind);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task OpenAiUsageUsesAdminKeyAndFollowsUsagePagination()
     {
         var handler = new OpenAiHandler();

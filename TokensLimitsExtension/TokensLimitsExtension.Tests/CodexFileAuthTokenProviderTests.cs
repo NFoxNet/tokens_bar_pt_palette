@@ -192,8 +192,10 @@ public sealed class CodexFileAuthTokenProviderTests
             await File.WriteAllTextAsync(authPath, new string('x', 1024 * 1024 + 1));
             using var provider = new CodexFileAuthTokenProvider(authPath);
 
-            await Assert.ThrowsAsync<InvalidDataException>(
+            var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(
                 () => provider.GetValidAccessTokenAsync(CancellationToken.None));
+
+            Assert.Equal(UsageProviderFailureKind.UnsupportedResponse, exception.FailureKind);
         }
         finally
         {

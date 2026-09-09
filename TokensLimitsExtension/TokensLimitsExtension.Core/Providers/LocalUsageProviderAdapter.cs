@@ -46,7 +46,7 @@ internal static class LocalUsageProviderAdapter
             throw new UsageProviderConfigurationException($"Файл данных {path} не найден.");
         }
 
-        var raw = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        var raw = await BoundedLocalFileReader.ReadTextAsync(path, cancellationToken).ConfigureAwait(false);
         try
         {
             using var documentFromFile = JsonDocument.Parse(raw);

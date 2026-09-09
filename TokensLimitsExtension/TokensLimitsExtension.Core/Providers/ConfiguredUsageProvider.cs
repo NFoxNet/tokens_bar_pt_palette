@@ -1067,7 +1067,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
     {
         var credential = ResolveCredential();
         var apiKey = credential.ApiKey
-            ?? ReadKiloAuthToken();
+            ?? await ReadKiloAuthTokenAsync(cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             throw new UsageProviderConfigurationException(
@@ -1214,7 +1214,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         };
     }
 
-    private string? ReadKiloAuthToken()
+    private async Task<string?> ReadKiloAuthTokenAsync(CancellationToken cancellationToken)
     {
         var configuredPath = _configuration.GetValue(Descriptor.Id, "dataPath");
         var path = string.IsNullOrWhiteSpace(configuredPath)
@@ -1227,7 +1227,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var raw = await BoundedLocalFileReader.ReadTextAsync(path, cancellationToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(raw);
             return document.RootElement.TryGetProperty("kilo", out var kilo)
                 && kilo.ValueKind == JsonValueKind.Object
                 && TryGetJsonString(kilo, "access", out var access)
@@ -1560,7 +1561,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
                 "JetBrains AI quota-файл не найден. Запустите AI Assistant или укажите путь к AIAssistantQuotaManager2.xml в настройках.");
         }
 
-        var raw = await File.ReadAllTextAsync(quotaFile, cancellationToken).ConfigureAwait(false);
+        var raw = await BoundedLocalFileReader.ReadTextAsync(quotaFile, cancellationToken).ConfigureAwait(false);
         XDocument document;
         try
         {

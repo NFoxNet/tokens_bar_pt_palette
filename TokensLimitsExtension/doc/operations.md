@@ -21,6 +21,7 @@
 ## Безопасность
 
 - API keys, cookies, OAuth tokens и credentials JSON считаются секретами.
+- Локальные provider-файлы (JSON/XML и Kilo CLI auth) читаются с пределом 1 MiB; превышение классифицируется как неподдерживаемый ответ и не передаётся парсеру.
 - Не добавляйте их в исходники, тестовые fixtures, логи, screenshots или commit messages.
 - Секретные настройки маскируются в UI и сохраняются через `ProtectedSecretStore`.
 - Изменение настроек одного провайдера очищает только его cache; переключение языка и неизменившийся refresh interval не сбрасывают account data.
