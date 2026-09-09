@@ -67,7 +67,7 @@ UsageRefreshCoordinator (one timer)
 
 ## Codex
 
-`CodexUsageService` сначала получает валидный access token через `CodexFileAuthTokenProvider`, затем вызывает `https://chatgpt.com/backend-api/wham/usage` через `CodexUsageClient`. Клиент проверяет схему ответа, ограничивает тело ответа настраиваемым лимитом (по умолчанию 1 MiB), имеет timeout/cancellation и повторяет transient-ошибки.
+`CodexUsageService` сначала получает валидный access token через `CodexFileAuthTokenProvider`, затем вызывает `https://chatgpt.com/backend-api/wham/usage` через `CodexUsageClient`. Auth-файл читается с пределом 1 MiB, а клиент проверяет схему ответа, ограничивает тело ответа настраиваемым лимитом (по умолчанию 1 MiB), имеет timeout/cancellation и повторяет transient-ошибки.
 
 Если основной путь не работает, `CodexLocalSessionFallback` читает JSONL из `CODEX_HOME` (или `~/.codex`), `sessions` и `archived_sessions`, суммирует token events за 5 часов и 7 дней и возвращает метрики с `IsEstimate = true`. Локальный fallback не подставляет подтверждённую квоту, процент или искусственный reset: UI показывает исходные количества токенов и помечает их как оценку. Кэш читает только добавленные байты после завершённой строки, перечитывает файл после truncation/замены и пропускает строку длиннее 256 KiB потоково.
 
