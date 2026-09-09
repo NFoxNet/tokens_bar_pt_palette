@@ -184,6 +184,29 @@ public sealed class CodexFileAuthTokenProviderTests
     }
 
     [Fact]
+    public async Task ReadsUtf8BomAuthFileLikeFileReadAllTextAsync()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
+        try
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                access_token = "access-token",
+                expires_at = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds(),
+            });
+            var payload = Encoding.UTF8.GetBytes("\uFEFF" + json);
+            await File.WriteAllBytesAsync(authPath, payload);
+            using var provider = new CodexFileAuthTokenProvider(authPath);
+
+            Assert.Equal("access-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(authPath);
+        }
+    }
+
+    [Fact]
     public async Task RejectsAnOversizedLocalAuthFile()
     {
         var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");

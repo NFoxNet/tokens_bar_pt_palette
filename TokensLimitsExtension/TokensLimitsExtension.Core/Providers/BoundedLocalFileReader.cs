@@ -53,7 +53,8 @@ internal static class BoundedLocalFileReader
                 await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             }
 
-            return Encoding.UTF8.GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+            var text = Encoding.UTF8.GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+            return text.Length > 0 && text[0] == '\uFEFF' ? text[1..] : text;
         }
         finally
         {
