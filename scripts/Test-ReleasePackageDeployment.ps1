@@ -20,7 +20,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if ($env:GITHUB_ACTIONS -ne 'true' -or [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+if ($env:GITHUB_ACTIONS -ne 'true' -or [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP) -or
+    [string]::IsNullOrWhiteSpace($env:ImageOS) -or $env:ImageOS -notmatch '^win') {
     throw 'Package deployment validation is restricted to an ephemeral GitHub Actions runner.'
 }
 
@@ -62,14 +63,6 @@ function Get-TestPackage {
     return @(Get-AppxPackage -Name $PackageName | Where-Object {
         $_.Version.ToString() -eq $ExpectedVersion -and $_.Publisher -eq $ExpectedPublisher
     })
-}
-
-function Remove-TestPackage {
-    param([Parameter(Mandatory)][string]$PackageName)
-
-    foreach ($installedPackage in Get-TestPackage -PackageName $PackageName) {
-        Remove-AppxPackage -Package $installedPackage.PackageFullName -PreserveApplicationData -ErrorAction Stop
-    }
 }
 
 function Get-ZipCentralDirectoryTarget {
@@ -232,7 +225,6 @@ function Assert-InstallRejected {
 
     $registeredPackages = @(Get-TestPackage -PackageName $ExpectedPackageName)
     if ($null -eq $installFailure -or $registeredPackages.Count -gt 0) {
-        Remove-TestPackage -PackageName $ExpectedPackageName
         throw "Windows deployment accepted the $Mutation-tampered package."
     }
 
@@ -282,54 +274,48 @@ try {
         $importedCertificate = $true
     }
 
-    $validInstallSucceeded = $false
+    foreach ($mutation in @('PairedTimestamp', 'CentralDirectoryAttribute')) {
+        $tamperedPackagePath = Join-Path $testDirectory "tampered-$mutation.msix"
+        New-TamperedPackage -SourcePath $package.FullName -DestinationPath $tamperedPackagePath -Mutation $mutation
+        Assert-InstallRejected -TamperedPackagePath $tamperedPackagePath -Mutation $mutation
+    }
+
     try {
         Add-AppxPackage -Path $package.FullName -ErrorAction Stop
-        $validInstallSucceeded = $true
     }
     catch {
         throw "Windows deployment rejected the signed x64 package: $($_.Exception.Message)"
     }
 
     $installedPackages = @(Get-TestPackage -PackageName $ExpectedPackageName)
-    if (-not $validInstallSucceeded -or $installedPackages.Count -ne 1 -or
+    if ($installedPackages.Count -ne 1 -or
         $installedPackages[0].Architecture.ToString() -ne 'X64') {
-        Remove-TestPackage -PackageName $ExpectedPackageName
         throw "Windows deployment did not register the expected x64 package '$ExpectedPackageName' v$ExpectedVersion."
     }
 
-    Remove-TestPackage -PackageName $ExpectedPackageName
-
-    foreach ($mutation in @('PairedTimestamp', 'CentralDirectoryAttribute')) {
-        $tamperedPackagePath = Join-Path $testDirectory "tampered-$mutation.msix"
-        New-TamperedPackage -SourcePath $package.FullName -DestinationPath $tamperedPackagePath -Mutation $mutation
-        Assert-InstallRejected -TamperedPackagePath $tamperedPackagePath -Mutation $mutation
-    }
+    # This is a fresh GitHub-hosted runner with no user application data. Keep the
+    # signed package installed until runner teardown: PreserveApplicationData is
+    # only supported for development-mode loose-file registrations.
 }
 finally {
     try {
-        Remove-TestPackage -PackageName $ExpectedPackageName
+        if ($importedCertificate) {
+            Remove-Item -LiteralPath (Join-Path $trustStorePath $thumbprint) -Force -ErrorAction Stop
+        }
     }
     finally {
         try {
-            if ($importedCertificate) {
-                Remove-Item -LiteralPath (Join-Path $trustStorePath $thumbprint) -Force -ErrorAction Stop
-            }
+            $certificate.Dispose()
         }
         finally {
-            try {
-                $certificate.Dispose()
-            }
-            finally {
-                if (Test-Path -LiteralPath $testDirectory) {
-                    $runnerTempPath = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-                    $testDirectoryPath = [IO.Path]::GetFullPath($testDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-                    $runnerTempPrefix = $runnerTempPath + [IO.Path]::DirectorySeparatorChar
-                    if (-not $testDirectoryPath.StartsWith($runnerTempPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-                        throw "Refusing to remove deployment test directory outside RUNNER_TEMP: '$testDirectoryPath'."
-                    }
-                    Remove-Item -LiteralPath $testDirectoryPath -Recurse -Force -ErrorAction Stop
+            if (Test-Path -LiteralPath $testDirectory) {
+                $runnerTempPath = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+                $testDirectoryPath = [IO.Path]::GetFullPath($testDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+                $runnerTempPrefix = $runnerTempPath + [IO.Path]::DirectorySeparatorChar
+                if (-not $testDirectoryPath.StartsWith($runnerTempPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    throw "Refusing to remove deployment test directory outside RUNNER_TEMP: '$testDirectoryPath'."
                 }
+                Remove-Item -LiteralPath $testDirectoryPath -Recurse -Force -ErrorAction Stop
             }
         }
     }
