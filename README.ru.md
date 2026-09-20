@@ -6,7 +6,7 @@ Tokens Limits — расширение Microsoft PowerToys Command Palette, ко
 
 Скачайте файлы из [последнего GitHub Release](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/latest), оставьте MSIX, сертификат, установщик и файл контрольных сумм в одной папке и запустите `Install-TokensLimitsExtension.cmd`. После установки перезагрузите расширения Command Palette в PowerToys.
 
-Предварительные версии не отображаются по ссылке «последний релиз». Для полевой проверки v0.0.5.2 используйте [страницу тега](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.2) и [заметки о проверках](TokensLimitsExtension/doc/release-notes-v0.0.5.2.md).
+Предварительные версии не отображаются по ссылке «последний релиз». Для полевой проверки v0.0.5.3 используйте [страницу релиза](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.3) и [заметки о проверках](TokensLimitsExtension/doc/release-notes-v0.0.5.3.md).
 
 Установщик проверяет подпись и контрольные суммы. При обновлении настройки и зашифрованные ключи сохраняются.
 
