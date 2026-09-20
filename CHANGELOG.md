@@ -2,16 +2,22 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
-## [0.0.5.3] - 2026-09-21 (prerelease candidate)
+## [0.0.5.4] - 2026-09-21 (prerelease candidate)
 
 ### Fixed
 
 - Validate the embedded MSIX CMS signature, pin it to the release certificate, and verify the signed block map and every payload block without depending on a public trust chain.
-- Exercise x64 package deployment on an ephemeral Windows runner with the release certificate temporarily in `LocalMachine\TrustedPeople`; reject tampered ZIP file-record and central-directory metadata.
+- Exercise x64 package deployment on an ephemeral Windows runner with the release certificate temporarily in `LocalMachine\TrustedPeople`; reject tampered ZIP file-record and central-directory metadata before installing the intact package last.
+- Keep signed MSIX upgrades on the same package identity so Windows retains provider settings and protected secrets; document that `-PreserveApplicationData` is limited to development-mode loose-file registrations.
+- Make the default unregister helper refuse signed Release MSIX packages before removal; `-DeleteApplicationData` remains the explicit data-removal option.
 
 ### Field validation pending
 
-- Live PowerToys/COM navigation and shutdown, ARM64 runtime, retained-object/allocation measurements and signed upgrade with settings/secrets preservation remain field acceptance checks. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.3.md).
+- Live PowerToys/COM navigation and shutdown, ARM64 runtime, retained-object/allocation measurements and signed upgrade with settings/secrets preservation remain field acceptance checks. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.4.md).
+
+## [0.0.5.3] - 2026-09-21 (not published)
+
+- The signed packages passed structural validation, but the Windows deployment gate stopped while trying to remove a normally installed MSIX with `-PreserveApplicationData`. No GitHub Release or downloadable artifacts were created. The tag remains for history; v0.0.5.4 fixes the gate and supersedes this candidate.
 
 ## [0.0.5.2] - 2026-09-20 (not published)
 

@@ -10,6 +10,14 @@ if ($packages.Count -eq 0) {
     exit 0
 }
 
+if (-not $DeleteApplicationData) {
+    $packagesWithoutDevelopmentRegistration = @($packages | Where-Object { -not $_.IsDevelopmentMode })
+    if ($packagesWithoutDevelopmentRegistration.Count -gt 0) {
+        $packageNames = $packagesWithoutDevelopmentRegistration | ForEach-Object PackageFullName
+        throw "Cannot preserve application data for a signed Release MSIX. -PreserveApplicationData only supports development-mode loose-file registrations. Install a newer Release MSIX over the existing package instead. Packages: $($packageNames -join ', ')"
+    }
+}
+
 foreach ($package in $packages) {
     Write-Host "Removing $($package.Name) version $($package.Version)..."
     if ($DeleteApplicationData) {

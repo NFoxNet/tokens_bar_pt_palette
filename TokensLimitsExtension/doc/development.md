@@ -19,6 +19,18 @@ dotnet build .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 -
 dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore
 ```
 
+CI also runs the repository's PowerShell helper checks:
+
+```powershell
+..\scripts\tests\Build-Release.Helpers.Tests.ps1
+..\scripts\tests\Unregister.Tests.ps1
+```
+
+`unregister.ps1` preserves data by default and only supports that mode for
+development-mode loose-file registrations. For a signed Release MSIX, use the
+in-place upgrade steps in [release.md](release.md); `-DeleteApplicationData`
+explicitly removes the package data.
+
 ## Visual Studio и Command Palette
 
 1. Выберите конфигурацию `Debug` и платформу `x64` или `ARM64`.
