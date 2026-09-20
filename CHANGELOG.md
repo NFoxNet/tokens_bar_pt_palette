@@ -2,7 +2,18 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
-## [0.0.5.2] - 2026-09-20 (prerelease)
+## [0.0.5.3] - 2026-09-21 (prerelease candidate)
+
+### Fixed
+
+- Validate the embedded MSIX CMS signature, pin it to the release certificate, and verify the signed block map and every payload block without depending on a public trust chain.
+- Exercise x64 package deployment on an ephemeral Windows runner with the release certificate temporarily in `LocalMachine\TrustedPeople`; reject tampered ZIP file-record and central-directory metadata.
+
+### Field validation pending
+
+- Live PowerToys/COM navigation and shutdown, ARM64 runtime, retained-object/allocation measurements and signed upgrade with settings/secrets preservation remain field acceptance checks. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.3.md).
+
+## [0.0.5.2] - 2026-09-20 (not published)
 
 ### Added
 
@@ -22,7 +33,7 @@ All notable changes are documented here. This project follows [Semantic Versioni
 
 ## [0.0.5.1] - 2026-09-20 (not published)
 
-- The GitHub release workflow stopped before producing packages because PowerShell passed the formatted certificate object instead of its thumbprint to MSBuild. The issue is fixed in v0.0.5.2; no v0.0.5.1 artifacts were published. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.1.md).
+- The GitHub release workflow stopped before producing packages because PowerShell passed the formatted certificate object instead of its thumbprint to MSBuild. The issue was fixed in v0.0.5.2; no v0.0.5.1 artifacts were published. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.1.md).
 
 ## [0.0.4.2] - 2026-09-04
 

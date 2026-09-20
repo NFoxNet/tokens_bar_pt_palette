@@ -62,12 +62,14 @@ jobs:
           .\scripts\Build-Release.ps1 -CertificatePath $env:PFX_PATH -CertificatePassword $password
       - name: Validate release artifacts
         run: |
+          $ErrorActionPreference = 'Stop'
           [xml]$manifest = Get-Content 'TokensLimitsExtension/TokensLimitsExtension/Package.appxmanifest'
           $version = $manifest.Package.Identity.Version
           $releaseDirectory = Join-Path $env:GITHUB_WORKSPACE 'artifacts/release'
+          $certificatePath = Join-Path $releaseDirectory 'NFoxNet.TokensLimitsExtension.cer'
           $expectedNames = @(
             "TokensLimitsExtension_${version}_x64.msix",
-            "TokensLimitsExtension_${version}_ARM64.msix",
+            "TokensLimitsExtension_${version}_arm64.msix",
             'NFoxNet.TokensLimitsExtension.cer',
             'Install-TokensLimitsExtension.cmd',
             'Install-TokensLimitsExtension.ps1',
@@ -87,10 +89,16 @@ jobs:
           }
           & .\scripts\Test-ReleasePackage.ps1 `
             -PackagePath (Join-Path $releaseDirectory "TokensLimitsExtension_${version}_x64.msix") `
-            -ExpectedVersion $version -ExpectedArchitecture x64 -ExpectedPublisher $manifest.Package.Identity.Publisher
+            -ExpectedVersion $version -ExpectedArchitecture x64 -ExpectedPublisher $manifest.Package.Identity.Publisher `
+            -ExpectedCertificatePath $certificatePath
           & .\scripts\Test-ReleasePackage.ps1 `
             -PackagePath (Join-Path $releaseDirectory "TokensLimitsExtension_${version}_arm64.msix") `
-            -ExpectedVersion $version -ExpectedArchitecture arm64 -ExpectedPublisher $manifest.Package.Identity.Publisher
+            -ExpectedVersion $version -ExpectedArchitecture arm64 -ExpectedPublisher $manifest.Package.Identity.Publisher `
+            -ExpectedCertificatePath $certificatePath
+          & .\scripts\Test-ReleasePackageDeployment.ps1 `
+            -PackagePath (Join-Path $releaseDirectory "TokensLimitsExtension_${version}_x64.msix") `
+            -CertificatePath $certificatePath -ExpectedVersion $version `
+            -ExpectedPublisher $manifest.Package.Identity.Publisher -ExpectedPackageName $manifest.Package.Identity.Name
       - name: Cleanup signing material
         if: always()
         run: |

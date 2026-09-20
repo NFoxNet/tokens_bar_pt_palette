@@ -67,10 +67,15 @@ $certificatePassword = Read-Host 'PFX password' -AsSecureString
   -Platform x64 `
   -OutputDirectory artifacts\local-upgrade
 
-$package = Resolve-Path ..\artifacts\local-upgrade\TokensLimitsExtension_*.msix
-if ((Get-AuthenticodeSignature $package).Status -ne 'Valid') {
-  throw 'MSIX signature validation failed.'
-}
+$package = Resolve-Path ..\artifacts\local-upgrade\TokensLimitsExtension_*_x64.msix
+$certificate = Resolve-Path ..\artifacts\local-upgrade\NFoxNet.TokensLimitsExtension.cer
+[xml]$manifest = Get-Content .\TokensLimitsExtension\Package.appxmanifest
+& ..\scripts\Test-ReleasePackage.ps1 `
+  -PackagePath $package `
+  -ExpectedVersion $manifest.Package.Identity.Version `
+  -ExpectedArchitecture x64 `
+  -ExpectedPublisher 'CN=NFoxNet' `
+  -ExpectedCertificatePath $certificate
 
 Get-Process TokensLimitsExtension -ErrorAction SilentlyContinue |
   Stop-Process -Force
@@ -119,7 +124,7 @@ Lock-файлы общих Core/test проектов не привязаны к
 
 Для публичного GitHub-релиза используйте `scripts/Build-Release.ps1`. Скрипт требует PFX, чей subject в точности совпадает с `Publisher` в `Package.appxmanifest`, подписывает x64 и ARM64 MSIX и создаёт SHA-256 checksums. PFX и пароль не должны попадать в репозиторий или логи. Полная процедура — в [release.md](release.md).
 
-После сборки проверяйте оба готовых пакета через `scripts/Test-ReleasePackage.ps1`. Проверка читает только локальный MSIX и подтверждает подпись, publisher/version/architecture, COM CLSID, обязательные assets и `lang/en.json`/`lang/ru.json`; она не устанавливает пакет и не требует сетевого доступа.
+После сборки проверяйте оба готовых пакета через `scripts/Test-ReleasePackage.ps1`, передав путь к экспортированному `.cer`. Проверка подтверждает CMS подпись и точное совпадение signer-сертификата, сверяет содержимое с подписанной block map, а также проверяет publisher/version/architecture, COM CLSID, обязательные assets и `lang/en.json`/`lang/ru.json`. Она читает только локальные файлы, не устанавливает пакет, не меняет хранилища доверия и не требует сети. Доверие Windows проверяется отдельно во время установки.
 
 ## Тестовые уровни
 
