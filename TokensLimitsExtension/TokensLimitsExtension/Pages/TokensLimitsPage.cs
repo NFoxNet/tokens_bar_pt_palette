@@ -24,6 +24,8 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private readonly ILocalizationService _localization;
     private IListItem[] _items;
     private string? _renderSignature;
+    private readonly object _lifecycleGate = new();
+    private int _isActive = 1;
     private int _disposed;
 
     public TokensLimitsPage(CodexUsageService usageService, Action<string>? logger = null, IUsageRefreshSettings? refreshSettings = null)
@@ -52,13 +54,13 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
     public override IListItem[] GetItems()
     {
-        if (IsDisposed) return [];
+        if (IsDisposed || !IsActive) return [];
         return Volatile.Read(ref _items);
     }
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (IsDisposed) return;
+        if (IsDisposed || !IsActive) return;
         if (_stateSource is not null)
         {
             if (_coordinator is not null) await _coordinator.RefreshProviderAsync(_stateSource).ConfigureAwait(false);
@@ -73,16 +75,64 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        if (_stateSource is not null) _stateSource.StateChanged -= StateSourceOnStateChanged;
-        _localization.LanguageChanged -= LocalizationOnLanguageChanged;
+        lock (_lifecycleGate)
+        {
+            Interlocked.Exchange(ref _isActive, 0);
+            if (_stateSource is not null) _stateSource.StateChanged -= StateSourceOnStateChanged;
+            _localization.LanguageChanged -= LocalizationOnLanguageChanged;
+        }
         GC.SuppressFinalize(this);
     }
-    internal void Deactivate() => Dispose();
     private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+    internal bool IsActive => Volatile.Read(ref _isActive) != 0;
+    internal void SetActive(bool active)
+    {
+        if (IsDisposed) return;
+        var changed = false;
+        lock (_lifecycleGate)
+        {
+            if (IsDisposed) return;
+            var wasActive = Interlocked.Exchange(ref _isActive, active ? 1 : 0) != 0;
+            changed = wasActive != active;
+            if (changed)
+            {
+                if (active)
+                {
+                    if (_stateSource is not null) _stateSource.StateChanged += StateSourceOnStateChanged;
+                    _localization.LanguageChanged += LocalizationOnLanguageChanged;
+                }
+                else
+                {
+                    if (_stateSource is not null) _stateSource.StateChanged -= StateSourceOnStateChanged;
+                    _localization.LanguageChanged -= LocalizationOnLanguageChanged;
+                    _renderSignature = null;
+                    Volatile.Write(ref _items, []);
+                }
+            }
+        }
+
+        if (!active)
+        {
+            if (changed && !IsDisposed) RaiseItemsChanged(0);
+            return;
+        }
+
+        LocalizationOnLanguageChanged(this, EventArgs.Empty);
+        SynchronizeState();
+    }
+
+    internal void SynchronizeState()
+    {
+        if (!IsDisposed && IsActive && _stateSource is not null)
+        {
+            ApplyState(_stateSource.State);
+        }
+    }
+
     private void StateSourceOnStateChanged(object? sender, EventArgs e) => ApplyState(_stateSource!.State);
     private void ApplyState(UsageProviderState state)
     {
-        if (IsDisposed) return;
+        if (IsDisposed || !IsActive) return;
         if (state.Snapshot is { } snapshot)
         {
             var items = new List<IListItem>(CreateItems(snapshot, state));
@@ -100,6 +150,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     }
     private void SetItems(IListItem[] items, bool notify)
     {
+        if (IsDisposed || !IsActive) return;
         var signature = string.Join('\u001f', items.Select(item => item is ListItem listItem
             ? $"{listItem.Title}\u001e{listItem.Subtitle}\u001e{GetCommandSignature(listItem.Command)}"
             : $"{item.Title}\u001e{item.Subtitle}"));
@@ -127,13 +178,13 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             }
 
             _renderSignature = signature;
-            if (notify && !IsDisposed) RaiseItemsChanged(items.Length);
+            if (notify && !IsDisposed && IsActive) RaiseItemsChanged(items.Length);
             return;
         }
 
         _renderSignature = signature;
         Volatile.Write(ref _items, items);
-        if (notify && !IsDisposed) RaiseItemsChanged(items.Length);
+        if (notify && !IsDisposed && IsActive) RaiseItemsChanged(items.Length);
     }
     private IListItem[] CreateLoadingItems() => [new ListItem(new NoOpCommand()) { Title = _localization.GetString("details.limits", "Limits"), Subtitle = _localization.GetString("details.loading", "Loading…") }];
     private IListItem[] CreateUnavailableItems(UsageProviderState? state = null)
@@ -291,7 +342,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     }
     private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
     {
-        if (IsDisposed) return;
+        if (IsDisposed || !IsActive) return;
         Title = $"{_usageProvider.Descriptor.DisplayName} {_localization.GetString("details.limits", "Limits")}";
         Name = _localization.Format("details.show", _usageProvider.Descriptor.DisplayName);
         PlaceholderText = Title;

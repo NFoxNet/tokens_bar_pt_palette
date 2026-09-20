@@ -16,6 +16,8 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     private readonly IUsageProviderStateSource? _stateSource;
     private readonly UsageRefreshCoordinator? _coordinator;
     private readonly ILocalizationService _localization;
+    private readonly object _lifecycleGate = new();
+    private int _isActive = 1;
     private int _disposed;
 
     public UsageDockBandItem(IUsageProvider provider, Action<string>? logger = null, ICommand? detailsCommand = null, IUsageRefreshSettings? refreshSettings = null, ILocalizationService? localization = null, UsageRefreshCoordinator? coordinator = null)
@@ -35,10 +37,11 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     }
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+    internal bool IsActive => Volatile.Read(ref _isActive) != 0;
     public string DockSubtitle { get; private set => SetProperty(ref field, value); } = string.Empty;
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (IsDisposed) return;
+        if (IsDisposed || !IsActive) return;
         if (_stateSource is not null)
         {
             if (_coordinator is not null) await _coordinator.RefreshProviderAsync(_stateSource).ConfigureAwait(false);
@@ -52,14 +55,60 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        if (_stateSource is not null) _stateSource.StateChanged -= StateSourceOnStateChanged;
-        _localization.LanguageChanged -= LocalizationOnLanguageChanged;
+        lock (_lifecycleGate)
+        {
+            Interlocked.Exchange(ref _isActive, 0);
+            if (_stateSource is not null) _stateSource.StateChanged -= StateSourceOnStateChanged;
+            _localization.LanguageChanged -= LocalizationOnLanguageChanged;
+        }
         GC.SuppressFinalize(this);
     }
-    internal void Deactivate() => Dispose();
+    internal void SetActive(bool active)
+    {
+        if (IsDisposed) return;
+        var changed = false;
+        lock (_lifecycleGate)
+        {
+            if (IsDisposed) return;
+            var wasActive = Interlocked.Exchange(ref _isActive, active ? 1 : 0) != 0;
+            changed = wasActive != active;
+            if (changed)
+            {
+                if (_stateSource is not null)
+                {
+                    if (active) _stateSource.StateChanged += StateSourceOnStateChanged;
+                    else _stateSource.StateChanged -= StateSourceOnStateChanged;
+                }
+
+                if (active) _localization.LanguageChanged += LocalizationOnLanguageChanged;
+                else _localization.LanguageChanged -= LocalizationOnLanguageChanged;
+            }
+        }
+
+        if (active)
+        {
+            SynchronizeState();
+        }
+        else if (changed && !IsDisposed)
+        {
+            var unavailable = _localization.GetString("status.unavailable", "Limits unavailable");
+            Subtitle = unavailable;
+            DockSubtitle = unavailable;
+        }
+    }
+
+    internal void SynchronizeState()
+    {
+        if (!IsDisposed && IsActive && _stateSource is not null)
+        {
+            ApplyState(_stateSource.State);
+        }
+    }
+
     private void StateSourceOnStateChanged(object? sender, EventArgs e) => ApplyState(_stateSource!.State);
     private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
     {
+        if (!IsActive) return;
         if (_stateSource is not null)
         {
             ApplyState(_stateSource.State);
@@ -67,7 +116,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     }
     private void ApplyState(UsageProviderState state)
     {
-        if (IsDisposed) return;
+        if (IsDisposed || !IsActive) return;
         if (state.Snapshot is { } snapshot)
         {
             ApplySnapshot(snapshot);
@@ -79,9 +128,10 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         }
         else if (!state.IsRefreshing) ApplyUnavailable(state);
     }
-    private void ApplySnapshot(UsageSnapshot snapshot) { if (IsDisposed) return; Title = snapshot.ProviderDisplayName; DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization); Subtitle = DockSubtitle; }
+    private void ApplySnapshot(UsageSnapshot snapshot) { if (IsDisposed || !IsActive) return; Title = snapshot.ProviderDisplayName; DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization); Subtitle = DockSubtitle; }
     private void ApplyUnavailable(UsageProviderState? state = null)
     {
+        if (IsDisposed || !IsActive) return;
         var unavailable = _localization.GetString("status.unavailable", "Limits unavailable");
         var suffix = state is { ErrorKind: not UsageProviderErrorKind.None } ? $" · {GetStatusWarning(state)}" : string.Empty;
         Subtitle = unavailable + suffix;

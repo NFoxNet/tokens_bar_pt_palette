@@ -30,14 +30,19 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private readonly UsageSnapshotCache[] _snapshotCaches;
     private readonly UsageRefreshCoordinator _refreshCoordinator;
     private UsageDockBandItem[] _dockBandItems = [];
-    private readonly List<UsageDockBandItem> _retiredDockBandItems = [];
-    private readonly List<TokensLimitsPage> _retiredPages = [];
+    private readonly Dictionary<string, TokensLimitsPage> _pagesByProviderId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TokensLimitsPage> _dockPagesByProviderId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, UsageDockBandItem> _dockBandItemsByProviderId = new(StringComparer.OrdinalIgnoreCase);
     private readonly UsageOverviewPage _overviewPage;
     private readonly TokensLimitsDockBandPage _dockBandPage;
     private readonly HttpClient? _ownedProviderHttpClient;
     private readonly bool _settingsDrivenProviders;
+    private readonly object _rebuildGate = new();
     private readonly object _surfaceGate = new();
     private string[] _enabledProviderIds = [];
+    private string[] _coordinatorProviderIds = [];
+    private bool _rebuildInProgress;
+    private bool _rebuildRequested;
     private int _disposed;
 
     public TokensLimitsExtensionCommandsProvider(
@@ -129,15 +134,19 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         _settings.Changed -= SettingsOnChanged;
         UsageDockBandItem[] dockBandItems;
         TokensLimitsPage[] pages;
-        lock (_surfaceGate)
+        lock (_rebuildGate)
         {
-            dockBandItems = [.. _dockBandItems, .. _retiredDockBandItems];
-            pages = [.. _pages, .. _dockPages, .. _retiredPages];
-            _dockBandItems = [];
-            _pages = [];
-            _dockPages = [];
-            _retiredDockBandItems.Clear();
-            _retiredPages.Clear();
+            lock (_surfaceGate)
+            {
+                dockBandItems = [.. _dockBandItemsByProviderId.Values];
+                pages = [.. _pagesByProviderId.Values, .. _dockPagesByProviderId.Values];
+                _dockBandItemsByProviderId.Clear();
+                _pagesByProviderId.Clear();
+                _dockPagesByProviderId.Clear();
+                _dockBandItems = [];
+                _pages = [];
+                _dockPages = [];
+            }
         }
 
         foreach (var dockBandItem in dockBandItems)
@@ -190,85 +199,305 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         }
 
         RebuildEnabledSurfaces();
-        // A language or interval edit returns immediately from fresh caches. A provider
-        // credential edit clears the affected shared state before this call.
-        _refreshCoordinator.RefreshAll();
     }
 
     private void RebuildEnabledSurfaces()
     {
-        var enabledCaches = _snapshotCaches
-            .Where(cache => !_settingsDrivenProviders || _settings.IsEnabled(cache.Descriptor.Id))
-            .ToArray();
-        var enabledIds = enabledCaches.Select(cache => cache.Descriptor.Id).ToArray();
-        UsageDockBandItem[] oldDockItems;
-        TokensLimitsPage[] oldPages;
-        TokensLimitsPage[] oldDockPages;
-        lock (_surfaceGate)
+        lock (_rebuildGate)
         {
-            if (_enabledProviderIds.SequenceEqual(enabledIds, StringComparer.OrdinalIgnoreCase))
+            if (Volatile.Read(ref _disposed) != 0)
             {
                 return;
             }
 
-            var currentPages = _pages.ToDictionary(page => page.Id, StringComparer.OrdinalIgnoreCase);
-            var currentDockPages = _dockPages.ToDictionary(page => page.Id, StringComparer.OrdinalIgnoreCase);
-            var currentDockItems = _dockBandItems
-                .Zip(_dockPages, (item, page) => new { item, page.Id })
-                .ToDictionary(pair => pair.Id, pair => pair.item, StringComparer.OrdinalIgnoreCase);
-            _pages = enabledCaches
-                .Select(cache => currentPages.Remove(GetPageId(cache.Descriptor.Id), out var page)
-                    ? page
-                    : new TokensLimitsPage(cache, LogMessage, _settings, localization: _settings.Localization, coordinator: _refreshCoordinator))
-                .ToArray();
-            _dockPages = enabledCaches
-                .Select(cache => currentDockPages.Remove(GetPageId(cache.Descriptor.Id, "dock"), out var page)
-                    ? page
-                    : new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock", localization: _settings.Localization, coordinator: _refreshCoordinator))
-                .ToArray();
-            _dockBandItems = enabledCaches
-                .Zip(
-                    _dockPages,
-                    (cache, page) => currentDockItems.Remove(GetPageId(cache.Descriptor.Id, "dock"), out var item)
-                        ? item
-                        : CreateDockItem(cache, LogMessage, page, _settings, _settings.Localization, _refreshCoordinator))
-                .ToArray();
-            oldDockItems = currentDockItems.Values.ToArray();
-            oldPages = currentPages.Values.ToArray();
-            oldDockPages = currentDockPages.Values.ToArray();
-            _enabledProviderIds = enabledIds;
-            _overviewPage.UpdateProviders(enabledCaches, _pages);
-            _dockBandPage.UpdateItems(_dockBandItems);
-            _retiredDockBandItems.AddRange(oldDockItems);
-            _retiredPages.AddRange(oldPages);
-            _retiredPages.AddRange(oldDockPages);
+            if (_rebuildInProgress)
+            {
+                _rebuildRequested = true;
+                var enabledCaches = GetEnabledCaches();
+                var enabledIds = enabledCaches.Select(cache => cache.Descriptor.Id).ToArray();
+                DeactivateDisabledSurfaces(enabledIds);
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    return;
+                }
+
+                enabledCaches = GetEnabledCaches();
+                enabledIds = enabledCaches.Select(cache => cache.Descriptor.Id).ToArray();
+                if (!_coordinatorProviderIds.SequenceEqual(enabledIds, StringComparer.OrdinalIgnoreCase))
+                {
+                    _coordinatorProviderIds = enabledIds;
+                    _refreshCoordinator.UpdateProviders(enabledCaches);
+                }
+
+                return;
+            }
+
+            _rebuildInProgress = true;
+            try
+            {
+                do
+                {
+                    _rebuildRequested = false;
+                    RebuildEnabledSurfacesCore();
+                }
+                while (_rebuildRequested && Volatile.Read(ref _disposed) == 0);
+            }
+            finally
+            {
+                _rebuildInProgress = false;
+            }
         }
-
-        _refreshCoordinator.UpdateProviders(enabledCaches);
-
-        foreach (var item in oldDockItems)
-        {
-            item.Deactivate();
-        }
-
-        foreach (var page in oldPages)
-        {
-            page.Deactivate();
-        }
-
-        foreach (var page in oldDockPages)
-        {
-            page.Deactivate();
-        }
-
     }
 
-    private static string GetPageId(string providerId, string? suffix = null)
+    private void RebuildEnabledSurfacesCore()
     {
-        var baseId = providerId.Equals("codex", StringComparison.OrdinalIgnoreCase)
-            ? "com.tokenslimits.codex.limits"
-            : $"com.tokenslimits.provider.{providerId}.limits";
-        return string.IsNullOrWhiteSpace(suffix) ? baseId : $"{baseId}.{suffix}";
+        var enabledCaches = GetEnabledCaches();
+        var enabledIds = enabledCaches.Select(cache => cache.Descriptor.Id).ToArray();
+        bool hasSameComposition;
+        lock (_surfaceGate)
+        {
+            hasSameComposition = _enabledProviderIds.SequenceEqual(enabledIds, StringComparer.OrdinalIgnoreCase)
+                && _pages.All(page => page.IsActive)
+                && _dockPages.All(page => page.IsActive)
+                && _dockBandItems.All(item => item.IsActive);
+        }
+
+        if (hasSameComposition)
+        {
+            // Settings such as credentials and language do not change membership.
+            _refreshCoordinator.RefreshAll();
+            return;
+        }
+
+        // Make retained references inert before cancellation callbacks or other
+        // surfaces can observe a provider that settings have just disabled.
+        DeactivateDisabledSurfaces(enabledIds);
+        if (IsRebuildSuperseded())
+        {
+            return;
+        }
+
+        // Update membership first so cached surfaces for disabled providers cannot
+        // start new requests while the visible arrays are being rebuilt.
+        if (!_coordinatorProviderIds.SequenceEqual(enabledIds, StringComparer.OrdinalIgnoreCase))
+        {
+            _coordinatorProviderIds = enabledIds;
+            _refreshCoordinator.UpdateProviders(enabledCaches);
+            if (IsRebuildSuperseded())
+            {
+                return;
+            }
+        }
+        else
+        {
+            _refreshCoordinator.RefreshAll();
+            if (IsRebuildSuperseded())
+            {
+                return;
+            }
+        }
+
+        TokensLimitsPage[] pages;
+        TokensLimitsPage[] dockPages;
+        UsageDockBandItem[] dockBandItems;
+        TokensLimitsPage[] inactivePages;
+        TokensLimitsPage[] inactiveDockPages;
+        UsageDockBandItem[] inactiveDockBandItems;
+        lock (_surfaceGate)
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            _pages = enabledCaches
+                .Select(cache => GetOrCreatePage(cache))
+                .ToArray();
+            _dockPages = enabledCaches
+                .Select(cache => GetOrCreateDockPage(cache))
+                .ToArray();
+            _dockBandItems = enabledCaches
+                .Select(cache => GetOrCreateDockBandItem(cache))
+                .ToArray();
+            _enabledProviderIds = enabledIds;
+            pages = _pages;
+            dockPages = _dockPages;
+            dockBandItems = _dockBandItems;
+            var enabledIdSet = enabledIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            inactivePages = _pagesByProviderId
+                .Where(pair => !enabledIdSet.Contains(pair.Key))
+                .Select(pair => pair.Value)
+                .ToArray();
+            inactiveDockPages = _dockPagesByProviderId
+                .Where(pair => !enabledIdSet.Contains(pair.Key))
+                .Select(pair => pair.Value)
+                .ToArray();
+            inactiveDockBandItems = _dockBandItemsByProviderId
+                .Where(pair => !enabledIdSet.Contains(pair.Key))
+                .Select(pair => pair.Value)
+                .ToArray();
+        }
+
+        foreach (var page in inactivePages)
+        {
+            if (IsRebuildSuperseded())
+            {
+                return;
+            }
+
+            page.SetActive(false);
+        }
+
+        foreach (var page in inactiveDockPages)
+        {
+            if (IsRebuildSuperseded())
+            {
+                return;
+            }
+
+            page.SetActive(false);
+        }
+
+        foreach (var item in inactiveDockBandItems)
+        {
+            if (IsRebuildSuperseded())
+            {
+                return;
+            }
+
+            item.SetActive(false);
+        }
+
+        foreach (var page in pages)
+        {
+            if (IsRebuildSuperseded())
+            {
+                return;
+            }
+
+            page.SetActive(true);
+        }
+
+        foreach (var page in dockPages)
+        {
+            if (IsRebuildSuperseded())
+            {
+                return;
+            }
+
+            page.SetActive(true);
+        }
+
+        foreach (var item in dockBandItems)
+        {
+            if (IsRebuildSuperseded())
+            {
+                return;
+            }
+
+            item.SetActive(true);
+        }
+
+        if (IsRebuildSuperseded())
+        {
+            return;
+        }
+
+        _overviewPage.UpdateProviders(enabledCaches, pages);
+        if (IsRebuildSuperseded())
+        {
+            return;
+        }
+
+        _dockBandPage.UpdateItems(dockBandItems);
+    }
+
+    private bool IsRebuildSuperseded()
+        => Volatile.Read(ref _disposed) != 0 || _rebuildRequested;
+
+    private UsageSnapshotCache[] GetEnabledCaches()
+        => _snapshotCaches
+            .Where(cache => !_settingsDrivenProviders || _settings.IsEnabled(cache.Descriptor.Id))
+            .ToArray();
+
+    private void DeactivateDisabledSurfaces(IReadOnlyCollection<string> enabledProviderIds)
+    {
+        var enabledIdSet = enabledProviderIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        TokensLimitsPage[] inactivePages;
+        TokensLimitsPage[] inactiveDockPages;
+        UsageDockBandItem[] inactiveDockBandItems;
+        lock (_surfaceGate)
+        {
+            inactivePages = _pagesByProviderId
+                .Where(pair => !enabledIdSet.Contains(pair.Key))
+                .Select(pair => pair.Value)
+                .ToArray();
+            inactiveDockPages = _dockPagesByProviderId
+                .Where(pair => !enabledIdSet.Contains(pair.Key))
+                .Select(pair => pair.Value)
+                .ToArray();
+            inactiveDockBandItems = _dockBandItemsByProviderId
+                .Where(pair => !enabledIdSet.Contains(pair.Key))
+                .Select(pair => pair.Value)
+                .ToArray();
+        }
+
+        foreach (var page in inactivePages)
+        {
+            page.SetActive(false);
+        }
+
+        foreach (var page in inactiveDockPages)
+        {
+            page.SetActive(false);
+        }
+
+        foreach (var item in inactiveDockBandItems)
+        {
+            item.SetActive(false);
+        }
+    }
+
+    private TokensLimitsPage GetOrCreatePage(UsageSnapshotCache cache)
+    {
+        var providerId = cache.Descriptor.Id;
+        if (!_pagesByProviderId.TryGetValue(providerId, out var page))
+        {
+            page = new TokensLimitsPage(cache, LogMessage, _settings, localization: _settings.Localization, coordinator: _refreshCoordinator);
+            _pagesByProviderId.Add(providerId, page);
+        }
+
+        return page;
+    }
+
+    private TokensLimitsPage GetOrCreateDockPage(UsageSnapshotCache cache)
+    {
+        var providerId = cache.Descriptor.Id;
+        if (!_dockPagesByProviderId.TryGetValue(providerId, out var page))
+        {
+            page = new TokensLimitsPage(cache, LogMessage, _settings, idSuffix: "dock", localization: _settings.Localization, coordinator: _refreshCoordinator);
+            _dockPagesByProviderId.Add(providerId, page);
+        }
+
+        return page;
+    }
+
+    private UsageDockBandItem GetOrCreateDockBandItem(UsageSnapshotCache cache)
+    {
+        var providerId = cache.Descriptor.Id;
+        if (!_dockBandItemsByProviderId.TryGetValue(providerId, out var item))
+        {
+            item = CreateDockItem(
+                cache,
+                LogMessage,
+                _dockPagesByProviderId[providerId],
+                _settings,
+                _settings.Localization,
+                _refreshCoordinator);
+            _dockBandItemsByProviderId.Add(providerId, item);
+        }
+
+        return item;
     }
 
     private static CodexUsageService CreateDefaultService()

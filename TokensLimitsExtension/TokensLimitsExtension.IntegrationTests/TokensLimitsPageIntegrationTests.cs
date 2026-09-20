@@ -354,7 +354,130 @@ public sealed class TokensLimitsPageIntegrationTests
     }
 
     [Fact]
-    public void RepeatedProviderTogglePreservesNormalSurfacesAndDisposeIsIdempotent()
+    public async Task RepeatedProviderToggleReusesCachedSurfacesAndDisposeIsIdempotent()
+    {
+        using var testDirectory = new TestDirectory();
+        using var settings = new global::TokensLimitsExtension.Settings.TokensLimitsSettings(testDirectory.Path);
+        var codex = new FakeGenericProvider(
+            "codex",
+            "Codex",
+            CreateSnapshot("codex", "Codex", primaryUsedPercent: 10));
+        var amp = new AsyncGenericProvider(
+            "amp",
+            "Amp",
+            CreateSnapshot("amp", "Amp", primaryUsedPercent: 20));
+        using var registry = new UsageProviderRegistry([codex, amp]);
+        using var provider = new TokensLimitsExtensionCommandsProvider(
+            null,
+            registry,
+            settings,
+            settingsDrivenProviders: true);
+
+        var ampToggle = GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.providers.amp.enabled");
+        ampToggle.Value = true;
+        ApplySettingsChange(settings);
+        var initialAmpPage = Assert.Single(
+            GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages"),
+            page => page.Id.Contains("amp", StringComparison.OrdinalIgnoreCase));
+        var initialAmpDockPage = Assert.Single(
+            GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_dockPages"),
+            page => page.Id.Contains("amp", StringComparison.OrdinalIgnoreCase));
+        var initialAmpDockItem = Assert.Single(
+            GetPrivateSurfaceArray<UsageDockBandItem>(provider, "_dockBandItems"),
+            item => item.Title == "Amp");
+        var ampCache = Assert.Single(
+            GetPrivateSurfaceArray<UsageSnapshotCache>(provider, "_snapshotCaches"),
+            cache => cache.Descriptor.Id == "amp");
+        await initialAmpPage.RefreshAsync();
+        Assert.Contains(
+            initialAmpDockPage.GetItems(),
+            item => (item.Subtitle ?? string.Empty).Contains("80%", StringComparison.Ordinal));
+        var callsBeforeDisable = amp.CallCount;
+        ampToggle.Value = false;
+        ApplySettingsChange(settings);
+        Assert.DoesNotContain(
+            GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages"),
+            page => page.Id.Contains("amp", StringComparison.OrdinalIgnoreCase));
+        Assert.False(initialAmpPage.IsActive);
+        Assert.False(initialAmpDockPage.IsActive);
+        Assert.False(initialAmpDockItem.IsActive);
+        Assert.Empty(initialAmpPage.GetItems());
+        Assert.Empty(initialAmpDockPage.GetItems());
+        Assert.Equal(0, GetStateChangedSubscriberCount(ampCache));
+        ampCache.Invalidate();
+        await initialAmpPage.RefreshAsync();
+        await initialAmpDockPage.RefreshAsync();
+        await initialAmpDockItem.RefreshAsync();
+        Assert.Equal(callsBeforeDisable, amp.CallCount);
+        var initialPages = GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages");
+        var codexPage = Assert.Single(initialPages, page => page.Id.Contains("codex", StringComparison.OrdinalIgnoreCase));
+
+        for (var iteration = 0; iteration < 8; iteration++)
+        {
+            var callsBeforeEnable = amp.CallCount;
+            ampToggle.Value = true;
+            ApplySettingsChange(settings);
+            await initialAmpPage.RefreshAsync();
+            Assert.Equal(callsBeforeEnable + 1, amp.CallCount);
+            Assert.True(initialAmpPage.IsActive);
+            Assert.True(initialAmpDockPage.IsActive);
+            Assert.True(initialAmpDockItem.IsActive);
+            Assert.Contains(
+                initialAmpDockPage.GetItems(),
+                item => (item.Subtitle ?? string.Empty).Contains("80%", StringComparison.Ordinal));
+            Assert.Contains("80%", initialAmpDockItem.DockSubtitle, StringComparison.Ordinal);
+            Assert.Same(initialAmpPage, Assert.Single(
+                GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages"),
+                page => page.Id.Contains("amp", StringComparison.OrdinalIgnoreCase)));
+            Assert.Same(initialAmpDockPage, Assert.Single(
+                GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_dockPages"),
+                page => page.Id.Contains("amp", StringComparison.OrdinalIgnoreCase)));
+            Assert.Same(initialAmpDockItem, Assert.Single(
+                GetPrivateSurfaceArray<UsageDockBandItem>(provider, "_dockBandItems"),
+                item => item.Title == "Amp"));
+            var activePages = GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages");
+            Assert.Collection(
+                activePages,
+                page => Assert.Equal("com.tokenslimits.codex.limits", page.Id),
+                page => Assert.Equal("com.tokenslimits.provider.amp.limits", page.Id));
+            Assert.Equal(2, GetPrivateDictionaryCount(provider, "_pagesByProviderId"));
+            Assert.Equal(2, GetPrivateDictionaryCount(provider, "_dockPagesByProviderId"));
+            Assert.Equal(2, GetPrivateDictionaryCount(provider, "_dockBandItemsByProviderId"));
+            var callsBeforeNextDisable = amp.CallCount;
+            ampToggle.Value = false;
+            ApplySettingsChange(settings);
+            ampCache.Invalidate();
+            Assert.False(initialAmpPage.IsActive);
+            Assert.False(initialAmpDockPage.IsActive);
+            Assert.False(initialAmpDockItem.IsActive);
+            Assert.Equal(0, GetStateChangedSubscriberCount(ampCache));
+            await initialAmpPage.RefreshAsync();
+            await initialAmpDockPage.RefreshAsync();
+            await initialAmpDockItem.RefreshAsync();
+            Assert.Equal(callsBeforeNextDisable, amp.CallCount);
+
+            var currentPage = Assert.Single(
+                GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages"),
+                page => page.Id.Contains("codex", StringComparison.OrdinalIgnoreCase));
+            Assert.Same(codexPage, currentPage);
+        }
+
+        var dockPage = Assert.Single(GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_dockPages"));
+        Assert.NotSame(codexPage, dockPage);
+        provider.Dispose();
+        provider.Dispose();
+        RebuildEnabledSurfaces(provider);
+        Assert.Empty(GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages"));
+        Assert.Empty(GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_dockPages"));
+        Assert.Empty(GetPrivateSurfaceArray<UsageDockBandItem>(provider, "_dockBandItems"));
+        Assert.Empty(initialAmpPage.GetItems());
+        Assert.Empty(initialAmpDockPage.GetItems());
+        Assert.True(initialAmpDockItem.IsDisposed);
+        Assert.Equal(0, GetStateChangedSubscriberCount(ampCache));
+    }
+
+    [Fact]
+    public void ReentrantSettingsChangePublishesLatestSurfaceComposition()
     {
         using var testDirectory = new TestDirectory();
         using var settings = new global::TokensLimitsExtension.Settings.TokensLimitsSettings(testDirectory.Path);
@@ -374,28 +497,72 @@ public sealed class TokensLimitsPageIntegrationTests
             settingsDrivenProviders: true);
 
         var ampToggle = GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.providers.amp.enabled");
-        ampToggle.Value = false;
-        InvokeSettingsChanged(provider, settings);
-        var initialPages = GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages");
-        var codexPage = Assert.Single(initialPages, page => page.Id.Contains("codex", StringComparison.OrdinalIgnoreCase));
-
-        for (var iteration = 0; iteration < 8; iteration++)
+        var overview = GetPrivateField<UsageOverviewPage>(provider, "_overviewPage");
+        var dockBandPage = GetPrivateField<TokensLimitsDockBandPage>(provider, "_dockBandPage");
+        var changedReentrantly = false;
+        var ampCache = Assert.Single(
+            GetPrivateSurfaceArray<UsageSnapshotCache>(provider, "_snapshotCaches"),
+            cache => cache.Descriptor.Id == "amp");
+        var refreshCoordinator = GetPrivateField<UsageRefreshCoordinator>(provider, "_refreshCoordinator");
+        TokensLimitsPage? retainedAmpPage = null;
+        TokensLimitsPage? retainedAmpDockPage = null;
+        UsageDockBandItem? retainedAmpDockItem = null;
+        Windows.Foundation.TypedEventHandler<object, IItemsChangedEventArgs>? overviewChanged = null;
+        overviewChanged = (_, _) =>
         {
-            ampToggle.Value = true;
-            InvokeSettingsChanged(provider, settings);
-            ampToggle.Value = false;
-            InvokeSettingsChanged(provider, settings);
+            if (changedReentrantly)
+            {
+                return;
+            }
 
-            var currentPage = Assert.Single(
+            changedReentrantly = true;
+            overview.ItemsChanged -= overviewChanged;
+            retainedAmpPage = Assert.Single(
                 GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages"),
-                page => page.Id.Contains("codex", StringComparison.OrdinalIgnoreCase));
-            Assert.Same(codexPage, currentPage);
-        }
+                page => page.Id.Contains("amp", StringComparison.OrdinalIgnoreCase));
+            retainedAmpDockPage = Assert.Single(
+                GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_dockPages"),
+                page => page.Id.Contains("amp", StringComparison.OrdinalIgnoreCase));
+            retainedAmpDockItem = Assert.Single(
+                GetPrivateSurfaceArray<UsageDockBandItem>(provider, "_dockBandItems"),
+                item => item.Title == "Amp");
+            ampToggle.Value = false;
+            ApplySettingsChange(settings);
+            Assert.False(retainedAmpPage.IsActive);
+            Assert.False(retainedAmpDockPage.IsActive);
+            Assert.False(retainedAmpDockItem.IsActive);
+            Assert.Empty(retainedAmpPage.GetItems());
+            Assert.Empty(retainedAmpDockPage.GetItems());
+            Assert.DoesNotContain("amp", GetPrivateField<string[]>(provider, "_coordinatorProviderIds"), StringComparer.OrdinalIgnoreCase);
+            Assert.False(HasStateChangedSubscriber(ampCache, retainedAmpPage));
+            Assert.False(HasStateChangedSubscriber(ampCache, retainedAmpDockPage));
+            Assert.False(HasStateChangedSubscriber(ampCache, retainedAmpDockItem));
+            ampCache.Invalidate();
+            var callsAfterDisable = amp.CallCount;
+            retainedAmpPage.RefreshAsync().GetAwaiter().GetResult();
+            retainedAmpDockPage.RefreshAsync().GetAwaiter().GetResult();
+            retainedAmpDockItem.RefreshAsync().GetAwaiter().GetResult();
+            refreshCoordinator.RefreshAll();
+            Assert.Equal(callsAfterDisable, amp.CallCount);
+        };
+        overview.ItemsChanged += overviewChanged;
 
-        var dockPage = Assert.Single(GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_dockPages"));
-        Assert.NotSame(codexPage, dockPage);
-        provider.Dispose();
-        provider.Dispose();
+        ampToggle.Value = true;
+        ApplySettingsChange(settings);
+
+        Assert.True(changedReentrantly);
+        Assert.Collection(
+            GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_pages"),
+            page => Assert.Equal("com.tokenslimits.codex.limits", page.Id));
+        Assert.Collection(
+            GetPrivateSurfaceArray<TokensLimitsPage>(provider, "_dockPages"),
+            page => Assert.Equal("com.tokenslimits.codex.limits.dock", page.Id));
+        Assert.Collection(
+            GetPrivateSurfaceArray<UsageDockBandItem>(provider, "_dockBandItems"),
+            item => Assert.Equal("Codex", item.Title));
+        Assert.Collection(
+            dockBandPage.GetItems(),
+            item => Assert.Equal("Codex", item.Title));
     }
 
     private sealed class FakeUsageProvider(CodexUsageSnapshot snapshot) : ICodexUsageProvider
@@ -410,10 +577,17 @@ public sealed class TokensLimitsPageIntegrationTests
         UsageSnapshot snapshot,
         string? dashboardUrl = null) : IUsageProvider
     {
+        private int _callCount;
+
         public UsageProviderDescriptor Descriptor { get; } = new(id, displayName, dashboardUrl: dashboardUrl);
 
+        public int CallCount => Volatile.Read(ref _callCount);
+
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(snapshot);
+        {
+            Interlocked.Increment(ref _callCount);
+            return Task.FromResult(snapshot);
+        }
     }
 
     private sealed class MutableGenericProvider(string id, string displayName, UsageSnapshot snapshot) : IUsageProvider
@@ -426,6 +600,26 @@ public sealed class TokensLimitsPageIntegrationTests
             => Task.FromResult(Volatile.Read(ref _snapshot));
 
         public void SetSnapshot(UsageSnapshot snapshot) => Volatile.Write(ref _snapshot, snapshot);
+    }
+
+    private sealed class AsyncGenericProvider(
+        string id,
+        string displayName,
+        UsageSnapshot snapshot) : IUsageProvider
+    {
+        private int _callCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new(id, displayName);
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _callCount);
+            return snapshot;
+        }
     }
 
     private sealed class BlockingGenericProvider : IUsageProvider
@@ -513,15 +707,22 @@ public sealed class TokensLimitsPageIntegrationTests
         }
     }
 
-    private static void InvokeSettingsChanged(
-        TokensLimitsExtensionCommandsProvider provider,
-        global::TokensLimitsExtension.Settings.TokensLimitsSettings settings)
+    private static void ApplySettingsChange(global::TokensLimitsExtension.Settings.TokensLimitsSettings settings)
     {
-        var method = typeof(TokensLimitsExtensionCommandsProvider).GetMethod(
-            "SettingsOnChanged",
+        var method = typeof(global::TokensLimitsExtension.Settings.TokensLimitsSettings).GetMethod(
+            "OnSettingsChanged",
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
-        method!.Invoke(provider, [settings, EventArgs.Empty]);
+        method!.Invoke(settings, [settings.Settings, null]);
+    }
+
+    private static void RebuildEnabledSurfaces(TokensLimitsExtensionCommandsProvider provider)
+    {
+        var method = typeof(TokensLimitsExtensionCommandsProvider).GetMethod(
+            "RebuildEnabledSurfaces",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method!.Invoke(provider, null);
     }
 
     private static T[] GetPrivateSurfaceArray<T>(object instance, string fieldName)
@@ -529,6 +730,37 @@ public sealed class TokensLimitsPageIntegrationTests
         var field = instance.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(field);
         return Assert.IsType<T[]>(field!.GetValue(instance));
+    }
+
+    private static int GetPrivateDictionaryCount(object instance, string fieldName)
+    {
+        var field = instance.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var dictionary = Assert.IsAssignableFrom<IDictionary>(field!.GetValue(instance));
+        return dictionary.Count;
+    }
+
+    private static T GetPrivateField<T>(object instance, string fieldName)
+    {
+        var field = instance.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsType<T>(field!.GetValue(instance));
+    }
+
+    private static int GetStateChangedSubscriberCount(UsageSnapshotCache cache)
+    {
+        var field = typeof(UsageSnapshotCache).GetField("StateChanged", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var handlers = field!.GetValue(cache) as Delegate;
+        return handlers?.GetInvocationList().Length ?? 0;
+    }
+
+    private static bool HasStateChangedSubscriber(UsageSnapshotCache cache, object target)
+    {
+        var field = typeof(UsageSnapshotCache).GetField("StateChanged", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var handlers = field!.GetValue(cache) as Delegate;
+        return handlers?.GetInvocationList().Any(handler => ReferenceEquals(handler.Target, target)) ?? false;
     }
 
     private static T GetRegisteredSetting<T>(
