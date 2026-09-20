@@ -6,6 +6,8 @@ Tokens Limits is a Microsoft PowerToys Command Palette extension that shows usag
 
 Download the latest release from [GitHub Releases](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/latest), keep the MSIX, certificate, installer and checksum file together, then run `Install-TokensLimitsExtension.cmd`. Reload Command Palette extensions in PowerToys after installation.
 
+Pre-release builds are not shown by the `latest` link. For the v0.0.5.0 field-test candidate, use its [tag-specific release page](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.0); see the [acceptance notes](TokensLimitsExtension/doc/release-notes-v0.0.5.0.md).
+
 The installer verifies the package signature and checksums. Updates retain settings and encrypted provider keys.
 
 ## Highlights
