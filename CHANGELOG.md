@@ -2,7 +2,7 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
-## [0.0.5.1] - 2026-09-20 (prerelease)
+## [0.0.5.2] - 2026-09-20 (prerelease)
 
 ### Added
 
@@ -14,11 +14,15 @@ All notable changes are documented here. This project follows [Semantic Versioni
 
 - Reused provider detail and Dock surfaces across repeated settings toggles with bounded retention; disabled providers cannot refresh through retained UI references.
 - Preserved incomplete Codex JSONL tails and stale values during transient refresh failures.
-- Enabled MSIX signing in the release build and aligned locked restore with the exact SDK declared in `global.json`.
+- Enabled MSIX signing and passed the certificate thumbprint as a plain MSBuild property value; aligned locked restore with the exact SDK declared in `global.json`.
 
-### Validation pending
+### Field validation pending
 
-- Live PowerToys/COM navigation and shutdown, ARM64 runtime, retained-object/allocation measurements and signed upgrade with settings/secrets preservation remain field acceptance checks. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.1.md).
+- Live PowerToys/COM navigation and shutdown, ARM64 runtime, retained-object/allocation measurements and signed upgrade with settings/secrets preservation remain field acceptance checks. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.2.md).
+
+## [0.0.5.1] - 2026-09-20 (not published)
+
+- The GitHub release workflow stopped before producing packages because PowerShell passed the formatted certificate object instead of its thumbprint to MSBuild. The issue is fixed in v0.0.5.2; no v0.0.5.1 artifacts were published. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.1.md).
 
 ## [0.0.4.2] - 2026-09-04
 
