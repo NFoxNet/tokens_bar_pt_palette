@@ -9,6 +9,135 @@ namespace TokensLimitsExtension.Tests;
 public sealed class ProviderCatalogTests
 {
     [Fact]
+    public async Task GenericAdapterRejectsAResponseBodyLargerThanItsConfiguredLimit()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StringContent(new string('x', 1_025), Encoding.UTF8, "application/json"))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() => provider.GetUsageSnapshotAsync());
+
+        Assert.Contains("maximum response size", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenericAdapterRejectsAnUnknownLengthResponseBodyThatExceedsItsConfiguredLimit()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StreamContent(new ChunkedReadStream(new string('x', 1_025))))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() => provider.GetUsageSnapshotAsync());
+
+        Assert.Contains("maximum response size", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenericAdapterTimesOutWhileReadingAResponseBodyAfterHeaders()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StreamContent(new DelayedReadStream()))),
+            logger: null,
+            requestTimeout: TimeSpan.FromMilliseconds(25),
+            maxResponseBodyBytes: 1_024 * 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() =>
+            provider.GetUsageSnapshotAsync().WaitAsync(TimeSpan.FromSeconds(1)));
+
+        Assert.Contains("timed out", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SpecializedAdapterTimesOutWhileReadingAResponseBodyAfterHeaders()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StreamContent(new DelayedReadStream()))),
+            logger: null,
+            requestTimeout: TimeSpan.FromMilliseconds(25),
+            maxResponseBodyBytes: 1_024 * 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() =>
+            provider.GetUsageSnapshotAsync().WaitAsync(TimeSpan.FromSeconds(1)));
+
+        Assert.Contains("timed out", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SpecializedAdapterRejectsAResponseBodyLargerThanItsConfiguredLimit()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StringContent(new string('x', 1_025), Encoding.UTF8, "application/json"))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() => provider.GetUsageSnapshotAsync());
+
+        Assert.Contains("maximum response size", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SpecializedAdapterPreservesHttpStatusAndRetryAfter()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "test-key")),
+            new HttpClient(new StatusHandler(HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(47))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024 * 1_024);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() => provider.GetUsageSnapshotAsync());
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, exception.StatusCode);
+        Assert.Equal(TimeSpan.FromSeconds(47), exception.RetryAfter);
+    }
+
+    [Fact]
+    public async Task CallerCancellationIsNotReportedAsAProviderTimeout()
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "amp"),
+            new TestConfiguration(("amp", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new StreamContent(new DelayedReadStream()))),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024 * 1_024);
+        using var cancellation = new CancellationTokenSource();
+
+        var request = provider.GetUsageSnapshotAsync(cancellation.Token);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+    }
+
+    [Fact]
+    public void GenericAdapterRejectsTimeoutsThatCannotBeScheduled()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new StubHandler("{}")),
+            logger: null,
+            requestTimeout: TimeSpan.FromDays(50),
+            maxResponseBodyBytes: 1_024));
+    }
+
+    [Fact]
     public void MirrorsTheCurrentCodexBarManifest()
     {
         var descriptors = UsageProviderDescriptorRegistry.All;
@@ -49,6 +178,20 @@ public sealed class ProviderCatalogTests
         Assert.Equal("team", snapshot.Plan);
         Assert.Contains(snapshot.Metrics, metric => metric.Name == "input tokens" && metric.Value == "1200");
         Assert.Equal("Bearer test-key", handler.LastRequest!.Headers.Authorization!.ToString());
+    }
+
+    [Fact]
+    public async Task GenericAdapterUsesStableProductUserAgent()
+    {
+        var handler = new StubHandler("{\"data\": {\"five_hour\": {\"used_percent\": 15}}}");
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "groq"),
+            new TestConfiguration(("groq", "apiKey", "test-key")),
+            new HttpClient(handler));
+
+        await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal("TokensLimitsExtension", handler.LastRequest!.Headers.GetValues("User-Agent").Single());
     }
 
     [Fact]
@@ -663,6 +806,29 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task JetBrainsQuotaFileRejectsAnOversizedLocalInput()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"AIAssistantQuotaManager2-{Guid.NewGuid():N}.xml");
+        try
+        {
+            await File.WriteAllTextAsync(path, new string('x', 1024 * 1024 + 1));
+            using var provider = new ConfiguredUsageProvider(
+                UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "jetbrains"),
+                new TestConfiguration(("jetbrains", "dataPath", path)),
+                new HttpClient());
+
+            var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(
+                () => provider.GetUsageSnapshotAsync());
+
+            Assert.Equal(UsageProviderFailureKind.UnsupportedResponse, exception.FailureKind);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task OpenAiUsageUsesAdminKeyAndFollowsUsagePagination()
     {
         var handler = new OpenAiHandler();
@@ -753,6 +919,149 @@ public sealed class ProviderCatalogTests
         Assert.Equal("42 zed-token", handler.LastRequest!.Headers.Authorization!.ToString());
     }
 
+    [Fact]
+    public async Task KiroAdapterUsesTheBoundedProcessRunnerBoundary()
+    {
+        var runner = new StubProcessRunner(new UsageProviderProcessResult(
+            0,
+            "Plan: Pro\nCredits (20 of 100 covered)\n",
+            string.Empty));
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "kiro"),
+            new TestConfiguration(("kiro", "cliPath", "kiro-test")),
+            new HttpClient(new StubHandler("{}")),
+            logger: null,
+            requestTimeout: TimeSpan.FromSeconds(20),
+            maxResponseBodyBytes: 1_024 * 1_024,
+            processRunner: runner);
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal("Pro", snapshot.Plan);
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Credits used" && metric.Value == "20");
+        Assert.Equal("kiro-test", runner.FileName);
+        Assert.Equal(["chat", "--no-interactive", "/usage"], runner.Arguments);
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerStopsAnOversizedCliOutput()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        var runner = new BoundedUsageProviderProcessRunner(
+            timeout: TimeSpan.FromSeconds(5),
+            maxOutputCharacters: 1_024);
+
+        await Assert.ThrowsAsync<UsageProviderRequestException>(() => runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write(('x' * 4096))"],
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerKillsAnUnboundedWriterWhenOutputLimitIsHit()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 1_024);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAsync<UsageProviderRequestException>(() => runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "while ($true) { [Console]::Write(('x' * 4096)) }"],
+            CancellationToken.None));
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3), $"Runner waited {stopwatch.Elapsed} after the output limit was reached.");
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerReturnsBothOutputStreamsAndExitCode()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 4_096);
+        var result = await runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write('ok'); [Console]::Error.Write('warn'); exit 7"],
+            CancellationToken.None);
+
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal("ok", result.StandardOutput);
+        Assert.Equal("warn", result.StandardError);
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerReportsMissingExecutableWithoutLeakingOutput()
+    {
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 4_096);
+        var missing = Path.Combine(Path.GetTempPath(), $"tokens-limits-missing-{Guid.NewGuid():N}.exe");
+
+        var exception = await Assert.ThrowsAsync<UsageProviderConfigurationException>(() => runner.RunAsync(
+            missing,
+            [],
+            CancellationToken.None));
+
+        Assert.Contains("Не найден", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerStopsAProcessWhenDeadlineExpires()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromMilliseconds(100), 4_096);
+        var request = runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"],
+            CancellationToken.None);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
+    public async Task BoundedProcessRunnerHonorsCallerCancellation()
+    {
+        var powershell = GetWindowsPowerShellPath();
+        if (powershell is null)
+        {
+            return;
+        }
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 4_096);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runner.RunAsync(
+            powershell,
+            ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"],
+            cancellation.Token));
+    }
+
+    private static string? GetWindowsPowerShellPath()
+    {
+        var path = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+        return File.Exists(path) ? path : null;
+    }
+
     private sealed class TestConfiguration(params (string ProviderId, string Key, string Value)[] entries)
         : IUsageProviderConfiguration
     {
@@ -783,6 +1092,135 @@ public sealed class ProviderCatalogTests
                 RequestMessage = request,
             };
         }
+    }
+
+    private sealed class ContentHandler(HttpContent content) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = content,
+                RequestMessage = request,
+            });
+        }
+    }
+
+    private sealed class StubProcessRunner(UsageProviderProcessResult result) : IUsageProviderProcessRunner
+    {
+        public string? FileName { get; private set; }
+        public IReadOnlyList<string> Arguments { get; private set; } = [];
+
+        public Task<UsageProviderProcessResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> arguments,
+            CancellationToken cancellationToken)
+        {
+            FileName = fileName;
+            Arguments = arguments.ToArray();
+            return Task.FromResult(result);
+        }
+    }
+
+    private sealed class StatusHandler(HttpStatusCode statusCode, TimeSpan retryAfter) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent("rate limited", Encoding.UTF8, "text/plain"),
+            };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(retryAfter);
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class DelayedReadStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith(
+                _ => 0,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion,
+                TaskScheduler.Default);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => new(Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith(
+                _ => 0,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion,
+                TaskScheduler.Default));
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class ChunkedReadStream : Stream
+    {
+        private readonly byte[] _bytes;
+        private int _offset;
+
+        public ChunkedReadStream(string value) => _bytes = Encoding.UTF8.GetBytes(value);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Math.Min(Math.Min(buffer.Length, 512), _bytes.Length - _offset);
+            _bytes.AsMemory(_offset, count).CopyTo(buffer);
+            _offset += count;
+            return ValueTask.FromResult(count);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class RoutingStubHandler(Func<HttpRequestMessage, string> responseFactory) : HttpMessageHandler

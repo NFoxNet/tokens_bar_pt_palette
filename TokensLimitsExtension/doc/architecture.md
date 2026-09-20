@@ -30,7 +30,7 @@ Dock представлен одним стабильным band с истори
 Папка `TokensLimitsExtension.Core/` не должна зависеть от UI:
 
 - `Models/` содержит `UsageSnapshot`, `UsageWindow`, `UsageMetric` и Codex-специфичные модели.
-- `Providers/` содержит `IUsageProvider`, дескрипторы, registry и конфигурацию.
+- `Providers/` содержит `IUsageProvider`, дескрипторы, registry и конфигурацию. Общая маршрутизация и transport остаются в `ConfiguredUsageProvider.cs`; выделенные границы Kiro CLI, локального источника и Amp text parser находятся в `KiroUsageProviderAdapter.cs`, `LocalUsageProviderAdapter.cs` и `AmpUsageDisplayParser.cs`. Чистые JSON/XML-нормализаторы вынесены в `UsageJsonParser.cs`.
 - `Services/` содержит получение snapshot, кэш, форматирование, auth, HTTP-клиент и fallback.
 
 ## Контракт данных
@@ -63,22 +63,25 @@ UsageRefreshCoordinator (one timer)
   -> RaiseItemsChanged()
 ```
 
-`UsageRefreshCoordinator` владеет единственным периодическим расписанием. `UsageSnapshotCache` хранит последний результат, публикует безопасное UI-состояние и сериализует конкурентные обновления через один refresh gate. Поэтому overview, обычная detail page, Dock detail page и dock band используют общий snapshot, но не общий объект страницы и не имеют собственных таймеров. При временной ошибке старый snapshot остаётся доступен как устаревший; отключение провайдера отменяет его выполняющийся запрос.
+`UsageRefreshCoordinator` владеет единственным периодическим расписанием. `UsageSnapshotCache` хранит последний результат, публикует безопасное UI-состояние и сериализует конкурентные обновления через один refresh gate. Поэтому overview, обычная detail page, Dock detail page и dock band используют общий snapshot, но не общий объект страницы и не имеют собственных таймеров. При временной ошибке старый snapshot остаётся доступен как устаревший; отключение провайдера отменяет его выполняющийся запрос. Detail page добавляет действия «обновить», «открыть кабинет» (только HTTPS из descriptor) и «скопировать безопасную диагностику»; ручное обновление проходит через тот же cache/coordinator и не создаёт отдельный сетевой запрос.
+
+Обычная detail page, Dock detail page и dock item кэшируются отдельно по стабильному ID провайдера. При выключении провайдера их убирают из активных списков, а coordinator исключает cache из набора доступных для обновления и отменяет текущий запрос. Неактивные объекты снимают подписки на cache и язык; страница возвращает пустой список, а refresh для всех поверхностей ничего не запрашивает. При повторном включении те же объекты подписываются снова и синхронизируются с текущим cache. Число удерживаемых страниц и dock items ограничено каталогом провайдеров, а не числом переключений. Перестроение списков сериализовано, reentrant изменения настроек объединяются; после начала утилизации перестроение не публикует новые поверхности.
 
 ## Codex
 
-`CodexUsageService` сначала получает валидный access token через `CodexFileAuthTokenProvider`, затем вызывает `https://chatgpt.com/backend-api/wham/usage` через `CodexUsageClient`. Клиент проверяет схему ответа, имеет timeout/cancellation и повторяет transient-ошибки.
+`CodexUsageService` сначала получает валидный access token через `CodexFileAuthTokenProvider`, затем вызывает `https://chatgpt.com/backend-api/wham/usage` через `CodexUsageClient`. Auth-файл читается с пределом 1 MiB, а клиент проверяет схему ответа, ограничивает тело ответа настраиваемым лимитом (по умолчанию 1 MiB), имеет timeout/cancellation и повторяет transient-ошибки.
 
-Если основной путь не работает, `CodexLocalSessionFallback` читает JSONL из `CODEX_HOME` (или `~/.codex`), `sessions` и `archived_sessions`, суммирует token events за 5 часов и 7 дней и возвращает оценку с `IsEstimate = true`. Базовые оценки задаются как 100 000 токенов на 5 часов и 500 000 на неделю.
+Если основной путь не работает, `CodexLocalSessionFallback` читает JSONL из `CODEX_HOME` (или `~/.codex`), `sessions` и `archived_sessions`, суммирует token events за 5 часов и 7 дней и возвращает метрики с `IsEstimate = true`. Локальный fallback не подставляет подтверждённую квоту, процент или искусственный reset: UI показывает исходные количества токенов и помечает их как оценку. Кэш читает только добавленные байты после завершённой строки, перечитывает файл после truncation/замены и пропускает строку длиннее 256 KiB потоково.
 
 ## Настройки и реконфигурация
 
-`TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует общее `Changed` и отдельное `ProviderConfigurationChanged`. Настройки и зашифрованные секреты всегда читаются и записываются в едином стабильном каталоге `%LOCALAPPDATA%\TokensLimitsExtension`. При первом запуске после обновления содержимое host/package-local каталога переносится туда, если там найден более новый secret store. При смене языка cache не инвалидируется; при смене ключа, аккаунта, URL или включения провайдера его старый snapshot очищается до нового запроса. `TokensLimitsExtensionCommandsProvider` на событие настроек:
+`TokensLimitsSettings` строит поля из `UsageProviderDescriptorRegistry`, загружает JSON settings, хранит секреты отдельно и публикует общее `Changed` и адресное `ProviderConfigurationChanged` с набором provider ID. Для сравнения конфигурации используются process-local SHA-256 fingerprints отдельных провайдеров; открытые ключи и Cookie не удерживаются в общем fingerprint. Настройки и зашифрованные секреты всегда читаются и записываются в едином стабильном каталоге `%LOCALAPPDATA%\TokensLimitsExtension`. При первом запуске после обновления содержимое host/package-local каталога переносится туда, если там найден более новый secret store. При смене языка cache не инвалидируется; при смене ключа, аккаунта, URL или включения провайдера очищается только его старый snapshot до нового запроса. `TokensLimitsExtensionCommandsProvider` на событие настроек:
 
 1. `UsageSnapshotCache` очищает snapshot только при изменении конфигурации провайдера;
 2. заново вычисляет список включённых провайдеров;
-3. создаёт новые обычные страницы, отдельные Dock detail pages и dock items при изменении состава;
-4. coordinator обновляет набор активных кэшей, а UI-поверхности перестраиваются по их событиям состояния без самостоятельного сетевого опроса.
+3. обновляет набор активных кэшей в coordinator до публикации изменённого состава поверхностей;
+4. собирает активные списки из кэшированных обычных страниц, отдельных Dock detail pages и dock items, сохраняя порядок registry;
+5. новые detail pages сразу получают текущее состояние cache, а UI-поверхности дальше обновляются по его событиям без самостоятельного сетевого опроса.
 
 Интервал ограничен 30–3600 секундами, по умолчанию 60 секунд.
 

@@ -1,16 +1,20 @@
+using System.Buffers;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Globalization;
+using TokensLimitsExtension.Core.Providers;
 
 namespace TokensLimitsExtension.Core.Services;
 
-public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodexAccountIdentityProvider, IDisposable
+public sealed partial class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodexAccountIdentityProvider, IDisposable
 {
     private const string RefreshEndpoint = "https://auth.openai.com/oauth/token";
     private const string ClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
+    private const int MaxRefreshResponseBodyBytes = 64 * 1024;
     private readonly string _authFilePath;
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
@@ -100,14 +104,8 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         }
 
         var authFileLastWriteTimeUtc = GetAuthFileLastWriteTimeUtc();
-        await using var stream = new FileStream(
-            _authFilePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            4096,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var raw = await BoundedLocalFileReader.ReadTextAsync(_authFilePath, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(raw);
         var root = document.RootElement;
         var tokenObject = TryGetObject(root, "tokens") ?? root;
 
@@ -143,7 +141,6 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         // Release the source file before atomically replacing it with a rotated
         // credential set below. The values needed for the refresh are already copied.
         document.Dispose();
-        await stream.DisposeAsync().ConfigureAwait(false);
         var refreshed = await RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(refreshed.RefreshToken))
         {
@@ -163,13 +160,9 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
 
     private async Task<RefreshedToken> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.Serialize(new
-        {
-            client_id = ClientId,
-            grant_type = "refresh_token",
-            refresh_token = refreshToken,
-            scope = "openid profile email",
-        });
+        var payload = JsonSerializer.Serialize(
+            new RefreshTokenRequest(ClientId, "refresh_token", refreshToken, "openid profile email"),
+            CodexAuthJsonContext.Default.RefreshTokenRequest);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, RefreshEndpoint)
         {
@@ -193,30 +186,88 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
 
         using (response)
         {
-            var responseBody = await response.Content.ReadAsStringAsync(requestCts.Token).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+            var responseBody = await ReadBoundedResponseBodyAsync(response.Content, requestCts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException($"Codex token refresh failed with HTTP {(int)response.StatusCode}.");
+            }
+
+            using var document = JsonDocument.Parse(responseBody);
+            var refreshedToken = GetString(document.RootElement, "access_token");
+            if (string.IsNullOrWhiteSpace(refreshedToken))
+            {
+                throw new InvalidDataException("Codex token refresh response does not contain access_token.");
+            }
+
+            var expiresAt = GetDateTimeOffset(document.RootElement, "expires_at")
+                ?? GetDateTimeOffset(document.RootElement, "expiresAt");
+            if (expiresAt is null && TryGetInt64(document.RootElement, "expires_in", out var expiresInSeconds))
+            {
+                expiresAt = _timeProvider.GetUtcNow().AddSeconds(Math.Max(0, expiresInSeconds));
+            }
+
+            return new RefreshedToken(
+                refreshedToken,
+                GetString(document.RootElement, "refresh_token") ?? GetString(document.RootElement, "refreshToken"),
+                expiresAt);
+        }
+    }
+
+    private static async Task<string> ReadBoundedResponseBodyAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is { } contentLength && contentLength > MaxRefreshResponseBodyBytes)
         {
-            throw new HttpRequestException($"Codex token refresh failed with HTTP {(int)response.StatusCode}.");
+            throw new UsageProviderRequestException(
+                $"Codex token refresh response exceeds the maximum response size of {MaxRefreshResponseBodyBytes} bytes.",
+                failureKind: UsageProviderFailureKind.UnsupportedResponse);
         }
 
-        using var document = JsonDocument.Parse(responseBody);
-        var refreshedToken = GetString(document.RootElement, "access_token");
-        if (string.IsNullOrWhiteSpace(refreshedToken))
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var bytes = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        try
         {
-            throw new InvalidDataException("Codex token refresh response does not contain access_token.");
-        }
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
 
-        var expiresAt = GetDateTimeOffset(document.RootElement, "expires_at")
-            ?? GetDateTimeOffset(document.RootElement, "expiresAt");
-        if (expiresAt is null && TryGetInt64(document.RootElement, "expires_in", out var expiresInSeconds))
+                if (bytes.Length > MaxRefreshResponseBodyBytes - read)
+                {
+                    throw new UsageProviderRequestException(
+                        $"Codex token refresh response exceeds the maximum response size of {MaxRefreshResponseBodyBytes} bytes.",
+                        failureKind: UsageProviderFailureKind.UnsupportedResponse);
+                }
+
+                await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
+
+            var charset = content.Headers.ContentType?.CharSet;
+            var encoding = string.IsNullOrWhiteSpace(charset)
+                ? Encoding.UTF8
+                : TryGetEncoding(charset);
+            return encoding.GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+        }
+        finally
         {
-            expiresAt = _timeProvider.GetUtcNow().AddSeconds(Math.Max(0, expiresInSeconds));
+            ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
 
-        return new RefreshedToken(
-            refreshedToken,
-            GetString(document.RootElement, "refresh_token") ?? GetString(document.RootElement, "refreshToken"),
-            expiresAt);
+    private static Encoding TryGetEncoding(string charset)
+    {
+        try
+        {
+            return Encoding.GetEncoding(charset);
+        }
+        catch (ArgumentException)
+        {
+            return Encoding.UTF8;
         }
     }
 
@@ -260,7 +311,7 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         var temporaryPath = $"{_authFilePath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            var raw = await File.ReadAllTextAsync(_authFilePath, cancellationToken).ConfigureAwait(false);
+            var raw = await BoundedLocalFileReader.ReadTextAsync(_authFilePath, cancellationToken).ConfigureAwait(false);
             var root = JsonNode.Parse(raw) as JsonObject
                 ?? throw new InvalidDataException("Codex auth.json root is not an object.");
             var tokenObject = root["tokens"] as JsonObject ?? root;
@@ -422,4 +473,15 @@ public sealed class CodexFileAuthTokenProvider : ICodexAuthTokenProvider, ICodex
         string AccessToken,
         string? RefreshToken,
         DateTimeOffset? ExpiresAt);
+
+    private sealed record RefreshTokenRequest(
+        [property: JsonPropertyName("client_id")] string ClientId,
+        [property: JsonPropertyName("grant_type")] string GrantType,
+        [property: JsonPropertyName("refresh_token")] string RefreshToken,
+        [property: JsonPropertyName("scope")] string Scope);
+
+    [JsonSerializable(typeof(RefreshTokenRequest))]
+    private sealed partial class CodexAuthJsonContext : JsonSerializerContext
+    {
+    }
 }

@@ -2,6 +2,23 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.0.5.0] - 2026-09-20 (prerelease)
+
+### Added
+
+- Safe provider recovery actions, typed status guidance and shared stale-state presentation across overview, details and Dock.
+- Bounded and incremental reads for Codex session/auth files, bounded provider HTTP responses and external CLI execution.
+- Locked dependency restore, x64/ARM64 Release validation, signed MSIX structural checks, artifact allowlisting and separated release permissions.
+
+### Fixed
+
+- Reused provider detail and Dock surfaces across repeated settings toggles with bounded retention; disabled providers cannot refresh through retained UI references.
+- Preserved incomplete Codex JSONL tails and stale values during transient refresh failures.
+
+### Validation pending
+
+- Live PowerToys/COM navigation and shutdown, ARM64 runtime, retained-object/allocation measurements and signed upgrade with settings/secrets preservation remain field acceptance checks. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.0.md).
+
 ## [0.0.4.2] - 2026-09-04
 
 ### Fixed

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using TokensLimitsExtension.Core.Services;
+using TokensLimitsExtension.Core.Providers;
 
 namespace TokensLimitsExtension.Tests;
 
@@ -145,6 +146,79 @@ public sealed class CodexFileAuthTokenProviderTests
             Assert.Equal("refreshed-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
             Assert.Equal("refreshed-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
             Assert.Equal(1, handler.CallCount);
+        }
+        finally
+        {
+            File.Delete(authPath);
+        }
+    }
+
+    [Fact]
+    public async Task RejectsAnOversizedOAuthRefreshResponse()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(new string('x', 65 * 1024), Encoding.UTF8, "application/json"),
+        });
+        try
+        {
+            await File.WriteAllTextAsync(authPath, JsonSerializer.Serialize(new
+            {
+                access_token = "expired-token",
+                refresh_token = "refresh-token",
+                expires_at = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeSeconds(),
+            }));
+
+            var provider = new CodexFileAuthTokenProvider(authPath, handler);
+
+            var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(
+                () => provider.GetValidAccessTokenAsync(CancellationToken.None));
+
+            Assert.Equal(UsageProviderFailureKind.UnsupportedResponse, exception.FailureKind);
+        }
+        finally
+        {
+            File.Delete(authPath);
+        }
+    }
+
+    [Fact]
+    public async Task ReadsUtf8BomAuthFileLikeFileReadAllTextAsync()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
+        try
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                access_token = "access-token",
+                expires_at = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds(),
+            });
+            var payload = Encoding.UTF8.GetBytes("\uFEFF" + json);
+            await File.WriteAllBytesAsync(authPath, payload);
+            using var provider = new CodexFileAuthTokenProvider(authPath);
+
+            Assert.Equal("access-token", await provider.GetValidAccessTokenAsync(CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(authPath);
+        }
+    }
+
+    [Fact]
+    public async Task RejectsAnOversizedLocalAuthFile()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"codex-auth-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(authPath, new string('x', 1024 * 1024 + 1));
+            using var provider = new CodexFileAuthTokenProvider(authPath);
+
+            var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(
+                () => provider.GetValidAccessTokenAsync(CancellationToken.None));
+
+            Assert.Equal(UsageProviderFailureKind.UnsupportedResponse, exception.FailureKind);
         }
         finally
         {

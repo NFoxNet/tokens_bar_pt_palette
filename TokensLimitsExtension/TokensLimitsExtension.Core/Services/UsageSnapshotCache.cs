@@ -8,19 +8,21 @@ namespace TokensLimitsExtension.Core.Services;
 /// for a provider. This prevents the Dock and details page from issuing
 /// duplicate requests at the same time.
 /// </summary>
-public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
+public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCancellationSource, IDisposable
 {
     private readonly IUsageProvider _provider;
     private readonly IUsageRefreshSettings? _refreshSettings;
     private readonly IUsageProviderConfigurationChangeSource? _configurationChanges;
     private readonly TimeProvider _timeProvider;
-    private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _stateGate = new();
+    private CancellationTokenSource _generationCts = new();
     private UsageSnapshot? _snapshot;
     private DateTimeOffset _fetchedAt;
     private UsageProviderState _state = new(null, null, null, false);
+    private Task<UsageSnapshot>? _inFlightRefresh;
     private long _invalidationVersion;
+    private long _configurationGeneration;
     private int _disposed;
 
     public UsageSnapshotCache(
@@ -95,19 +97,42 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
     /// <summary>Invalidates values that belong to a previous credential/account.</summary>
     public void Clear()
     {
+        CancellationTokenSource previousGeneration;
         lock (_stateGate)
         {
             _snapshot = null;
             _fetchedAt = default;
             _invalidationVersion++;
+            _configurationGeneration++;
+            previousGeneration = _generationCts;
+            _generationCts = new CancellationTokenSource();
+            _inFlightRefresh = null;
             _state = _state with
             {
                 Snapshot = null,
                 LastSuccessfulRefreshAt = null,
+                IsRefreshing = false,
                 ErrorKind = UsageProviderErrorKind.None,
                 RetryAfter = null,
             };
         }
+        previousGeneration.Cancel();
+        RaiseStateChanged();
+    }
+
+    void IRefreshCancellationSource.CancelRefreshForDeactivation()
+    {
+        CancellationTokenSource previousGeneration;
+        lock (_stateGate)
+        {
+            previousGeneration = _generationCts;
+            _generationCts = new CancellationTokenSource();
+            _inFlightRefresh = null;
+            _invalidationVersion++;
+            _configurationGeneration++;
+            _state = _state with { IsRefreshing = false, ErrorKind = UsageProviderErrorKind.None, RetryAfter = null };
+        }
+        previousGeneration.Cancel();
         RaiseStateChanged();
     }
 
@@ -121,54 +146,101 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
             return cachedSnapshot;
         }
 
+        Task<UsageSnapshot> refreshTask;
+        lock (_stateGate)
+        {
+            if (TryGetFreshSnapshotUnsafe(out cachedSnapshot))
+            {
+                return cachedSnapshot;
+            }
+
+            if (_inFlightRefresh is null)
+            {
+                refreshTask = FetchSnapshotAsync(_generationCts.Token);
+                _inFlightRefresh = refreshTask;
+                _ = refreshTask.ContinueWith(
+                    _ => ClearInFlightRefresh(refreshTask),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+            else
+            {
+                refreshTask = _inFlightRefresh;
+            }
+        }
+
+        // A page that goes away stops waiting without cancelling the provider
+        // request shared with the Dock and other pages.
+        return await refreshTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<UsageSnapshot> FetchSnapshotAsync(CancellationToken generationToken)
+    {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
+            generationToken,
             _lifetimeCts.Token);
-        var token = linkedCts.Token;
         while (true)
         {
-            await _refreshGate.WaitAsync(token).ConfigureAwait(false);
-            try
+            ThrowIfDisposed();
+            linkedCts.Token.ThrowIfCancellationRequested();
+
+            long requestVersion;
+            lock (_stateGate)
             {
-                ThrowIfDisposed();
-                if (TryGetFreshSnapshot(out cachedSnapshot))
-                {
-                    return cachedSnapshot;
-                }
-
-                long requestVersion;
-                lock (_stateGate)
-                {
-                    requestVersion = _invalidationVersion;
-                }
-
-                var freshSnapshot = await _provider
-                    .GetUsageSnapshotAsync(token)
-                    .ConfigureAwait(false);
-                ThrowIfDisposed();
-                var fetchedAt = _timeProvider.GetUtcNow();
-                freshSnapshot = freshSnapshot with { FetchedAt = fetchedAt };
-
-                lock (_stateGate)
-                {
-                    if (requestVersion != _invalidationVersion)
-                    {
-                        // Settings changed while the request was in flight. Do not
-                        // let the stale response become the fresh cache entry.
-                        continue;
-                    }
-
-                    _snapshot = freshSnapshot;
-                    _fetchedAt = fetchedAt;
-                    _state = new UsageProviderState(freshSnapshot, fetchedAt, fetchedAt, false);
-                }
-                RaiseStateChanged();
-                return freshSnapshot;
+                requestVersion = _invalidationVersion;
             }
-            finally
+
+            var freshSnapshot = await _provider
+                .GetUsageSnapshotAsync(linkedCts.Token)
+                .ConfigureAwait(false);
+            linkedCts.Token.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            var fetchedAt = _timeProvider.GetUtcNow();
+            freshSnapshot = freshSnapshot with { FetchedAt = fetchedAt };
+
+            lock (_stateGate)
             {
-                _refreshGate.Release();
+                if (requestVersion != _invalidationVersion)
+                {
+                    // Settings changed while the request was in flight. Do not
+                    // let the stale response become the fresh cache entry.
+                    continue;
+                }
+
+                _snapshot = freshSnapshot;
+                _fetchedAt = fetchedAt;
+                _state = new UsageProviderState(freshSnapshot, fetchedAt, fetchedAt, false);
             }
+            RaiseStateChanged();
+            return freshSnapshot;
+        }
+    }
+
+    private void ClearInFlightRefresh(Task<UsageSnapshot> completedTask)
+    {
+        lock (_stateGate)
+        {
+            if (ReferenceEquals(_inFlightRefresh, completedTask))
+            {
+                _inFlightRefresh = null;
+            }
+        }
+    }
+
+    private long GetConfigurationGeneration()
+    {
+        lock (_stateGate)
+        {
+            return _configurationGeneration;
+        }
+    }
+
+    private bool HasConfigurationGenerationChanged(long generation)
+    {
+        lock (_stateGate)
+        {
+            return generation != _configurationGeneration;
         }
     }
 
@@ -177,14 +249,15 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
         ThrowIfDisposed();
         if (force)
         {
-            Invalidate();
+            InvalidateUnlessRefreshIsAlreadyInFlight();
         }
         else if (TryGetFreshSnapshot(out _))
         {
             return;
         }
 
-        UpdateState(isRefreshing: true, errorKind: UsageProviderErrorKind.None, retryAfter: null);
+        var configurationGeneration = GetConfigurationGeneration();
+        BeginRefresh();
         try
         {
             await GetUsageSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -192,8 +265,14 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
         {
-            UpdateState(isRefreshing: false, errorKind: UsageProviderErrorKind.None, retryAfter: null);
+            var state = State;
+            UpdateState(isRefreshing: false, errorKind: state.ErrorKind, retryAfter: state.RetryAfter);
             throw;
+        }
+        catch (OperationCanceledException) when (HasConfigurationGenerationChanged(configurationGeneration))
+        {
+            // Clear already published the state for the new configuration. An
+            // old cancelled operation must not replace it with an error.
         }
         catch (Exception exception)
         {
@@ -220,10 +299,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
             _refreshSettings?.Changed -= RefreshSettingsOnChanged;
         }
         _lifetimeCts.Cancel();
-        // Do not dispose the gate here: a refresh that already passed WaitAsync
-        // still has to execute its finally block and release it. The cache is
-        // owned by the extension lifetime, so the managed semaphore can be
-        // reclaimed together with the cache after that task completes.
+        _generationCts.Cancel();
         GC.SuppressFinalize(this);
     }
 
@@ -231,17 +307,22 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
     {
         lock (_stateGate)
         {
-            if (_snapshot is not null
-                && _fetchedAt != default
-                && _timeProvider.GetUtcNow() - _fetchedAt < GetRefreshInterval())
-            {
-                snapshot = _snapshot;
-                return true;
-            }
-
-            snapshot = null!;
-            return false;
+            return TryGetFreshSnapshotUnsafe(out snapshot);
         }
+    }
+
+    private bool TryGetFreshSnapshotUnsafe(out UsageSnapshot snapshot)
+    {
+        if (_snapshot is not null
+            && _fetchedAt != default
+            && _timeProvider.GetUtcNow() - _fetchedAt < GetRefreshInterval())
+        {
+            snapshot = _snapshot;
+            return true;
+        }
+
+        snapshot = null!;
+        return false;
     }
 
     private TimeSpan GetRefreshInterval()
@@ -255,7 +336,27 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
         Invalidate();
     }
 
-    private void ProviderConfigurationOnChanged(object? sender, EventArgs e) => Clear();
+    private void InvalidateUnlessRefreshIsAlreadyInFlight()
+    {
+        lock (_stateGate)
+        {
+            if (_inFlightRefresh is not null)
+            {
+                return;
+            }
+
+            _fetchedAt = default;
+            _invalidationVersion++;
+        }
+    }
+
+    private void ProviderConfigurationOnChanged(object? sender, UsageProviderConfigurationChangedEventArgs e)
+    {
+        if (e.ProviderIds.Contains(Descriptor.Id))
+        {
+            Clear();
+        }
+    }
 
     private void UpdateState(bool isRefreshing, UsageProviderErrorKind errorKind, TimeSpan? retryAfter)
     {
@@ -275,7 +376,35 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IDisposable
         RaiseStateChanged();
     }
 
-    private void RaiseStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);
+    private void BeginRefresh()
+    {
+        lock (_stateGate)
+        {
+            var hasLastKnownSnapshot = _snapshot is not null;
+            _state = _state with
+            {
+                IsRefreshing = true,
+                LastAttemptAt = _timeProvider.GetUtcNow(),
+                ErrorKind = hasLastKnownSnapshot ? _state.ErrorKind : UsageProviderErrorKind.None,
+                RetryAfter = hasLastKnownSnapshot ? _state.RetryAfter : null,
+            };
+        }
+
+        RaiseStateChanged();
+    }
+
+    private void RaiseStateChanged()
+    {
+        lock (_stateGate)
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     private void ThrowIfDisposed()
     {

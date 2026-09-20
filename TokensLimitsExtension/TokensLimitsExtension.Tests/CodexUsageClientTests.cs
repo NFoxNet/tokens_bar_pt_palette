@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using TokensLimitsExtension.Core.Providers;
 using TokensLimitsExtension.Core.Services;
 
 namespace TokensLimitsExtension.Tests;
@@ -55,9 +56,10 @@ public sealed class CodexUsageClientTests
         var handler = new StubHandler("{\"error\":\"unauthorized\"}", HttpStatusCode.Unauthorized);
         var client = new CodexUsageClient(handler);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() =>
             client.FetchUsageAsync("secret-token", CancellationToken.None));
 
+        Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
         Assert.Contains("401", exception.Message, StringComparison.Ordinal);
     }
 
@@ -101,6 +103,21 @@ public sealed class CodexUsageClientTests
 
         Assert.Equal("https://example.test/usage", handler.Request!.RequestUri!.ToString());
         Assert.Equal("codex-test-client", handler.Request.Headers.UserAgent.Single().Product!.Name);
+    }
+
+    [Fact]
+    public async Task RejectsOversizedResponseBodiesBeforeParsing()
+    {
+        var options = new CodexUsageClientOptions(maxResponseBodyBytes: 64, maxAttempts: 1);
+        var client = new CodexUsageClient(
+            new StubHandler(new string('x', 128)),
+            options: options);
+
+        var exception = await Assert.ThrowsAsync<UsageProviderRequestException>(() =>
+            client.FetchUsageAsync("test-token", CancellationToken.None));
+
+        Assert.Equal(UsageProviderFailureKind.UnsupportedResponse, exception.FailureKind);
+        Assert.Contains("maximum response size", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

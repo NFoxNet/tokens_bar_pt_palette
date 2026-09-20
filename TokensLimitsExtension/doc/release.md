@@ -27,7 +27,7 @@ The package requires:
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-TokensLimitsExtension.ps1 `
-     -PackagePath .\TokensLimitsExtension_0.0.4.1_x64.msix `
+    -PackagePath .\TokensLimitsExtension_<version>_x64.msix `
      -CertificatePath .\NFoxNet.TokensLimitsExtension.cer
    ```
 
@@ -42,7 +42,7 @@ Get-AppxPackage TokensLimitsExtension | Remove-AppxPackage -PreserveApplicationD
 
 ## Trust and signing model
 
-`v0.0.4.1` uses a self-signed `CN=NFoxNet` code-signing certificate. This is a transparent sideload distribution mechanism: the installer imports the release `.cer` into `LocalMachine\TrustedPeople` after the administrator accepts UAC, which is an explicit device-level trust decision. The certificate subject must exactly match the MSIX `Identity/Publisher`.
+The current release uses a self-signed `CN=NFoxNet` code-signing certificate. This is a transparent sideload distribution mechanism: the installer imports the release `.cer` into `LocalMachine\TrustedPeople` after the administrator accepts UAC, which is an explicit device-level trust decision. The certificate subject must exactly match the MSIX `Identity/Publisher`.
 
 For a frictionless production channel, the next distribution step is either:
 
@@ -62,7 +62,17 @@ The release workflow is already prepared for the latter through `MSIX_CERTIFICAT
    .\scripts\Build-Release.ps1 -CertificatePath C:\secure\tokens-limits.pfx -CertificatePassword $password
    ```
 
-4. The MSIX build signs the package through `PackageCertificateThumbprint`; do not run `signtool sign` on the completed `.msix` again. Verify the package structure, checksums and installation, test both package architectures on suitable machines, then attach `artifacts/` files to a `vX.Y.Z.W` GitHub Release.
+4. The MSIX build signs the package through `PackageCertificateThumbprint`; do not run `signtool sign` on the completed `.msix` again. Run `scripts/Test-ReleasePackage.ps1` for both packages to verify Authenticode signature, publisher, identity version, processor architecture, COM CLSID, assets and language files. Verify checksums and installation, test both package architectures on suitable machines, then attach `artifacts/release/` files to a `vX.Y.Z.W` GitHub Release.
 5. For automated releases, add the PFX encoded as Base64 to `MSIX_CERTIFICATE_BASE64` and the password to `MSIX_CERTIFICATE_PASSWORD`, then push the matching annotated tag.
 
+The automated workflow validates and creates a draft release. A prerelease can be published for field testing before host-level acceptance; keep the stable release pending until Command Palette UI/COM lifecycle checks and signed upgrade with application data preservation have passed. The [v0.0.5.0 release notes](release-notes-v0.0.5.0.md) record the current acceptance scope.
+
 Do not commit a PFX, password, tokens, cookies or provider settings. A public `.cer` is safe to distribute.
+
+## Release output directory
+
+`Build-Release.ps1` writes to `artifacts/release/` by default. It accepts only a strict child directory of the repository's `artifacts/` directory and refuses the repository root, `artifacts/` itself, other source paths, paths outside the repository and existing reparse points. This limits recursive cleanup to the intended release directory.
+
+The GitHub release workflow repeats the package checks before publication and compares the output directory with an explicit allowlist. Build and validation run with read-only repository permissions; a separate publish job receives only the validated payload and has `contents: write`. It creates a draft release so a maintainer can inspect the generated assets before making them public. The release cannot publish an extra file, a stale checksum or an MSIX with a different version, publisher, architecture or signature.
+
+An explicitly supplied relative `-OutputDirectory` is resolved from the repository root. The script validates the directory again immediately before deletion and rejects any existing reparse point inside it. PowerShell cannot bind this scan-and-delete sequence to a verified directory handle, so this is not a defence against a concurrent process with write access to `artifacts/`: it could replace a path during validation or deletion. Run releases only from a trusted local checkout with exclusive write access to the output tree, and do not modify the output path while a build is running.

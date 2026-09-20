@@ -1,7 +1,10 @@
+using System.Buffers;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using TokensLimitsExtension.Core.Models;
+using TokensLimitsExtension.Core.Providers;
 
 namespace TokensLimitsExtension.Core.Services;
 
@@ -58,7 +61,7 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
                     request,
                     HttpCompletionOption.ResponseHeadersRead,
                     requestCts.Token).ConfigureAwait(false);
-                var body = await response.Content.ReadAsStringAsync(requestCts.Token).ConfigureAwait(false);
+                var body = await ReadBoundedResponseBodyAsync(response.Content, requestCts.Token).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
                     if (IsTransient(response.StatusCode) && attempt < _options.MaxAttempts)
@@ -67,7 +70,13 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
                         continue;
                     }
 
-                    throw new HttpRequestException($"Codex usage request failed with HTTP {(int)response.StatusCode}.");
+                    throw new UsageProviderRequestException(
+                        $"Codex usage request failed with HTTP {(int)response.StatusCode}.",
+                        retryAfter: GetRetryAfter(response.Headers.RetryAfter),
+                        statusCode: response.StatusCode,
+                        failureKind: IsTransient(response.StatusCode)
+                            ? UsageProviderFailureKind.Network
+                            : UsageProviderFailureKind.UnsupportedResponse);
                 }
 
                 try
@@ -314,6 +323,80 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
                 : TimeSpan.FromMilliseconds(DefaultRetryDelay.TotalMilliseconds * Math.Pow(2, attempt - 1)));
         delay = TimeSpan.FromMilliseconds(Math.Clamp(delay.TotalMilliseconds, 0, 10_000));
         await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static TimeSpan? GetRetryAfter(RetryConditionHeaderValue? retryAfter)
+    {
+        if (retryAfter?.Delta is { } delta)
+        {
+            return delta > TimeSpan.Zero ? delta : null;
+        }
+
+        if (retryAfter?.Date is { } date)
+        {
+            var remaining = date - DateTimeOffset.UtcNow;
+            return remaining > TimeSpan.Zero ? remaining : null;
+        }
+
+        return null;
+    }
+
+    private async Task<string> ReadBoundedResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is { } contentLength && contentLength > _options.MaxResponseBodyBytes)
+        {
+            throw new UsageProviderRequestException(
+                $"Codex usage response exceeds the maximum response size of {_options.MaxResponseBodyBytes} bytes.",
+                failureKind: UsageProviderFailureKind.UnsupportedResponse);
+        }
+
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var bytes = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(81_920);
+        try
+        {
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                if (bytes.Length > _options.MaxResponseBodyBytes - read)
+                {
+                    throw new UsageProviderRequestException(
+                        $"Codex usage response exceeds the maximum response size of {_options.MaxResponseBodyBytes} bytes.",
+                        failureKind: UsageProviderFailureKind.UnsupportedResponse);
+                }
+
+                await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
+
+            return GetContentEncoding(content).GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static Encoding GetContentEncoding(HttpContent content)
+    {
+        var charset = content.Headers.ContentType?.CharSet;
+        if (!string.IsNullOrWhiteSpace(charset))
+        {
+            try
+            {
+                return Encoding.GetEncoding(charset);
+            }
+            catch (ArgumentException)
+            {
+                // Fall back to UTF-8 for invalid or unsupported response declarations.
+            }
+        }
+
+        return Encoding.UTF8;
     }
 
     private void ThrowIfDisposed()

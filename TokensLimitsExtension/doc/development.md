@@ -3,7 +3,7 @@
 ## Требования
 
 - Windows 10 19041 или новее.
-- Visual Studio с workload для Windows App SDK/.NET или установленный .NET 10 SDK.
+- Visual Studio с workload для Windows App SDK/.NET или установленный SDK 10.0.401 из `global.json`.
 - Windows SDK 26100 и восстановленные NuGet-пакеты.
 - Для runtime-проверки — Microsoft PowerToys с включённым Command Palette.
 
@@ -14,7 +14,7 @@
 Из корня репозитория:
 
 ```powershell
-dotnet restore .\TokensLimitsExtension.sln
+dotnet restore .\TokensLimitsExtension.sln --locked-mode
 dotnet build .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore
 dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore
 ```
@@ -27,6 +27,25 @@ dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --
 4. После Deploy в Command Palette выполните `Reload` → `Reload Command Palette extensions`.
 5. Для диагностики смотрите Output window в режиме Debug; код пишет сообщения через `Debug.WriteLine` и `ExtensionHost.LogMessage`.
 
+### Локальный baseline процесса
+
+Для сопоставимых измерений запускайте sampler из корня репозитория, когда
+Command Palette уже загрузил расширение:
+
+```powershell
+pwsh -File .\scripts\Measure-ExtensionBaseline.ps1 `
+  -ProcessName TokensLimitsExtension `
+  -DurationSeconds 60 `
+  -SampleIntervalMilliseconds 1000 `
+  -OutputPath .\TokensLimitsExtension\codex_docs\baseline-live.json
+```
+
+Скрипт читает только локальные счётчики процесса: CPU time, private bytes,
+working set, handles/threads, page faults и объём чтения/записи. Он не пишет
+телеметрию и не собирает содержимое файлов или сетевых ответов. В отчёте должны
+быть отдельно отмечены cold start, warm/idle период и сценарий обновления; один
+idle-прогон не является доказательством UI-событий или timer callbacks.
+
 ## Проверенное локальное обновление для проверки UI
 
 Обычная `dotnet build` создаёт DLL, а не installable MSIX. Не регистрируйте
@@ -37,7 +56,7 @@ Release MSIX с `-PreserveApplicationData` тоже не поддерживае�
 
 Для проверки UI используйте **подписанное обновление** с версией выше уже
 установленной. Это штатный AppX upgrade, который был проверен для перехода
-`0.0.3.1 → 0.0.4.1` и сохраняет application data:
+между последовательными версиями и сохраняет application data:
 
 ```powershell
 # Из корня TokensLimitsExtension. Путь и пароль PFX держите вне репозитория.
@@ -46,9 +65,9 @@ $certificatePassword = Read-Host 'PFX password' -AsSecureString
   -CertificatePath C:\secure\tokens-limits-release.pfx `
   -CertificatePassword $certificatePassword `
   -Platform x64 `
-  -OutputDirectory .\artifacts-local
+  -OutputDirectory artifacts\local-upgrade
 
-$package = Resolve-Path .\artifacts-local\TokensLimitsExtension_*.msix
+$package = Resolve-Path ..\artifacts\local-upgrade\TokensLimitsExtension_*.msix
 if ((Get-AuthenticodeSignature $package).Status -ne 'Valid') {
   throw 'MSIX signature validation failed.'
 }
@@ -94,9 +113,13 @@ dotnet build .\TokensLimitsExtension.sln --configuration Release -p:GenerateAppx
 dotnet build .\TokensLimitsExtension.sln --configuration Release -p:GenerateAppxPackageOnBuild=true -p:Platform=ARM64
 ```
 
-Release включает trimming, поэтому проверяйте предупреждения AOT/trim. Профили публикации находятся в `TokensLimitsExtension/Properties/PublishProfiles/`.
+Release включает trimming, поэтому проверяйте предупреждения AOT/trim. Собственные IL2026/ILLink предупреждения считаются ошибками; IL2104 от внешних WinRT reference assemblies разрешён как известное ограничение SDK и остаётся видимым в логе. Профили публикации находятся в `TokensLimitsExtension/Properties/PublishProfiles/`.
+
+Lock-файлы общих Core/test проектов не привязаны к одному RID, поэтому один и тот же locked restore используется для x64 и ARM64. Runtime выбирается только на этапе build через publish profile; приложение содержит обе архитектуры в своём lock-графе.
 
 Для публичного GitHub-релиза используйте `scripts/Build-Release.ps1`. Скрипт требует PFX, чей subject в точности совпадает с `Publisher` в `Package.appxmanifest`, подписывает x64 и ARM64 MSIX и создаёт SHA-256 checksums. PFX и пароль не должны попадать в репозиторий или логи. Полная процедура — в [release.md](release.md).
+
+После сборки проверяйте оба готовых пакета через `scripts/Test-ReleasePackage.ps1`. Проверка читает только локальный MSIX и подтверждает подпись, publisher/version/architecture, COM CLSID, обязательные assets и `lang/en.json`/`lang/ru.json`; она не устанавливает пакет и не требует сетевого доступа.
 
 ## Тестовые уровни
 
@@ -105,7 +128,7 @@ Release включает trimming, поэтому проверяйте пред�
 
 Сетевые тесты используют stub handlers. Не превращайте unit-тесты в тесты внешних кабинетов: реальные endpoint-проверки должны быть отдельным, явно opt-in процессом.
 
-Для изменений цикла обновления вручную проверьте Dock → детали → основную палитру: все поверхности должны показать один последний snapshot. После временной ошибки API Dock и страницы не должны очистить уже показанные значения. После выключения провайдера его запрос должен остановиться, а поверхности исчезнуть.
+Для изменений цикла обновления вручную проверьте Dock → детали → основную палитру: все поверхности должны показать один последний snapshot. После временной ошибки API Dock и страницы не должны очистить уже показанные значения. После выключения провайдера активные элементы должны исчезнуть, сохранённые ссылки на его страницы должны стать пустыми и отписаться от cache, текущий запрос должен завершиться отменой, а ручное обновление страницы/Dock item не должно запускать новый запрос. Повторное включение должно вернуть те же страницы и dock item, синхронизированные с cache, без роста числа объектов при каждом переключении.
 После естественного сброса окна Codex дождитесь следующего интервала: Dock и обе страницы должны одновременно показать новый остаток без перезапуска PowerToys или повторного открытия палитры.
 
 ## Добавление изменения

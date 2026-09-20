@@ -27,4 +27,6 @@ public sealed record CodexUsageSnapshot(
     public int PrimaryWindowSeconds { get; init; } = 5 * 60 * 60;
 
     public int SecondaryWindowSeconds { get; init; } = 7 * 24 * 60 * 60;
+
+    public IReadOnlyList<UsageMetric> Metrics { get; init; } = [];
 }

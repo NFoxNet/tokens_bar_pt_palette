@@ -1,10 +1,20 @@
 using TokensLimitsExtension.Core.Services;
+using TokensLimitsExtension.Core.Models;
+using System.Diagnostics;
 using System.Text.Json;
+using Xunit.Abstractions;
 
 namespace TokensLimitsExtension.Tests;
 
 public sealed class CodexLocalSessionFallbackTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public CodexLocalSessionFallbackTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
     [Fact]
     public async Task CountsRecentTokenDeltasAndMarksSnapshotAsEstimate()
     {
@@ -25,9 +35,10 @@ public sealed class CodexLocalSessionFallbackTests
             var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
 
             Assert.True(snapshot.IsEstimate);
-            Assert.Equal(10, snapshot.PrimaryUsedPercent);
-            Assert.Equal(1, snapshot.SecondaryUsedPercent);
-            Assert.Equal(now.AddHours(5), snapshot.PrimaryResetAt);
+            Assert.False(snapshot.HasPrimaryWindow);
+            Assert.False(snapshot.HasSecondaryWindow);
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
         }
         finally
         {
@@ -55,7 +66,7 @@ public sealed class CodexLocalSessionFallbackTests
 
             var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
 
-            Assert.Equal(10, snapshot.PrimaryUsedPercent);
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
         }
         finally
         {
@@ -85,9 +96,9 @@ public sealed class CodexLocalSessionFallbackTests
                 CreateTokenCountLine(now.AddMinutes(-30)) + Environment.NewLine);
             var third = await provider.GetSnapshotAsync(CancellationToken.None);
 
-            Assert.Equal(first.PrimaryUsedPercent, second.PrimaryUsedPercent);
-            Assert.Equal(10, first.PrimaryUsedPercent);
-            Assert.Equal(20, third.PrimaryUsedPercent);
+            Assert.Equal(first.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue, second.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(1000, first.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(2000, third.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
         }
         finally
         {
@@ -132,8 +143,289 @@ public sealed class CodexLocalSessionFallbackTests
 
             var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
 
-            Assert.Equal(100, snapshot.PrimaryUsedPercent);
-            Assert.Equal(100, snapshot.SecondaryUsedPercent);
+            Assert.Equal(long.MaxValue, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(long.MaxValue, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PrefersCumulativeCountersAndAccountsForCounterReset()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        await File.WriteAllLinesAsync(Path.Combine(sessions, "session.jsonl"), [
+            $"{{\"timestamp\":\"{now.AddHours(-2):O}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"total_tokens\":100}},\"last_token_usage\":{{\"total_tokens\":999}}}}}}}}",
+            $"{{\"timestamp\":\"{now.AddHours(-1):O}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"total_tokens\":150}}}}}}}}",
+            $"{{\"timestamp\":\"{now.AddMinutes(-30):O}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"total_tokens\":20}}}}}}}}",
+        ]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(170, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CumulativeCounterUsesTheWindowBaselineInsteadOfHistoricalTotal()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        await File.WriteAllLinesAsync(Path.Combine(sessions, "session.jsonl"), [
+            CreateCumulativeTokenCountLine(now.AddDays(-30), 100),
+            CreateCumulativeTokenCountLine(now.AddHours(-1), 150),
+        ]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(50, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(50, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task IncludesWindowBoundaryAndIgnoresFutureOrExpiredEvents()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        await File.WriteAllLinesAsync(Path.Combine(sessions, "session.jsonl"), [
+            CreateTokenCountLine(now - TimeSpan.FromHours(5), 1000),
+            CreateTokenCountLine(now.AddHours(-1), 2000),
+            CreateTokenCountLine(now.AddDays(-8), 4000),
+            CreateTokenCountLine(now.AddMinutes(1), 8000),
+        ]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(3000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(3000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReReadsAFormerPartialLineWhenItIsCompleted()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var line = CreateTokenCountLine(now.AddHours(-1));
+        await File.WriteAllTextAsync(file, line[..^1]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            await Assert.ThrowsAsync<InvalidDataException>(() => provider.GetSnapshotAsync(CancellationToken.None));
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ResumesAfterTheLastCompleteLineWhenAPartialTailGrows()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var firstLine = CreateTokenCountLine(now.AddHours(-2), 1000);
+        var secondLine = CreateTokenCountLine(now.AddHours(-1), 2000);
+        await File.WriteAllTextAsync(file, firstLine + Environment.NewLine + secondLine[..^1]);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            var initial = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(1000, initial.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(3000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PartialTailAppendReadsOnlyTheBoundedTailAfterTheInitialPass()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var lines = Enumerable.Range(0, 3_000)
+            .Select(index => CreateTokenCountLine(now.AddMinutes(-index), 1))
+            .ToArray();
+        var partialLine = CreateTokenCountLine(now, 1);
+        await File.WriteAllTextAsync(file, string.Join(Environment.NewLine, lines) + Environment.NewLine + partialLine[..^1]);
+
+        try
+        {
+            var reads = new List<long>();
+            using var provider = new CodexLocalSessionFallback(
+                home,
+                timeProvider: new FixedTimeProvider(now),
+                readBytesObserver: bytes => reads.Add(bytes));
+
+            await provider.GetSnapshotAsync(CancellationToken.None);
+            var initialBytes = reads.Sum();
+            reads.Clear();
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+            await provider.GetSnapshotAsync(CancellationToken.None);
+            var appendBytes = reads.Sum();
+
+            Assert.True(initialBytes > 300_000, $"Initial pass read only {initialBytes} bytes.");
+            Assert.True(appendBytes < initialBytes, $"Append pass read {appendBytes} bytes after an initial {initialBytes}-byte pass.");
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReportsInitialAndAppendReadResourceMeasurements()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        var lines = Enumerable.Range(0, 3_000)
+            .Select(index => CreateTokenCountLine(now.AddMinutes(-index), 1))
+            .ToArray();
+        var partialLine = CreateTokenCountLine(now, 1);
+        await File.WriteAllTextAsync(file, string.Join(Environment.NewLine, lines) + Environment.NewLine + partialLine[..^1]);
+
+        try
+        {
+            var reads = new List<long>();
+            var provider = new CodexLocalSessionFallback(
+                home,
+                timeProvider: new FixedTimeProvider(now),
+                readBytesObserver: bytes => reads.Add(bytes));
+
+            var initial = await MeasureAsync(
+                () => provider.GetSnapshotAsync(CancellationToken.None),
+                reads);
+            reads.Clear();
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+            var append = await MeasureAsync(
+                () => provider.GetSnapshotAsync(CancellationToken.None),
+                reads);
+
+            Assert.True(initial.BytesRead > 300_000);
+            Assert.True(append.BytesRead < initial.BytesRead);
+            Assert.True(initial.Elapsed >= TimeSpan.Zero);
+            Assert.True(append.Elapsed >= TimeSpan.Zero);
+            Assert.Equal(302, (await provider.GetSnapshotAsync(CancellationToken.None))
+                .Metrics.Single(metric => metric.SemanticKey == "tokens5h")
+                .NumericValue);
+
+            _output.WriteLine(
+                $"Codex JSONL initial: bytes={initial.BytesRead}, elapsedMs={initial.Elapsed.TotalMilliseconds:F2}, " +
+                $"allocatedBytes={initial.AllocatedBytes}, privateBytesDelta={initial.PrivateBytesDelta}");
+            _output.WriteLine(
+                $"Codex JSONL append: bytes={append.BytesRead}, elapsedMs={append.Elapsed.TotalMilliseconds:F2}, " +
+                $"allocatedBytes={append.AllocatedBytes}, privateBytesDelta={append.PrivateBytesDelta}");
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SkipsAnOversizedJsonlLineWithoutHoldingItsContentsInMemory()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var oversizedLine = new string('x', 262_145);
+        await File.WriteAllTextAsync(
+            Path.Combine(sessions, "session.jsonl"),
+            oversizedLine + Environment.NewLine + CreateTokenCountLine(now.AddHours(-1)) + Environment.NewLine);
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.Equal(1000, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RejectsAFileThatExceedsTheCachedEventBudget()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        await using (var writer = new StreamWriter(file, append: false))
+        {
+            for (var index = 0; index < 100_001; index++)
+            {
+                await writer.WriteLineAsync(CreateTokenCountLine(now.AddMinutes(-1), 1));
+            }
+        }
+
+        try
+        {
+            var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+
+            await Assert.ThrowsAsync<InvalidDataException>(() => provider.GetSnapshotAsync(CancellationToken.None));
         }
         finally
         {
@@ -146,7 +438,7 @@ public sealed class CodexLocalSessionFallbackTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private static string CreateTokenCountLine(DateTimeOffset timestamp)
+    private static string CreateTokenCountLine(DateTimeOffset timestamp, long totalTokens = 1000)
         => JsonSerializer.Serialize(new
         {
             timestamp,
@@ -156,8 +448,49 @@ public sealed class CodexLocalSessionFallbackTests
                 type = "token_count",
                 info = new
                 {
-                    last_token_usage = new { total_tokens = 1000 },
+                    last_token_usage = new { total_tokens = totalTokens },
                 },
             },
         });
+
+    private static string CreateCumulativeTokenCountLine(DateTimeOffset timestamp, long totalTokens)
+        => JsonSerializer.Serialize(new
+        {
+            timestamp,
+            payload = new
+            {
+                type = "token_count",
+                info = new
+                {
+                    total_token_usage = new { total_tokens = totalTokens },
+                },
+            },
+        });
+
+    private static async Task<ReadMeasurement> MeasureAsync(
+        Func<Task<CodexUsageSnapshot>> operation,
+        IReadOnlyList<long> reads)
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var allocatedBefore = GC.GetTotalAllocatedBytes(true);
+        var privateBytesBefore = Process.GetCurrentProcess().PrivateMemorySize64;
+        var stopwatch = Stopwatch.StartNew();
+        await operation();
+        stopwatch.Stop();
+        var allocatedAfter = GC.GetTotalAllocatedBytes(false);
+        var privateBytesAfter = Process.GetCurrentProcess().PrivateMemorySize64;
+        return new ReadMeasurement(
+            reads.Sum(),
+            stopwatch.Elapsed,
+            Math.Max(0, allocatedAfter - allocatedBefore),
+            privateBytesAfter - privateBytesBefore);
+    }
+
+    private readonly record struct ReadMeasurement(
+        long BytesRead,
+        TimeSpan Elapsed,
+        long AllocatedBytes,
+        long PrivateBytesDelta);
 }
