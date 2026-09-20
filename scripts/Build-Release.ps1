@@ -35,6 +35,9 @@ try {
         throw "The certificate subject '$($certificate.Subject)' must exactly match manifest Publisher '$publisher'."
     }
 
+    $certificateThumbprint = [string]$certificate.Thumbprint
+    $packageCertificateThumbprintArgument = '-p:PackageCertificateThumbprint=' + $certificateThumbprint
+
     Remove-ValidatedReleaseOutputDirectory -RepositoryRoot $repositoryRoot -OutputDirectory $OutputDirectory
 
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
@@ -53,7 +56,7 @@ try {
                 -p:GenerateAppxPackageOnBuild=true `
                 -p:AppxPackageDir=$packageDirectory `
                 -p:AppxPackageSigningEnabled=true `
-                -p:PackageCertificateThumbprint=$certificate.Thumbprint
+                $packageCertificateThumbprintArgument
 
             if ($LASTEXITCODE -ne 0) { throw "MSIX build failed for $architecture." }
         }

@@ -65,7 +65,7 @@ The release workflow is already prepared for the latter through `MSIX_CERTIFICAT
 4. For this thumbprint-based build path, set `AppxPackageSigningEnabled=true` and pass the imported certificate thumbprint through `PackageCertificateThumbprint` to enable build-time signing. Do not run `signtool sign` on the completed `.msix` again. Run `scripts/Test-ReleasePackage.ps1` for both packages to verify Authenticode signature, publisher, identity version, processor architecture, COM CLSID, assets and language files. Verify checksums and installation, test both package architectures on suitable machines, then attach `artifacts/release/` files to a `vX.Y.Z.W` GitHub Release.
 5. For automated releases, add the PFX encoded as Base64 to `MSIX_CERTIFICATE_BASE64` and the password to `MSIX_CERTIFICATE_PASSWORD`, then push the matching annotated tag.
 
-The automated workflow validates and creates a draft release. A prerelease can be published for field testing before host-level acceptance; keep the stable release pending until Command Palette UI/COM lifecycle checks and signed upgrade with application data preservation have passed. The [v0.0.5.1 release notes](release-notes-v0.0.5.1.md) record the current acceptance scope.
+The automated workflow validates and creates a draft release. A prerelease can be published for field testing before host-level acceptance; keep the stable release pending until Command Palette UI/COM lifecycle checks and signed upgrade with application data preservation have passed. The [v0.0.5.2 release notes](release-notes-v0.0.5.2.md) record the current acceptance scope.
 
 Do not commit a PFX, password, tokens, cookies or provider settings. A public `.cer` is safe to distribute.
 
