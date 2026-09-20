@@ -1,6 +1,6 @@
-# TokensLimitsExtension v0.0.5.0 — предварительный выпуск
+# TokensLimitsExtension v0.0.5.1 — предварительный выпуск
 
-Эта версия подготовлена для установки и проверки в PowerToys Command Palette. Она содержит завершённую локальную работу по надёжности провайдеров, управлению refresh и конвейеру подписанного MSIX.
+Эта версия подготовлена для установки и проверки в PowerToys Command Palette. Она содержит завершённую локальную работу по надёжности провайдеров, управлению refresh и конвейеру подписи MSIX.
 
 ## Что изменилось
 
@@ -8,6 +8,7 @@
 - Все UI-поверхности читают одно состояние кэша. Ошибка обновления сохраняет последнее значение как устаревшее, а recovery-действия показывают следующий шаг и копируют только безопасную диагностику.
 - Чтение Codex session JSONL и auth-файлов, HTTP-ответы и внешние provider CLI ограничены по объёму, времени или памяти. JSONL читается инкрементально, включая неполный конец файла.
 - CI использует locked restore, проверяет Debug tests и Release-сборки x64/ARM64. Release pipeline проверяет версию, подпись, Publisher, CLSID, архитектуру, состав файлов и SHA-256 до создания draft release.
+- Release build явно включает `AppxPackageSigningEnabled=true`; release workflow проверит Authenticode подписи обоих MSIX до публикации.
 
 ## Проверки перед полевой установкой
 
@@ -20,4 +21,4 @@
 - выполнить upgrade с предыдущего подписанного MSIX, сохранив настройки и provider secrets; используйте только процедуру с `Remove-AppxPackage -PreserveApplicationData`;
 - проверить ARM64 runtime на совместимом устройстве.
 
-После успешной сборки и публикации как prerelease артефакты будут доступны на [странице тега v0.0.5.0](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.0); ссылка `releases/latest` продолжит вести на последний стабильный выпуск. Установка описана в [release.md](release.md). Эта предварительная версия останется prerelease до закрытия host-level проверок.
+После успешной сборки и публикации как prerelease артефакты будут доступны на [странице тега v0.0.5.1](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.1); ссылка `releases/latest` продолжит вести на последний стабильный выпуск. Установка описана в [release.md](release.md). Эта предварительная версия останется prerelease до закрытия host-level проверок.

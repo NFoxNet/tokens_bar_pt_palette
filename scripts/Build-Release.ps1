@@ -52,6 +52,7 @@ try {
                 -p:Platform=$architecture `
                 -p:GenerateAppxPackageOnBuild=true `
                 -p:AppxPackageDir=$packageDirectory `
+                -p:AppxPackageSigningEnabled=true `
                 -p:PackageCertificateThumbprint=$certificate.Thumbprint
 
             if ($LASTEXITCODE -ne 0) { throw "MSIX build failed for $architecture." }
@@ -80,9 +81,9 @@ $publishedPackages = foreach ($package in $packages) {
 }
 
 # Microsoft.Windows.SDK.BuildTools.MSIX signs the package during the build above
-# through PackageCertificateThumbprint. Running signtool over that complete MSIX
-# a second time corrupts its ZIP footprint files, making the release uninstallable.
-# Copy the build-signed package verbatim instead.
+# because AppxPackageSigningEnabled and PackageCertificateThumbprint are set.
+# Running signtool over that complete MSIX a second time corrupts its ZIP footprint
+# files, making the release uninstallable. Copy the build-signed package verbatim.
 
 $certificateOutput = Join-Path $OutputDirectory 'NFoxNet.TokensLimitsExtension.cer'
 Export-Certificate -Cert $certificate -FilePath $certificateOutput -Force | Out-Null
