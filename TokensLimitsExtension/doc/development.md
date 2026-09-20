@@ -3,7 +3,7 @@
 ## Требования
 
 - Windows 10 19041 или новее.
-- Visual Studio с workload для Windows App SDK/.NET или установленный .NET 10 SDK.
+- Visual Studio с workload для Windows App SDK/.NET или установленный SDK 10.0.401 из `global.json`.
 - Windows SDK 26100 и восстановленные NuGet-пакеты.
 - Для runtime-проверки — Microsoft PowerToys с включённым Command Palette.
 
