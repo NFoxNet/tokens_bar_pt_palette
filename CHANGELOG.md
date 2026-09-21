@@ -2,7 +2,7 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
-## [0.0.5.5] - 2026-09-21 (prerelease candidate)
+## [0.0.5.5] - 2026-09-21
 
 ### Fixed
 
@@ -10,9 +10,9 @@ All notable changes are documented here. This project follows [Semantic Versioni
 - Abort safely if PowerToys cannot close gracefully within 30 seconds; verify the tray window belongs to the detected runner and never force-kill a process.
 - Reject an already-elevated launcher and a UAC identity mismatch, so per-user MSIX registration and the PowerToys restart stay with the intended Windows account.
 
-### Field validation pending
+### Field checks to complete
 
-- Confirm the installer flow on x64 and ARM64 devices, including a running PowerToys process, UAC cancellation, failed install and retained settings/secrets. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.5.md).
+- Confirm the signed in-place upgrade, retained settings/secrets and ARM64 runtime on target devices. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.5.md).
 
 ## [0.0.5.4] - 2026-09-21 (prerelease candidate)
 
