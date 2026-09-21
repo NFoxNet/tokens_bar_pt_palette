@@ -4,9 +4,9 @@ Tokens Limits is a Microsoft PowerToys Command Palette extension that shows usag
 
 ## Install
 
-Download the MSIX, certificate, installer and checksum file from [GitHub Releases](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/latest), keep them together, then double-click `Install-TokensLimitsExtension.cmd`. The installer closes PowerToys before the update and starts it again afterward. It requests administrator approval only for certificate and package installation; do not use **Run as administrator**, so PowerToys restarts with your normal user permissions. If PowerToys was not running before installation, start it when you are ready to use the extension.
+Download the MSIX, certificate, installer and checksum file from [GitHub Releases](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/latest), keep them together, then double-click `Install-TokensLimitsExtension.cmd`. The installer closes PowerToys before the update, migrates a stale Tokens Limits Dock pin when Command Palette is stopped, and starts PowerToys again. It requests administrator approval only for certificate and package installation; do not use **Run as administrator**, so PowerToys restarts with your normal user permissions. If PowerToys was not running before installation, start it when you are ready to use the extension.
 
-For release details and field checks for v0.0.5.5, see the [release page](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.5) and [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.5.md).
+For release details and field checks for v0.0.5.6, see the [release page](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.6) and [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.6.md).
 
 Windows validates the package signature during installation; compare the downloaded files with `SHA256SUMS.txt` before installing. In-place updates retain settings and encrypted provider keys.
 

@@ -14,6 +14,7 @@ $global:TokensLimitsInstallerStartFailure = $false
 $global:TokensLimitsInstallerProcess = $null
 $global:TokensLimitsInstallerWindowOwnerProcessId = 0
 $global:TokensLimitsInstallerCloseRequestCount = 0
+$global:TokensLimitsInstallerFixtureDirectory = $null
 
 function Get-PowerToysProcessById {
     return $global:TokensLimitsInstallerProcess
@@ -76,6 +77,91 @@ function Assert-Events {
 }
 
 try {
+    $global:TokensLimitsInstallerFixtureDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "TokensLimitsInstaller.$([Guid]::NewGuid().ToString('N'))"
+    [void](New-Item -ItemType Directory -Path $global:TokensLimitsInstallerFixtureDirectory)
+    $settingsPath = Join-Path $global:TokensLimitsInstallerFixtureDirectory 'settings.json'
+    $originalSettings = @'
+{
+  "UnknownRoot": { "Keep": true },
+  "DockSettings": {
+    "EndBands": [
+      { "ProviderId": "TokensLimitsExtension_0.0.2.0_x64__8weky6hhahpwk0!App!ID", "CommandId": "com.tokenslimits.provider.codex.band", "ShowTitles": false },
+      { "ProviderId": "OtherExtension_1.0.0.0_x64__publisher!App!ID", "CommandId": "other.band" }
+    ],
+    "StartBands": [],
+    "CenterBands": [],
+    "MonitorConfigs": [
+      {
+        "MonitorDeviceId": "DISPLAY1",
+        "IsCustomized": true,
+        "StartBands": [],
+        "CenterBands": [
+          { "ProviderId": "TokensLimitsExtension_0.0.2.0_x64__8weky6hhahpwk0!App!ID", "CommandId": "com.tokenslimits.provider.codex.band", "ShowSubtitles": true }
+        ],
+        "EndBands": []
+      },
+      {
+        "MonitorDeviceId": "DISPLAY2",
+        "IsCustomized": false,
+        "EndBands": [
+          { "ProviderId": "TokensLimitsExtension_0.0.2.0_x64__8weky6hhahpwk0!App!ID", "CommandId": "com.tokenslimits.provider.codex.band" }
+        ]
+      }
+    ]
+  }
+}
+'@
+    [System.IO.File]::WriteAllText($settingsPath, $originalSettings, [System.Text.UTF8Encoding]::new($false))
+    $newProviderId = 'TokensLimitsExtension_0.0.5.6_x64__v2jz6hhahpwk0!App!ID'
+    $migration = Update-TokensLimitsDockBandIdentity -SettingsPath $settingsPath -CurrentProviderId $newProviderId
+    if ($migration.UpdatedCount -ne 2) {
+        throw "Expected two effective Tokens Limits pins to be migrated, got $($migration.UpdatedCount)."
+    }
+
+    if ((Get-Content -LiteralPath $migration.BackupPath -Raw) -ne $originalSettings) {
+        throw 'The Dock migration backup does not match the original settings file.'
+    }
+
+    $updatedSettings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+    if (-not $updatedSettings.UnknownRoot.Keep -or $updatedSettings.DockSettings.EndBands[1].ProviderId -ne 'OtherExtension_1.0.0.0_x64__publisher!App!ID') {
+        throw 'The Dock migration changed unrelated settings.'
+    }
+
+    $globalProviderIdMigrated = $updatedSettings.DockSettings.EndBands[0].ProviderId -eq $newProviderId
+    $monitorProviderIdMigrated = $updatedSettings.DockSettings.MonitorConfigs[0].CenterBands[0].ProviderId -eq $newProviderId
+    $nonCustomizedMonitorUnchanged = $updatedSettings.DockSettings.MonitorConfigs[1].EndBands[0].ProviderId -like 'TokensLimitsExtension_0.0.2.0_*'
+    if (-not $globalProviderIdMigrated -or -not $monitorProviderIdMigrated -or -not $nonCustomizedMonitorUnchanged) {
+        throw 'The Dock migration did not update only effective Tokens Limits pins.'
+    }
+
+    $migratedContent = Get-Content -LiteralPath $settingsPath -Raw
+    $secondMigration = Update-TokensLimitsDockBandIdentity -SettingsPath $settingsPath -CurrentProviderId $newProviderId
+    if ($secondMigration.UpdatedCount -ne 0 -or (Get-Content -LiteralPath $settingsPath -Raw) -ne $migratedContent) {
+        throw 'The Dock migration was not idempotent.'
+    }
+
+    if (@(Get-ChildItem -LiteralPath $global:TokensLimitsInstallerFixtureDirectory -Filter 'settings.json.backup.*').Count -ne 1) {
+        throw 'The Dock migration created an unexpected backup on its idempotent second run.'
+    }
+
+    $invalidSettingsPath = Join-Path $global:TokensLimitsInstallerFixtureDirectory 'invalid-settings.json'
+    $invalidSettings = '{"DockSettings":'
+    [System.IO.File]::WriteAllText($invalidSettingsPath, $invalidSettings, [System.Text.UTF8Encoding]::new($false))
+    $invalidSettingsRejected = $false
+    try {
+        Update-TokensLimitsDockBandIdentity -SettingsPath $invalidSettingsPath -CurrentProviderId $newProviderId | Out-Null
+    }
+    catch {
+        $invalidSettingsRejected = $true
+    }
+
+    $invalidSettingsUnchanged = [System.IO.File]::ReadAllText($invalidSettingsPath) -eq $invalidSettings
+    $invalidSettingsHasNoBackup = @(Get-ChildItem -LiteralPath $global:TokensLimitsInstallerFixtureDirectory -Filter 'invalid-settings.json.backup.*').Count -eq 0
+    $invalidSettingsHasNoTemporaryFile = @(Get-ChildItem -LiteralPath $global:TokensLimitsInstallerFixtureDirectory -Filter 'invalid-settings.json.tmp.*').Count -eq 0
+    if (-not $invalidSettingsRejected -or -not $invalidSettingsUnchanged -or -not $invalidSettingsHasNoBackup -or -not $invalidSettingsHasNoTemporaryFile) {
+        throw 'The Dock migration did not fail closed for malformed Command Palette settings.'
+    }
+
     Assert-InstallerUserSid -ExpectedUserSid 'S-1-5-21-current' -ActualUserSid 'S-1-5-21-current'
     $differentUserRejected = $false
     try {
@@ -133,11 +219,14 @@ try {
 
     Invoke-PowerToysUpdateWorkflow -InstallAction {
         $global:TokensLimitsInstallerEvents.Add('install')
+    } -AfterInstallAction {
+        $global:TokensLimitsInstallerEvents.Add('migrate')
     }
 
     Assert-Events @(
         'stop:C:\Program Files\PowerToys\PowerToys.exe',
         'install',
+        'migrate',
         'start:C:\Program Files\PowerToys\PowerToys.exe'
     )
 
@@ -197,18 +286,21 @@ try {
         ExecutablePath = 'C:\Program Files\PowerToys\PowerToys.exe'
     }
     $installFailed = $false
+    $migrationRanAfterFailure = $false
     try {
         Invoke-PowerToysUpdateWorkflow -InstallAction {
             $global:TokensLimitsInstallerEvents.Add('install')
             throw 'simulated package deployment failure'
+        } -AfterInstallAction {
+            $migrationRanAfterFailure = $true
         }
     }
     catch {
         $installFailed = $_.Exception.Message -eq 'simulated package deployment failure'
     }
 
-    if (-not $installFailed) {
-        throw 'The package deployment failure was not propagated.'
+    if (-not $installFailed -or $migrationRanAfterFailure) {
+        throw 'The package deployment failure was not propagated or the Dock migration ran after a failed install.'
     }
 
     Assert-Events @(
@@ -253,5 +345,8 @@ finally {
     Remove-Item Function:\Import-Certificate -Force -ErrorAction SilentlyContinue
     Remove-Item Function:\Add-AppxPackage -Force -ErrorAction SilentlyContinue
     Remove-Item Function:\Assert-InstallerUserSid -Force -ErrorAction SilentlyContinue
+    if ($global:TokensLimitsInstallerFixtureDirectory -and (Test-Path -LiteralPath $global:TokensLimitsInstallerFixtureDirectory)) {
+        Remove-Item -LiteralPath $global:TokensLimitsInstallerFixtureDirectory -Recurse -Force
+    }
     Remove-Variable TokensLimitsInstallerEvents, TokensLimitsInstallerRunner, TokensLimitsInstallerStopFailure, TokensLimitsInstallerStartFailure, TokensLimitsInstallerProcess, TokensLimitsInstallerWindowOwnerProcessId, TokensLimitsInstallerCloseRequestCount -Scope Global -Force -ErrorAction SilentlyContinue
 }

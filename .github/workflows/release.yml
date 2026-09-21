@@ -31,6 +31,7 @@ jobs:
         run: |
           dotnet build 'TokensLimitsExtension/TokensLimitsExtension.sln' --configuration Debug -p:Platform=x64 --no-restore -warnaserror
           dotnet test 'TokensLimitsExtension/TokensLimitsExtension.sln' --configuration Debug -p:Platform=x64 --no-restore --no-build --logger "trx;LogFileName=release-debug-tests.trx" --results-directory 'TokensLimitsExtension/TestResults'
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\scripts\tests\Install-TokensLimitsExtension.Tests.ps1'
       - name: Validate tag and manifest version
         run: |
           [xml]$manifest = Get-Content 'TokensLimitsExtension/TokensLimitsExtension/Package.appxmanifest'
@@ -137,10 +138,10 @@ jobs:
         with:
           name: release-payload
           path: artifacts/release
-      - name: Publish draft GitHub release
+      - name: Publish stable GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          draft: true
+          draft: false
           prerelease: false
           generate_release_notes: true
           files: |

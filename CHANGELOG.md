@@ -2,6 +2,18 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.0.5.6] - 2026-09-21
+
+### Fixed
+
+- Migrate stale Tokens Limits Dock pins to the installed MSIX identity during an update, preserving global and customized per-monitor placements with an automatic backup.
+- Skip Dock settings migration while Command Palette is still running and provide a manual recovery path rather than risk overwriting live settings.
+- Publish the stable GitHub Release after the signed package and Windows deployment gates pass.
+
+### Field checks to complete
+
+- Confirm the Dock pin and Enabled providers page after in-place installation from v0.0.5.5. The blank-page symptom has not been reproduced or tied to a source defect; see [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.6.md).
+
 ## [0.0.5.5] - 2026-09-21
 
 ### Fixed
