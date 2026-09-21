@@ -189,9 +189,204 @@ function Start-PowerToysRunner {
     Start-Process -FilePath $Runner.ExecutablePath -WorkingDirectory (Split-Path -Parent $Runner.ExecutablePath) -ErrorAction Stop | Out-Null
 }
 
+function Update-TokensLimitsDockBandSettings {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$DockSettings,
+        [Parameter(Mandatory)][string]$CurrentProviderId
+    )
+
+    $updatedCount = 0
+    $bandZones = @('StartBands', 'CenterBands', 'EndBands')
+    foreach ($zone in $bandZones) {
+        $bandsProperty = $DockSettings.PSObject.Properties[$zone]
+        if ($null -eq $bandsProperty -or $null -eq $bandsProperty.Value) {
+            continue
+        }
+
+        foreach ($band in @($bandsProperty.Value)) {
+            if ($null -eq $band) {
+                continue
+            }
+
+            $providerProperty = $band.PSObject.Properties['ProviderId']
+            $commandProperty = $band.PSObject.Properties['CommandId']
+            if ($null -eq $providerProperty -or $null -eq $commandProperty) {
+                continue
+            }
+
+            $providerId = [string]$providerProperty.Value
+            $commandId = [string]$commandProperty.Value
+            $isTokensLimitsBand = $commandId -ceq 'com.tokenslimits.provider.codex.band' -and $providerId -match '^TokensLimitsExtension_.+!App!ID$'
+            $isStaleProviderId = -not [string]::Equals($providerId, $CurrentProviderId, [StringComparison]::OrdinalIgnoreCase)
+            if ($isTokensLimitsBand -and $isStaleProviderId) {
+                $band.ProviderId = $CurrentProviderId
+                $updatedCount++
+            }
+        }
+    }
+
+    $monitorConfigsProperty = $DockSettings.PSObject.Properties['MonitorConfigs']
+    if ($null -ne $monitorConfigsProperty -and $null -ne $monitorConfigsProperty.Value) {
+        foreach ($monitorConfig in @($monitorConfigsProperty.Value)) {
+            if ($null -eq $monitorConfig) {
+                continue
+            }
+
+            $customizedProperty = $monitorConfig.PSObject.Properties['IsCustomized']
+            if ($null -eq $customizedProperty -or -not [bool]$customizedProperty.Value) {
+                continue
+            }
+
+            foreach ($zone in $bandZones) {
+                $bandsProperty = $monitorConfig.PSObject.Properties[$zone]
+                if ($null -eq $bandsProperty -or $null -eq $bandsProperty.Value) {
+                    continue
+                }
+
+                foreach ($band in @($bandsProperty.Value)) {
+                    if ($null -eq $band) {
+                        continue
+                    }
+
+                    $providerProperty = $band.PSObject.Properties['ProviderId']
+                    $commandProperty = $band.PSObject.Properties['CommandId']
+                    if ($null -eq $providerProperty -or $null -eq $commandProperty) {
+                        continue
+                    }
+
+                    $providerId = [string]$providerProperty.Value
+                    $commandId = [string]$commandProperty.Value
+                    $isTokensLimitsBand = $commandId -ceq 'com.tokenslimits.provider.codex.band' -and $providerId -match '^TokensLimitsExtension_.+!App!ID$'
+                    $isStaleProviderId = -not [string]::Equals($providerId, $CurrentProviderId, [StringComparison]::OrdinalIgnoreCase)
+                    if ($isTokensLimitsBand -and $isStaleProviderId) {
+                        $band.ProviderId = $CurrentProviderId
+                        $updatedCount++
+                    }
+                }
+            }
+        }
+    }
+
+    return $updatedCount
+}
+
+function Get-FileSha256 {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        return [System.BitConverter]::ToString($sha256.ComputeHash($bytes))
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
+function Update-TokensLimitsDockBandIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SettingsPath,
+        [Parameter(Mandatory)][string]$CurrentProviderId
+    )
+
+    if ($CurrentProviderId -notmatch '^TokensLimitsExtension_.+!App!ID$') {
+        throw 'CurrentProviderId is not a Tokens Limits Command Palette provider identity.'
+    }
+
+    if (-not (Test-Path -LiteralPath $SettingsPath -PathType Leaf)) {
+        return [pscustomobject]@{ UpdatedCount = 0; BackupPath = $null; Status = 'SettingsNotFound' }
+    }
+
+    $originalHash = Get-FileSha256 -Path $SettingsPath
+    $originalContent = [System.IO.File]::ReadAllText($SettingsPath)
+    $document = ConvertFrom-Json -InputObject $originalContent -ErrorAction Stop
+    if ($null -eq $document) {
+        throw 'Command Palette settings.json did not contain a JSON object.'
+    }
+
+    $dockSettingsProperty = $document.PSObject.Properties['DockSettings']
+    if ($null -eq $dockSettingsProperty -or $null -eq $dockSettingsProperty.Value) {
+        return [pscustomobject]@{ UpdatedCount = 0; BackupPath = $null; Status = 'DockSettingsNotFound' }
+    }
+
+    $updatedCount = Update-TokensLimitsDockBandSettings -DockSettings $dockSettingsProperty.Value -CurrentProviderId $CurrentProviderId
+    if ($updatedCount -eq 0) {
+        return [pscustomobject]@{ UpdatedCount = 0; BackupPath = $null; Status = 'NoChanges' }
+    }
+
+    $updatedContent = ConvertTo-Json -InputObject $document -Depth 100
+    $verification = ConvertFrom-Json -InputObject $updatedContent -ErrorAction Stop
+    $verificationDockSettings = $verification.PSObject.Properties['DockSettings']
+    if ($null -eq $verificationDockSettings -or $null -eq $verificationDockSettings.Value) {
+        throw 'Dock settings could not be validated after serialization.'
+    }
+
+    $remainingUpdates = Update-TokensLimitsDockBandSettings -DockSettings $verificationDockSettings.Value -CurrentProviderId $CurrentProviderId
+    if ($remainingUpdates -ne 0) {
+        throw 'The serialized Dock settings still contain stale Tokens Limits band identities.'
+    }
+
+    $temporaryPath = "$SettingsPath.tmp.$([Guid]::NewGuid().ToString('N'))"
+    $backupPath = "$SettingsPath.backup.$(Get-Date -Format 'yyyyMMdd-HHmmss').$([Guid]::NewGuid().ToString('N'))"
+    try {
+        [System.IO.File]::WriteAllText($temporaryPath, $updatedContent, [System.Text.UTF8Encoding]::new($false))
+        $currentHash = Get-FileSha256 -Path $SettingsPath
+        if ($currentHash -ne $originalHash) {
+            throw 'Command Palette settings changed while the Dock migration was prepared.'
+        }
+
+        [System.IO.File]::Replace($temporaryPath, $SettingsPath, $backupPath)
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force
+        }
+    }
+
+    return [pscustomobject]@{ UpdatedCount = $updatedCount; BackupPath = $backupPath; Status = 'Updated' }
+}
+
+function Update-InstalledCmdPalDockBandIdentity {
+    [CmdletBinding()]
+    param()
+
+    $currentSessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
+    $runningCmdPal = @(Get-Process -Name 'Microsoft.CmdPal.UI' -ErrorAction SilentlyContinue |
+        Where-Object SessionId -eq $currentSessionId)
+    if ($runningCmdPal.Count -gt 0) {
+        Write-Warning 'Command Palette is still running, so its settings were left untouched. Close or reload Command Palette, then pin Tokens Limits again from Settings > Dock > Bands.'
+        return
+    }
+
+    $extensionPackages = @(Get-AppxPackage -Name 'TokensLimitsExtension' -ErrorAction Stop)
+    if ($extensionPackages.Count -ne 1) {
+        Write-Warning "Could not resolve one installed Tokens Limits package for Dock migration (found $($extensionPackages.Count))."
+        return
+    }
+
+    $commandPalettePackages = @(Get-AppxPackage -Name 'Microsoft.CommandPalette' -ErrorAction Stop)
+    if ($commandPalettePackages.Count -ne 1 -or [string]::IsNullOrWhiteSpace($commandPalettePackages[0].PackageFamilyName)) {
+        Write-Warning "Could not resolve one installed Command Palette package for Dock migration (found $($commandPalettePackages.Count))."
+        return
+    }
+
+    $settingsPath = Join-Path $env:LOCALAPPDATA (Join-Path "Packages\$($commandPalettePackages[0].PackageFamilyName)\LocalState" 'settings.json')
+    $providerId = "$($extensionPackages[0].PackageFullName)!App!ID"
+    $migration = Update-TokensLimitsDockBandIdentity -SettingsPath $settingsPath -CurrentProviderId $providerId
+    if ($migration.UpdatedCount -gt 0) {
+        Write-Host "Updated $($migration.UpdatedCount) Tokens Limits Dock pin(s). Backup: $($migration.BackupPath)" -ForegroundColor Cyan
+    }
+}
+
 function Invoke-PowerToysUpdateWorkflow {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][scriptblock]$InstallAction)
+    param(
+        [Parameter(Mandatory)][scriptblock]$InstallAction,
+        [scriptblock]$AfterInstallAction
+    )
 
     $runner = Get-PowerToysRunner
     if ($null -ne $runner) {
@@ -205,6 +400,16 @@ function Invoke-PowerToysUpdateWorkflow {
     }
     catch {
         $installError = $_
+    }
+
+    $afterInstallError = $null
+    if ($null -eq $installError -and $null -ne $AfterInstallAction) {
+        try {
+            & $AfterInstallAction | Out-Null
+        }
+        catch {
+            $afterInstallError = $_
+        }
     }
 
     $restartError = $null
@@ -228,6 +433,10 @@ function Invoke-PowerToysUpdateWorkflow {
 
     if ($null -ne $restartError) {
         throw "The extension was installed, but PowerToys could not be restarted: $($restartError.Exception.Message)"
+    }
+
+    if ($null -ne $afterInstallError) {
+        Write-Warning "The extension was installed, but its Dock pin could not be migrated: $($afterInstallError.Exception.Message)"
     }
 }
 
@@ -358,6 +567,8 @@ if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
 
 Invoke-PowerToysUpdateWorkflow -InstallAction {
     Invoke-ElevatedReleaseInstall -ResolvedPackagePath $package.FullName -ResolvedCertificatePath $certificate.FullName
+} -AfterInstallAction {
+    Update-InstalledCmdPalDockBandIdentity
 }
 
 Write-Host 'Tokens Limits was installed. PowerToys has been restarted and can load the updated extension.' -ForegroundColor Green
