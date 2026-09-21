@@ -39,8 +39,9 @@ jobs:
           }
       - run: dotnet build .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore -warnaserror
       - run: dotnet test .\TokensLimitsExtension.sln --configuration Debug -p:Platform=x64 --no-restore --no-build --logger "trx;LogFileName=debug-tests.trx" --results-directory .\TestResults
-      - name: Test release helper and unregister scripts
+      - name: Test installer, release helper and unregister scripts
         run: |
+          & ..\scripts\tests\Install-TokensLimitsExtension.Tests.ps1
           & ..\scripts\tests\Build-Release.Helpers.Tests.ps1
           & ..\scripts\tests\Unregister.Tests.ps1
       - name: Upload test diagnostics
