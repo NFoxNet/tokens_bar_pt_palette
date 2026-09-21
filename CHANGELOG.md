@@ -2,6 +2,18 @@
 
 All notable changes are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.0.5.5] - 2026-09-21 (prerelease candidate)
+
+### Fixed
+
+- Automatically stop a running PowerToys runner before MSIX deployment and restart it afterward, including when installation fails or UAC is canceled.
+- Abort safely if PowerToys cannot close gracefully within 30 seconds; verify the tray window belongs to the detected runner and never force-kill a process.
+- Reject an already-elevated launcher and a UAC identity mismatch, so per-user MSIX registration and the PowerToys restart stay with the intended Windows account.
+
+### Field validation pending
+
+- Confirm the installer flow on x64 and ARM64 devices, including a running PowerToys process, UAC cancellation, failed install and retained settings/secrets. See [release notes](TokensLimitsExtension/doc/release-notes-v0.0.5.5.md).
+
 ## [0.0.5.4] - 2026-09-21 (prerelease candidate)
 
 ### Fixed

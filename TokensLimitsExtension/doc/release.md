@@ -19,11 +19,13 @@ The package requires:
    Get-FileHash .\TokensLimitsExtension_*.msix -Algorithm SHA256
    ```
 
-3. Run `Install-TokensLimitsExtension.cmd`. It selects the correct package for the PC, asks for UAC elevation, imports the public release certificate into `LocalMachine\\TrustedPeople`, then installs the MSIX. No PowerShell execution-policy change is required.
+3. Double-click `Install-TokensLimitsExtension.cmd`. It selects the correct package, gracefully closes PowerToys if it is running, requests UAC elevation to import the public release certificate into `Cert:\LocalMachine\TrustedPeople` and install the MSIX, then starts PowerToys again. The launcher itself should run as your normal user; this keeps the restarted PowerToys process unelevated. Do not choose **Run as administrator**. No PowerShell execution-policy change is required.
+
+   The installer verifies that the PowerToys tray window belongs to the detected runner and waits up to 30 seconds for it to exit. If it cannot close cleanly, installation stops without force-killing the process. If installation fails or UAC is canceled, a previously running PowerToys is still restarted. If PowerToys was not running before installation, it remains stopped. UAC must approve the same Windows account that runs PowerToys because MSIX registration is per-user; the installer stops if credentials for a different administrator account are entered. It also refuses to start from an already elevated shell, so PowerToys will not inherit administrator privileges.
 
    The `.cmd` bootstrap is intentional: a downloaded `.ps1` may be blocked by an `AllSigned` policy before it has an opportunity to import the certificate that would establish trust for the package.
 
-4. For a managed environment where `.cmd` launchers are disallowed, an administrator can invoke the helper explicitly:
+4. For a managed environment where `.cmd` launchers are disallowed, run the helper from a **non-elevated** PowerShell session under the Windows account that uses PowerToys. It will request UAC elevation for installation:
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-TokensLimitsExtension.ps1 `
@@ -31,8 +33,8 @@ The package requires:
      -CertificatePath .\NFoxNet.TokensLimitsExtension.cer
    ```
 
-   The helper imports the **public** self-signed certificate only into `LocalMachine\TrustedPeople`, then invokes `Add-AppxPackage`. It never receives or installs a private key. This grants device-level trust to the publisher certificate, so install it only after verifying the release source and checksum.
-5. Open PowerToys Command Palette and run **Reload Command Palette extensions** if the extension does not appear immediately.
+   The helper imports the **public** self-signed certificate only into `Cert:\LocalMachine\TrustedPeople`, then invokes `Add-AppxPackage`. It never receives or installs a private key. This grants device-level trust to the publisher certificate, so install it only after verifying the release source and checksum.
+5. If PowerToys was running, the installer has already restarted it so Command Palette can load the updated extension. If it was not running, open PowerToys when ready. Use **Reload Command Palette extensions** only if the updated extension still does not appear.
 
 To upgrade, install the newer signed MSIX over the existing package:
 
@@ -40,7 +42,7 @@ To upgrade, install the newer signed MSIX over the existing package:
 Add-AppxPackage -Path .\TokensLimitsExtension_<version>_x64.msix
 ```
 
-Windows updates the existing package when package identity matches, retaining its app data. `Remove-AppxPackage -PreserveApplicationData` is supported only for development-mode packages registered from a loose file layout; it is not supported for the signed release MSIX. Uninstalling a signed release removes its app data, including provider settings and protected secrets.
+Windows updates the existing package when package identity matches, retaining its app data. For this manual command, close PowerToys first and start it again after the update so the Command Palette releases the old package and loads the new one. The installer handles this automatically. `Remove-AppxPackage -PreserveApplicationData` is supported only for development-mode packages registered from a loose file layout; it is not supported for the signed release MSIX. Uninstalling a signed release removes its app data, including provider settings and protected secrets.
 
 The repository's `unregister.ps1` preserves data by default and therefore accepts only development-mode registrations. It refuses to remove a signed Release MSIX; use an in-place update instead. Passing `-DeleteApplicationData` explicitly removes the package and its application data.
 
@@ -69,7 +71,7 @@ The release workflow is already prepared for the latter through `MSIX_CERTIFICAT
 4. For this thumbprint-based build path, set `AppxPackageSigningEnabled=true` and pass the imported certificate thumbprint through `PackageCertificateThumbprint` to enable build-time signing. Do not run `signtool sign` on the completed `.msix` again. Run `scripts/Test-ReleasePackage.ps1` for both packages with `-ExpectedCertificatePath` set to the public `.cer`. It verifies the embedded CMS signature, exact signer certificate, Publisher, version, architecture, COM CLSID, required assets and language files; it also checks the signed `[Content_Types].xml` and block map, then compares every payload block to its SHA-256 hash. It does not establish Windows trust. Verify checksums and install on suitable machines, then attach `artifacts/release/` files to a `vX.Y.Z.W` GitHub Release.
 5. For automated releases, add the PFX encoded as Base64 to `MSIX_CERTIFICATE_BASE64` and the password to `MSIX_CERTIFICATE_PASSWORD`, then push the matching annotated tag.
 
-The automated workflow validates both package architectures, checksums and the release certificate, then creates a draft release. A prerelease can be published for field testing before host-level acceptance; keep the stable release pending until Command Palette UI/COM lifecycle checks and signed upgrade with application data preservation have passed. The [v0.0.5.4 release notes](release-notes-v0.0.5.4.md) record the current acceptance scope.
+The automated workflow validates both package architectures, checksums and the release certificate, then creates a draft release. A prerelease can be published for field testing before host-level acceptance; keep the stable release pending until Command Palette UI/COM lifecycle checks and signed upgrade with application data preservation have passed. The [v0.0.5.5 release notes](release-notes-v0.0.5.5.md) record the current acceptance scope.
 
 Do not commit a PFX, password, tokens, cookies or provider settings. A public `.cer` is safe to distribute.
 
