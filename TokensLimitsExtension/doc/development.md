@@ -11,7 +11,13 @@
 
 ## CLI-цикл
 
-Из корня репозитория:
+Git-репозиторий и solution находятся в разных каталогах. Перейдите из корня
+Git-репозитория в каталог solution; все команды ниже, если не указано иное,
+выполняются из него:
+
+```powershell
+Set-Location .\TokensLimitsExtension
+```
 
 ```powershell
 dotnet restore .\TokensLimitsExtension.sln --locked-mode
@@ -24,6 +30,7 @@ CI also runs the repository's PowerShell helper checks:
 ```powershell
 ..\scripts\tests\Build-Release.Helpers.Tests.ps1
 ..\scripts\tests\Unregister.Tests.ps1
+..\scripts\tests\Install-TokensLimitsExtension.Tests.ps1
 ```
 
 `unregister.ps1` preserves data by default and only supports that mode for
@@ -41,15 +48,15 @@ explicitly removes the package data.
 
 ### Локальный baseline процесса
 
-Для сопоставимых измерений запускайте sampler из корня репозитория, когда
+Для сопоставимых измерений запускайте sampler из каталога solution, когда
 Command Palette уже загрузил расширение:
 
 ```powershell
-pwsh -File .\scripts\Measure-ExtensionBaseline.ps1 `
+pwsh -File ..\scripts\Measure-ExtensionBaseline.ps1 `
   -ProcessName TokensLimitsExtension `
   -DurationSeconds 60 `
   -SampleIntervalMilliseconds 1000 `
-  -OutputPath .\TokensLimitsExtension\codex_docs\baseline-live.json
+  -OutputPath .\codex_docs\baseline-live.json
 ```
 
 Скрипт читает только локальные счётчики процесса: CPU time, private bytes,
@@ -134,9 +141,9 @@ Release включает trimming, поэтому проверяйте пред�
 
 Lock-файлы общих Core/test проектов не привязаны к одному RID, поэтому один и тот же locked restore используется для x64 и ARM64. Runtime выбирается только на этапе build через publish profile; приложение содержит обе архитектуры в своём lock-графе.
 
-Для публичного GitHub-релиза используйте `scripts/Build-Release.ps1`. Скрипт требует PFX, чей subject в точности совпадает с `Publisher` в `Package.appxmanifest`, подписывает x64 и ARM64 MSIX и создаёт SHA-256 checksums. PFX и пароль не должны попадать в репозиторий или логи. Полная процедура — в [release.md](release.md).
+Для публичного GitHub-релиза используйте `..\scripts\Build-Release.ps1` из каталога solution. Скрипт требует PFX, чей subject в точности совпадает с `Publisher` в `Package.appxmanifest`, подписывает x64 и ARM64 MSIX и создаёт SHA-256 checksums. PFX и пароль не должны попадать в репозиторий или логи. Полная процедура — в [release.md](release.md).
 
-После сборки проверяйте оба готовых пакета через `scripts/Test-ReleasePackage.ps1`, передав путь к экспортированному `.cer`. Проверка подтверждает CMS подпись и точное совпадение signer-сертификата, сверяет содержимое с подписанной block map, а также проверяет publisher/version/architecture, COM CLSID, обязательные assets и `lang/en.json`/`lang/ru.json`. Она читает только локальные файлы, не устанавливает пакет, не меняет хранилища доверия и не требует сети. Доверие Windows проверяется отдельно во время установки.
+После сборки проверяйте оба готовых пакета через `..\scripts\Test-ReleasePackage.ps1`, передав путь к экспортированному `.cer`. Проверка подтверждает CMS подпись и точное совпадение signer-сертификата, сверяет содержимое с подписанной block map, а также проверяет publisher/version/architecture, COM CLSID, обязательные assets и `lang/en.json`/`lang/ru.json`. Она читает только локальные файлы, не устанавливает пакет, не меняет хранилища доверия и не требует сети. Доверие Windows проверяется отдельно во время установки.
 
 ## Тестовые уровни
 
