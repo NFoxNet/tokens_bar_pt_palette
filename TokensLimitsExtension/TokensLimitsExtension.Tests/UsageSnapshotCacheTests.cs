@@ -155,6 +155,51 @@ public sealed class UsageSnapshotCacheTests
     }
 
     [Fact]
+    public async Task PublishesFailureWhenOnlyRefreshWaiterCancelsBeforeSharedRequestFails()
+    {
+        var provider = new BlockingFailureProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+        using var cancellation = new CancellationTokenSource();
+        var cancelledRefresh = cache.RefreshAsync(cancellationToken: cancellation.Token);
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledRefresh);
+        Assert.True(cache.State.IsRefreshing);
+
+        var terminalStateChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        cache.StateChanged += (_, _) => terminalStateChanged.TrySetResult();
+        provider.Release.TrySetResult();
+        await terminalStateChanged.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(cache.State.IsRefreshing);
+        Assert.Equal(UsageProviderErrorKind.Network, cache.State.ErrorKind);
+    }
+
+    [Fact]
+    public async Task OldRefreshFailureCannotReplaceStateAfterConfigurationClear()
+    {
+        var provider = new StaleFailureProvider();
+        using var cache = new UsageSnapshotCache(provider, timeProvider: new FixedTimeProvider());
+        var oldRefresh = cache.RefreshAsync();
+        await provider.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        cache.Clear();
+        var currentRefresh = cache.RefreshAsync();
+        await provider.SecondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        provider.ReleaseFirst.TrySetResult();
+        await oldRefresh;
+
+        Assert.True(cache.State.IsRefreshing);
+        Assert.Equal(UsageProviderErrorKind.None, cache.State.ErrorKind);
+
+        provider.ReleaseSecond.TrySetResult();
+        await currentRefresh;
+        Assert.False(cache.State.IsRefreshing);
+        Assert.Equal(UsageProviderErrorKind.None, cache.State.ErrorKind);
+    }
+
+    [Fact]
     public async Task SharesOneFailedRefreshBetweenConcurrentCallers()
     {
         var provider = new BlockingFailureProvider();
@@ -320,6 +365,31 @@ public sealed class UsageSnapshotCacheTests
             Started.TrySetResult();
             await Release.Task.WaitAsync(cancellationToken);
             throw new HttpRequestException("connection failed");
+        }
+    }
+
+    private sealed class StaleFailureProvider : IUsageProvider
+    {
+        private int _calls;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("stale-failure", "Stale failure");
+        public TaskCompletionSource FirstStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirst { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSecond { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                FirstStarted.TrySetResult();
+                await ReleaseFirst.Task;
+                throw new HttpRequestException("old credentials failed");
+            }
+
+            SecondStarted.TrySetResult();
+            await ReleaseSecond.Task.WaitAsync(cancellationToken);
+            return CreateSnapshot(Descriptor);
         }
     }
 

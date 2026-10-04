@@ -246,16 +246,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
             lock (_stateGate)
             {
                 EnsureConfigurationGenerationUnsafe(configurationGeneration, linkedCts.Token);
-                _state = _state with
-                {
-                    Snapshot = _snapshot,
-                    IsRefreshing = false,
-                    ErrorKind = UsageProviderErrorClassifier.Classify(exception),
-                    RetryAfter = UsageProviderErrorClassifier.GetRetryAfter(exception),
-                    RetryAfterUntil = UsageProviderErrorClassifier.GetRetryAfter(exception) is { } retryAfter && retryAfter > TimeSpan.Zero
-                        ? _timeProvider.GetUtcNow() + retryAfter
-                        : null,
-                };
+                SetFailureStateUnsafe(exception);
             }
             RaiseStateChanged();
             throw;
@@ -347,17 +338,27 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
 
     private void ClearInFlightRefresh(Task<UsageSnapshot> completedTask)
     {
+        var failure = completedTask.IsFaulted
+            ? completedTask.Exception?.Flatten().InnerExceptions.FirstOrDefault()
+            : null;
+        var stateChanged = false;
         lock (_stateGate)
         {
             if (ReferenceEquals(_inFlightRefresh, completedTask))
             {
                 _inFlightRefresh = null;
                 _inFlightOperationKind = InFlightOperationKind.None;
-                if (completedTask.IsFaulted)
+                if (failure is not null && _state.IsRefreshing)
                 {
-                    _ = completedTask.Exception;
+                    SetFailureStateUnsafe(failure);
+                    stateChanged = true;
                 }
             }
+        }
+
+        if (stateChanged)
+        {
+            RaiseStateChanged();
         }
     }
 
@@ -412,10 +413,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         }
         catch (Exception exception)
         {
-            UpdateState(
-                isRefreshing: false,
-                errorKind: UsageProviderErrorClassifier.Classify(exception),
-                retryAfter: UsageProviderErrorClassifier.GetRetryAfter(exception));
+            PublishRefreshFailureIfStillRefreshing(exception, configurationGeneration);
         }
     }
 
@@ -550,6 +548,38 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         }
 
         RaiseStateChanged();
+    }
+
+    private void PublishRefreshFailureIfStillRefreshing(Exception exception, long configurationGeneration)
+    {
+        lock (_stateGate)
+        {
+            if (configurationGeneration != _configurationGeneration
+                || !_state.IsRefreshing
+                || _inFlightOperationKind == InFlightOperationKind.Validation)
+            {
+                return;
+            }
+
+            SetFailureStateUnsafe(exception);
+        }
+
+        RaiseStateChanged();
+    }
+
+    private void SetFailureStateUnsafe(Exception exception)
+    {
+        var retryAfter = UsageProviderErrorClassifier.GetRetryAfter(exception);
+        _state = _state with
+        {
+            Snapshot = _snapshot,
+            IsRefreshing = false,
+            ErrorKind = UsageProviderErrorClassifier.Classify(exception),
+            RetryAfter = retryAfter,
+            RetryAfterUntil = retryAfter is { } duration && duration > TimeSpan.Zero
+                ? _timeProvider.GetUtcNow() + duration
+                : null,
+        };
     }
 
     private void BeginRefresh()
