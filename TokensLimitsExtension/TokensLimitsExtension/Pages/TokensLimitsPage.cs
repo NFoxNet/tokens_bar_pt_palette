@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CommandPalette.Extensions;
@@ -23,6 +24,8 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private readonly Action<string> _logger;
     private readonly ILocalizationService _localization;
     private IListItem[] _items;
+    private UsageProviderState? _latestState;
+    private bool _itemsMaterialized;
     private string? _renderSignature;
     private readonly object _lifecycleGate = new();
     private int _isActive = 1;
@@ -47,7 +50,8 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         Name = _localization.Format("details.show", _usageProvider.Descriptor.DisplayName);
         PlaceholderText = Title;
         ShowDetails = true;
-        _items = CreateLoadingItems();
+        _items = [];
+        _latestState = _stateSource?.State;
         _localization.LanguageChanged += LocalizationOnLanguageChanged;
         if (_stateSource is not null) _stateSource.StateChanged += StateSourceOnStateChanged;
     }
@@ -55,6 +59,20 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     public override IListItem[] GetItems()
     {
         if (IsDisposed || !IsActive) return [];
+        if (!Volatile.Read(ref _itemsMaterialized))
+        {
+            lock (_lifecycleGate)
+            {
+                if (IsDisposed || !IsActive) return [];
+                if (!_itemsMaterialized)
+                {
+                    // First access projects cached state only; no cache locks, I/O or notifications.
+                    if (_latestState is { } state) RenderState(state, notify: false);
+                    if (_items.Length == 0) SetItems(CreateLoadingItems(), notify: false);
+                    Volatile.Write(ref _itemsMaterialized, true);
+                }
+            }
+        }
         return Volatile.Read(ref _items);
     }
 
@@ -80,6 +98,10 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             Interlocked.Exchange(ref _isActive, 0);
             if (_stateSource is not null) _stateSource.StateChanged -= StateSourceOnStateChanged;
             _localization.LanguageChanged -= LocalizationOnLanguageChanged;
+            _latestState = null;
+            _renderSignature = null;
+            Volatile.Write(ref _items, []);
+            Volatile.Write(ref _itemsMaterialized, false);
         }
         GC.SuppressFinalize(this);
     }
@@ -106,7 +128,9 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
                     if (_stateSource is not null) _stateSource.StateChanged -= StateSourceOnStateChanged;
                     _localization.LanguageChanged -= LocalizationOnLanguageChanged;
                     _renderSignature = null;
+                    _latestState = null;
                     Volatile.Write(ref _items, []);
+                    Volatile.Write(ref _itemsMaterialized, false);
                 }
             }
         }
@@ -132,7 +156,18 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private void StateSourceOnStateChanged(object? sender, EventArgs e) => ApplyState(_stateSource!.State);
     private void ApplyState(UsageProviderState state)
     {
-        if (IsDisposed || !IsActive) return;
+        bool materialized;
+        lock (_lifecycleGate)
+        {
+            if (IsDisposed || !IsActive) return;
+            _latestState = state;
+            materialized = _itemsMaterialized;
+        }
+        if (materialized) RenderState(state, notify: true);
+        else if (!IsDisposed && IsActive) RaiseItemsChanged();
+    }
+    private void RenderState(UsageProviderState state, bool notify)
+    {
         if (state.Snapshot is { } snapshot)
         {
             var items = new List<IListItem>(CreateItems(snapshot, state));
@@ -146,9 +181,9 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
                         : GetStatusSubtitle(state),
                 });
             }
-            SetItems([.. items], true);
+            SetItems([.. items], notify);
         }
-        else if (!state.IsRefreshing) SetItems(CreateUnavailableItems(state), true);
+        else if (!state.IsRefreshing) SetItems(CreateUnavailableItems(state), notify);
     }
     private void SetItems(IListItem[] items, bool notify)
     {
@@ -187,6 +222,7 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
         _renderSignature = signature;
         Volatile.Write(ref _items, items);
+        Volatile.Write(ref _itemsMaterialized, true);
         if (notify && !IsDisposed && IsActive) RaiseItemsChanged(items.Length);
     }
     private IListItem[] CreateLoadingItems() => [new ListItem(new NoOpCommand()) { Title = _localization.GetString("details.limits", "Limits"), Subtitle = _localization.GetString("details.loading", "Loading…") }];
@@ -208,13 +244,15 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     {
         var now = DateTimeOffset.UtcNow;
         var estimatePrefix = snapshot.IsEstimate ? _localization.GetString("status.estimate", "Estimate: ") : string.Empty;
+        var detailsTitle = _localization.GetString("details.limits", "Limits");
+        var detailsMetadata = CreateDetailsMetadata(snapshot, state);
         var items = new List<IListItem>();
         if (snapshot.PrimaryWindow is not null)
         {
             var title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
                 ? _localization.Format("time.hours", 5)
                 : UsageDisplayFormatter.GetWindowLabel(snapshot.PrimaryWindow, _localization.GetString("details.primary", "Primary"), _localization);
-            items.Add(CreateDataItem(title, $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.PrimaryWindow, now, _localization)}", snapshot, state));
+            items.Add(CreateDataItem(title, $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.PrimaryWindow, now, _localization)}", detailsTitle, detailsMetadata));
         }
 
         if (snapshot.SecondaryWindow is not null)
@@ -222,26 +260,26 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             var title = snapshot.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
                 ? _localization.GetString("window.weekly", "Weekly")
                 : UsageDisplayFormatter.GetWindowLabel(snapshot.SecondaryWindow, _localization.GetString("details.secondary", "Additional"), _localization);
-            items.Add(CreateDataItem(title, $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.SecondaryWindow, now, _localization)}", snapshot, state));
+            items.Add(CreateDataItem(title, $"{estimatePrefix}{UsageDisplayFormatter.FormatRemainingWindow(snapshot.SecondaryWindow, now, _localization)}", detailsTitle, detailsMetadata));
         }
 
         if (!string.IsNullOrWhiteSpace(snapshot.Plan))
         {
-            items.Add(CreateDataItem(_localization.GetString("details.plan", "Plan"), snapshot.Plan, snapshot, state));
+            items.Add(CreateDataItem(_localization.GetString("details.plan", "Plan"), snapshot.Plan, detailsTitle, detailsMetadata));
         }
 
         foreach (var additionalLimit in snapshot.AdditionalRateLimits)
         {
-            items.Add(CreateDataItem(additionalLimit.Name, FormatAdditionalLimit(additionalLimit, now, estimatePrefix), snapshot, state));
+            items.Add(CreateDataItem(additionalLimit.Name, FormatAdditionalLimit(additionalLimit, now, estimatePrefix), detailsTitle, detailsMetadata));
         }
 
         foreach (var metric in snapshot.Metrics)
         {
-            items.Add(CreateDataItem(UsageDisplayFormatter.GetMetricName(metric, _localization), UsageDisplayFormatter.FormatMetric(metric, _localization), snapshot, state));
+            items.Add(CreateDataItem(UsageDisplayFormatter.GetMetricName(metric, _localization), UsageDisplayFormatter.FormatMetric(metric, _localization), detailsTitle, detailsMetadata));
         }
         if (!string.IsNullOrWhiteSpace(snapshot.Source))
         {
-            items.Add(CreateDataItem(_localization.GetString("details.source", "Source"), FormatSafeSource(snapshot.Source), snapshot, state));
+            items.Add(CreateDataItem(_localization.GetString("details.source", "Source"), FormatSafeSource(snapshot.Source), detailsTitle, detailsMetadata));
         }
 
         if (snapshot.FetchedAt is { } fetchedAt)
@@ -249,31 +287,32 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             var subtitle = state?.IsRefreshing == true
                 ? string.Concat(fetchedAt.ToLocalTime().ToString("g", _localization.Culture), " · ", _localization.GetString("status.refreshing", "Refreshing…"))
                 : fetchedAt.ToLocalTime().ToString("g", _localization.Culture);
-            items.Add(CreateDataItem(_localization.GetString("details.lastUpdated", "Last updated"), subtitle, snapshot, state));
+            items.Add(CreateDataItem(_localization.GetString("details.lastUpdated", "Last updated"), subtitle, detailsTitle, detailsMetadata));
         }
 
         if (state?.IsStale == true && (state.LastSuccessfulRefreshAt ?? snapshot.FetchedAt) is { } lastSuccessfulRefreshAt)
         {
-            items.Add(CreateDataItem(_localization.GetString("details.lastSuccess", "Last successful refresh"), lastSuccessfulRefreshAt.ToLocalTime().ToString("g", _localization.Culture), snapshot, state));
+            items.Add(CreateDataItem(_localization.GetString("details.lastSuccess", "Last successful refresh"), lastSuccessfulRefreshAt.ToLocalTime().ToString("g", _localization.Culture), detailsTitle, detailsMetadata));
         }
 
         items.AddRange(CreateActionItems(state));
         return items.ToArray();
     }
 
-    private ListItem CreateDataItem(string title, string subtitle, UsageSnapshot snapshot, UsageProviderState? state)
+    private static ListItem CreateDataItem(string title, string subtitle, string detailsTitle, string detailsMetadata)
         => new(new NoOpCommand())
         {
             Title = title,
             Subtitle = subtitle,
             Details = new Details
             {
-                Title = _localization.GetString("details.limits", "Limits"),
-                Body = CreateDetailsBody(title, subtitle, snapshot, state),
+                Title = detailsTitle,
+                Body = string.Concat("**", EscapeDetailsText(title), "**", Environment.NewLine, Environment.NewLine,
+                    EscapeDetailsText(subtitle), Environment.NewLine, Environment.NewLine, detailsMetadata),
             },
         };
 
-    private string CreateDetailsBody(string title, string subtitle, UsageSnapshot snapshot, UsageProviderState? state)
+    private string CreateDetailsMetadata(UsageSnapshot snapshot, UsageProviderState? state)
     {
         var statusParts = new List<string>();
         if (state?.IsStale == true)
@@ -286,8 +325,6 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         var status = string.Join(" · ", statusParts);
         var lines = new List<string>
         {
-            $"**{EscapeDetailsText(title)}**",
-            EscapeDetailsText(subtitle),
             $"**{_localization.GetString("overview.status", "Status")}:** {EscapeDetailsText(status)}",
         };
 
@@ -310,23 +347,26 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     }
 
     private static string EscapeDetailsText(string value)
-        => string.Concat(value.Take(512).Select(character => character switch
+    {
+        var length = Math.Min(value.Length, 512);
+        var escaped = new StringBuilder(length);
+        foreach (var character in value.AsSpan(0, length))
         {
-            '\\' => "\\\\",
-            '`' => "\\`",
-            '*' => "\\*",
-            '_' => "\\_",
-            '[' => "\\[",
-            ']' => "\\]",
-            '(' => "\\(",
-            ')' => "\\)",
-            '<' => "&lt;",
-            '>' => "&gt;",
-            '|' => "\\|",
-            '\r' or '\n' => " ",
-            _ when char.IsControl(character) => string.Empty,
-            _ => character.ToString(),
-        }));
+            switch (character)
+            {
+                case '\\': case '`': case '*': case '_': case '[': case ']': case '(': case ')': case '|':
+                    escaped.Append('\\').Append(character);
+                    break;
+                case '<': escaped.Append("&lt;"); break;
+                case '>': escaped.Append("&gt;"); break;
+                case '\r': case '\n': escaped.Append(' '); break;
+                default:
+                    if (!char.IsControl(character)) escaped.Append(character);
+                    break;
+            }
+        }
+        return escaped.ToString();
+    }
 
     private IEnumerable<IListItem> CreateActionItems(UsageProviderState? state)
     {
