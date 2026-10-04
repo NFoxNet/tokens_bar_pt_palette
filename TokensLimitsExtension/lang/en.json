@@ -27,6 +27,8 @@
     "action.openDashboardSubtitle": "Open the trusted provider website.",
     "action.copyDiagnostics": "Copy safe diagnostics",
     "action.copyDiagnosticsSubtitle": "Copy status without credentials.",
+    "action.validateConnection": "Validate connection",
+    "action.validateConnectionSubtitle": "Send one deployment request to check connection; may consume quota.",
     "status.nextStep.configure": "Open extension settings and configure this provider.",
     "status.nextStep.authentication": "Check credentials or sign in again.",
     "status.nextStep.rateLimitedWithDelay": "Wait {0}, then refresh.",

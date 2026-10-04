@@ -99,6 +99,46 @@ public sealed class NativeUsageUxTests
         Assert.DoesNotContain("test-token", body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task EmptyRefreshingProviderShowsBusyStateAcrossNativeSurfaces()
+    {
+        using var userDirectory = new TestDirectory();
+        var localization = new JsonLocalizationService(
+            Path.Combine(AppContext.BaseDirectory, "lang"),
+            userDirectory.Path,
+            "en");
+        var provider = new BlockingProvider();
+        using var cache = new UsageSnapshotCache(provider);
+        using var details = new TokensLimitsPage(cache, localization: localization);
+        using var overview = new UsageOverviewPage([cache], [details], localization: localization);
+        using var dock = new UsageDockBandItem(cache, localization: localization);
+        var refresh = cache.RefreshAsync(force: true);
+        await provider.RequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(localization.GetString("overview.loading"), Assert.IsType<ListItem>(Assert.Single(overview.GetItems())).Subtitle);
+        Assert.Equal(localization.GetString("details.loading"), Assert.IsType<ListItem>(Assert.Single(details.GetItems())).Subtitle);
+        Assert.Equal(localization.GetString("status.refreshingSubtitle"), dock.Subtitle);
+
+        provider.Complete();
+        await refresh;
+    }
+
+    [Fact]
+    public async Task OverviewDetailsStripQueryAndFragmentFromRelativeSources()
+    {
+        using var cache = new UsageSnapshotCache(new SnapshotProvider(
+            DateTimeOffset.UtcNow,
+            source: "usage.json?api_key=secret#session"));
+        await cache.RefreshAsync(force: true);
+        using var details = new TokensLimitsPage(cache);
+        using var overview = new UsageOverviewPage([cache], [details]);
+        var body = Assert.IsType<Details>(Assert.IsType<ListItem>(Assert.Single(overview.GetItems())).Details).Body;
+
+        Assert.Contains("usage.json", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("session", body, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("en", UsageProviderErrorKind.MissingConfiguration, "Configuration required")]
     [InlineData("en", UsageProviderErrorKind.Authentication, "Authentication required")]
@@ -153,6 +193,107 @@ public sealed class NativeUsageUxTests
         Assert.DoesNotContain("test-token", diagnostics.Text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AzureConnectionValidationIsExplicitAndInvokableFromOverview()
+    {
+        var provider = new ValidatableProvider();
+        using var cache = new UsageSnapshotCache(provider);
+        await cache.RefreshAsync(force: true);
+        Assert.Equal(0, provider.ValidationCallCount);
+        using var page = new TokensLimitsPage(cache);
+        await page.RefreshAsync();
+        using var overview = new UsageOverviewPage([cache], [page]);
+        var row = Assert.IsType<ListItem>(Assert.Single(overview.GetItems()));
+        var validation = Assert.IsType<CommandContextItem>(
+            Assert.Single(row.MoreCommands!, command => ContextTitle(command) == "Validate connection"));
+        var detailValidation = Assert.IsType<AnonymousCommand>(
+            Assert.Single(page.GetItems(), item => item.Title == "Validate connection").Command);
+
+        Assert.Equal("Send one deployment request to check connection; may consume quota.", validation.Subtitle);
+        Assert.IsType<AnonymousCommand>(validation.Command).Invoke();
+        await provider.ValidationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, provider.ValidationCallCount);
+        Assert.IsType<AnonymousCommand>(detailValidation);
+
+    }
+
+    [Fact]
+    public async Task RetainedValidationActionsDoNothingAfterProviderIsRemoved()
+    {
+        var provider = new ValidatableProvider();
+        using var cache = new UsageSnapshotCache(provider);
+        await cache.RefreshAsync(force: true);
+        using var coordinator = new UsageRefreshCoordinator(new TestRefreshSettings(TimeSpan.FromHours(1)));
+        coordinator.UpdateProviders([cache]);
+        await provider.RegularRefreshCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using var page = new TokensLimitsPage(cache);
+        await page.RefreshAsync();
+        using var overview = new UsageOverviewPage([cache], [page], coordinator: coordinator);
+        var overviewItem = Assert.IsType<ListItem>(Assert.Single(overview.GetItems()));
+        var validation = Assert.IsType<AnonymousCommand>(Assert.IsType<CommandContextItem>(
+            Assert.Single(overviewItem.MoreCommands!, command => ContextTitle(command) == "Validate connection")).Command);
+        var detailValidation = Assert.IsType<AnonymousCommand>(
+            Assert.Single(page.GetItems(), item => item.Title == "Validate connection").Command);
+
+        coordinator.UpdateProviders([]);
+        page.SetActive(false);
+        validation.Invoke();
+        detailValidation.Invoke();
+        Assert.Equal(0, provider.ValidationCallCount);
+    }
+
+    [Fact]
+    public async Task ProviderWithoutValidationCapabilityHasNoValidationAction()
+    {
+        var provider = new CountingProvider();
+        using var cache = new UsageSnapshotCache(provider);
+        await cache.RefreshAsync(force: true);
+        using var page = new TokensLimitsPage(cache);
+        using var overview = new UsageOverviewPage([cache], [page]);
+        await page.RefreshAsync();
+        var row = Assert.IsType<ListItem>(Assert.Single(overview.GetItems()));
+
+        Assert.DoesNotContain(row.MoreCommands!, command => ContextTitle(command) == "Validate connection");
+        Assert.DoesNotContain(page.GetItems(), item => item.Title == "Validate connection");
+    }
+
+    [Fact]
+    public async Task DetailsShowStaleAndRefreshingTogetherWhileRetainingSnapshot()
+    {
+        var provider = new StateSourceProvider(new UsageProviderState(
+            CreateSnapshot(DateTimeOffset.UtcNow),
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            DateTimeOffset.UtcNow,
+            IsRefreshing: true,
+            ErrorKind: UsageProviderErrorKind.Network));
+        using var page = new TokensLimitsPage(provider);
+        provider.Publish();
+
+        var item = Assert.IsType<ListItem>(Assert.Single(page.GetItems(), candidate => candidate.Title == "Last updated"));
+        var body = Assert.IsType<Details>(item.Details).Body;
+        Assert.Contains("Stale", body, StringComparison.Ordinal);
+        Assert.Contains("Refreshing", body, StringComparison.Ordinal);
+        Assert.Contains("Network error", body, StringComparison.Ordinal);
+
+    }
+
+    [Fact]
+    public void EmptyOverviewUpdatesItsLocalizedContentWhenLanguageChanges()
+    {
+        using var userDirectory = new TestDirectory();
+        var localization = new JsonLocalizationService(
+            Path.Combine(AppContext.BaseDirectory, "lang"),
+            userDirectory.Path,
+            "en");
+        using var overview = new UsageOverviewPage([], [], localization: localization);
+        Assert.Equal("No providers enabled", Assert.IsType<ListItem>(Assert.Single(overview.GetItems())).Title);
+
+        localization.ApplyPreference("ru");
+
+        Assert.Equal("Нет включённых провайдеров", Assert.IsType<ListItem>(Assert.Single(overview.GetItems())).Title);
+    }
+
     private sealed class CountingProvider : IUsageProvider
     {
         private int _callCount;
@@ -183,6 +324,68 @@ public sealed class NativeUsageUxTests
 
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(CreateSnapshot(fetchedAt, plan, source));
+    }
+
+    private sealed class ValidatableProvider : IUsageProvider, IUsageProviderConnectionValidator
+    {
+        private int _validationCallCount;
+
+        public UsageProviderDescriptor Descriptor { get; } = new("azure-openai", "Azure OpenAI");
+        public bool SupportsConnectionValidation => true;
+        public TaskCompletionSource ValidationStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource RegularRefreshCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int ValidationCallCount => Volatile.Read(ref _validationCallCount);
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            RegularRefreshCompleted.TrySetResult();
+            return Task.FromResult(CreateSnapshot(DateTimeOffset.UtcNow));
+        }
+
+        public Task<UsageSnapshot> ValidateConnectionAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _validationCallCount);
+            ValidationStarted.TrySetResult();
+            return Task.FromResult(CreateSnapshot(DateTimeOffset.UtcNow) with
+            {
+                Metrics = [new UsageMetric("connectionStatus", "validated")],
+            });
+        }
+    }
+
+    private sealed class BlockingProvider : IUsageProvider
+    {
+        private readonly TaskCompletionSource<UsageSnapshot> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public UsageProviderDescriptor Descriptor { get; } = new("ux-test", "UX Test");
+        public TaskCompletionSource RequestStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            RequestStarted.TrySetResult();
+            return _result.Task;
+        }
+
+        public void Complete() => _result.TrySetResult(CreateSnapshot(DateTimeOffset.UtcNow));
+    }
+
+    private sealed class StateSourceProvider(UsageProviderState state) : IUsageProviderStateSource
+    {
+        public UsageProviderDescriptor Descriptor { get; } = new("ux-test", "UX Test");
+        public UsageProviderState State { get; private set; } = state;
+        public event EventHandler? StateChanged;
+
+        public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(State.Snapshot!);
+        public bool TryGetSnapshot(out UsageSnapshot snapshot) { snapshot = State.Snapshot!; return true; }
+        public void Invalidate() { }
+        public Task RefreshAsync(bool force = false, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public void Publish() => StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private sealed class TestRefreshSettings(TimeSpan refreshInterval) : IUsageRefreshSettings
+    {
+        public TimeSpan RefreshInterval { get; } = refreshInterval;
+        public event EventHandler? Changed { add { } remove { } }
     }
 
     private sealed class FailureProvider(UsageProviderErrorKind errorKind) : IUsageProvider

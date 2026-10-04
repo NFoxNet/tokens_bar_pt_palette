@@ -39,6 +39,8 @@ public static class LocalizationKeyCatalog
         "action.openDashboardSubtitle",
         "action.copyDiagnostics",
         "action.copyDiagnosticsSubtitle",
+        "action.validateConnection",
+        "action.validateConnectionSubtitle",
         "status.nextStep.configure",
         "status.nextStep.authentication",
         "status.nextStep.rateLimitedWithDelay",

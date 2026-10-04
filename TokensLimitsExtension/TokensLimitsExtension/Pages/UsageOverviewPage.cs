@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -8,6 +9,7 @@ using System.Threading.Tasks;
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using TokensLimitsExtension.Core.Services;
+using TokensLimitsExtension.Core.Providers;
 
 namespace TokensLimitsExtension;
 
@@ -271,15 +273,24 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     {
         var sources = source
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(part => Uri.TryCreate(part, UriKind.Absolute, out var uri)
-                ? uri.IsFile
-                    ? Path.GetFileName(uri.LocalPath)
-                    : new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.GetLeftPart(UriPartial.Path)
-                : part)
+            .Select(FormatSafeSourcePart)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var formatted = string.Join(", ", sources);
         return formatted.Length <= 256 ? formatted : string.Concat(formatted.AsSpan(0, 253), "…");
+    }
+
+    private static string FormatSafeSourcePart(string part)
+    {
+        if (Uri.TryCreate(part, UriKind.Absolute, out var uri))
+        {
+            return uri.IsFile
+                ? Path.GetFileName(uri.LocalPath)
+                : new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.GetLeftPart(UriPartial.Path);
+        }
+
+        var suffixIndex = part.IndexOfAny(['?', '#']);
+        return suffixIndex >= 0 ? part[..suffixIndex] : part;
     }
 
     private IContextItem[] CreateMoreCommands(UsageSnapshotCache cache, UsageProviderState state)
@@ -300,6 +311,15 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
             });
         }
 
+        if (cache.SupportsConnectionValidation)
+        {
+            commands.Add(new CommandContextItem(new AnonymousCommand(() => _ = ValidateConnectionAsync(cache)))
+            {
+                Title = _localization.GetString("action.validateConnection", "Validate connection"),
+                Subtitle = _localization.GetString("action.validateConnectionSubtitle", "Send one deployment request to check connection; may consume quota."),
+            });
+        }
+
         commands.Add(new CommandContextItem(new CopyTextCommand(BuildSafeDiagnostics(cache, state)))
         {
             Title = _localization.GetString("action.copyDiagnostics", "Copy safe diagnostics"),
@@ -312,6 +332,24 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         if (Volatile.Read(ref _disposed) != 0) return;
         if (_coordinator is not null) await _coordinator.RefreshProviderAsync(cache, force: true).ConfigureAwait(false);
         else await cache.RefreshAsync(force: true).ConfigureAwait(false);
+    }
+
+    private async Task ValidateConnectionAsync(UsageSnapshotCache cache)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        try
+        {
+            if (_coordinator is not null) await _coordinator.ValidateProviderConnectionAsync(cache).ConfigureAwait(false);
+            else await cache.ValidateConnectionAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception) when (exception is UsageProviderConfigurationException
+            or UsageProviderRequestException
+            or TimeoutException
+            or System.Net.Http.HttpRequestException)
+        {
+            Debug.WriteLine($"[TokensLimits] Connection validation failed ({exception.GetType().Name}); provider state was updated.");
+        }
     }
 
     private static string BuildSafeDiagnostics(UsageSnapshotCache cache, UsageProviderState state)

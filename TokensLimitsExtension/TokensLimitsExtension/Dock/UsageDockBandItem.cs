@@ -171,7 +171,13 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
                 Subtitle = DockSubtitle;
             }
         }
-        else if (!state.IsRefreshing) ApplyUnavailable(state);
+        else if (state.IsRefreshing)
+        {
+            Title = _provider.Descriptor.DisplayName;
+            DockSubtitle = _localization.GetString("status.refreshingSubtitle", "Fetching the latest provider data.");
+            Subtitle = DockSubtitle;
+        }
+        else ApplyUnavailable(state);
     }
     private void ApplySnapshot(UsageSnapshot snapshot) { if (IsDisposed || !IsActive) return; Title = snapshot.ProviderDisplayName; DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization); Subtitle = DockSubtitle; }
     private void ApplyUnavailable(UsageProviderState? state = null)

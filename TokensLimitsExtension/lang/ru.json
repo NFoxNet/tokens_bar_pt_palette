@@ -27,6 +27,8 @@
     "action.openDashboardSubtitle": "Открыть доверенный сайт провайдера.",
     "action.copyDiagnostics": "Скопировать безопасную диагностику",
     "action.copyDiagnosticsSubtitle": "Скопировать статус без credentials.",
+    "action.validateConnection": "Проверить подключение",
+    "action.validateConnectionSubtitle": "Один запрос к deployment для проверки подключения; может расходовать квоту.",
     "status.nextStep.configure": "Откройте настройки расширения и задайте параметры провайдера.",
     "status.nextStep.authentication": "Проверьте учётные данные или войдите снова.",
     "status.nextStep.rateLimitedWithDelay": "Подождите {0}, затем повторите обновление.",

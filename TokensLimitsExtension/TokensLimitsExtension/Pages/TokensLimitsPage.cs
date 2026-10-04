@@ -275,11 +275,15 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
 
     private string CreateDetailsBody(string title, string subtitle, UsageSnapshot snapshot, UsageProviderState? state)
     {
-        var status = state?.IsRefreshing == true
-            ? _localization.GetString("status.refreshing", "Refreshing…")
-            : state?.IsStale == true
-                ? GetStatusSubtitle(state)
-                : _localization.GetString("status.ready", "Available");
+        var statusParts = new List<string>();
+        if (state?.IsStale == true)
+        {
+            statusParts.Add(_localization.GetString("status.stale", "Stale"));
+            statusParts.Add(GetStatusSubtitle(state));
+        }
+        if (state?.IsRefreshing == true) statusParts.Add(_localization.GetString("status.refreshing", "Refreshing…"));
+        if (statusParts.Count == 0) statusParts.Add(_localization.GetString("status.ready", "Available"));
+        var status = string.Join(" · ", statusParts);
         var lines = new List<string>
         {
             $"**{EscapeDetailsText(title)}**",
@@ -332,6 +336,15 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             Subtitle = _localization.GetString("action.refreshSubtitle", "Fetch the latest provider snapshot."),
         };
 
+        if (_stateSource is UsageSnapshotCache { SupportsConnectionValidation: true } cache)
+        {
+            yield return new ListItem(new AnonymousCommand(() => _ = ValidateConnectionAsync(cache)))
+            {
+                Title = _localization.GetString("action.validateConnection", "Validate connection"),
+                Subtitle = _localization.GetString("action.validateConnectionSubtitle", "Send one deployment request to check connection; may consume quota."),
+            };
+        }
+
         if (Uri.TryCreate(_usageProvider.Descriptor.DashboardUrl, UriKind.Absolute, out var dashboardUrl)
             && dashboardUrl.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
@@ -347,6 +360,24 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
             Title = _localization.GetString("action.copyDiagnostics", "Copy safe diagnostics"),
             Subtitle = _localization.GetString("action.copyDiagnosticsSubtitle", "Copy status without credentials."),
         };
+    }
+
+    private async Task ValidateConnectionAsync(UsageSnapshotCache cache)
+    {
+        if (IsDisposed || !IsActive) return;
+        try
+        {
+            if (_coordinator is not null) await _coordinator.ValidateProviderConnectionAsync(cache).ConfigureAwait(false);
+            else await cache.ValidateConnectionAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception) when (exception is UsageProviderConfigurationException
+            or UsageProviderRequestException
+            or TimeoutException
+            or System.Net.Http.HttpRequestException)
+        {
+            _logger($"[TokensLimits] Connection validation failed ({exception.GetType().Name}); provider state was updated.");
+        }
     }
 
     private string BuildSafeDiagnostics(UsageProviderState? state)
