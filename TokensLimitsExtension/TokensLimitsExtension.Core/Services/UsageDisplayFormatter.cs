@@ -14,6 +14,8 @@ public static class UsageDisplayFormatter
             "tokens5h" => localization.GetString("metrics.tokens5h", metric.Name),
             "tokens7d" => localization.GetString("metrics.tokens7d", metric.Name),
             "totalbalance" => localization.GetString("metrics.totalBalance", metric.Name),
+            "quotaunavailable" => localization.GetString("metrics.quotaUnavailable", "Quota unavailable"),
+            "connectionstatus" => localization.GetString("metrics.connectionStatus", "Connection status"),
             _ => metric.Name,
         };
     }
@@ -208,7 +210,8 @@ public static class UsageDisplayFormatter
         }
 
         var culture = localization?.Culture ?? CultureInfo.InvariantCulture;
-        return $"{TrimMetricValue(name)}: {TrimMetricValue(FormatMetric(metric, culture))}";
+        var value = localization is null ? FormatMetric(metric, culture) : FormatMetric(metric, localization);
+        return $"{TrimMetricValue(name)}: {TrimMetricValue(value)}";
     }
 
     private static string FormatDockWindow(UsageWindow window, bool isPrimary, ILocalizationService? localization)
@@ -265,5 +268,30 @@ public static class UsageDisplayFormatter
         }
 
         return metric.Unit is null ? metric.Value : $"{metric.Value} {metric.Unit}";
+    }
+
+    public static string FormatMetric(UsageMetric metric, ILocalizationService localization)
+    {
+        ArgumentNullException.ThrowIfNull(metric);
+        ArgumentNullException.ThrowIfNull(localization);
+
+        if (metric.NumericValue is decimal)
+        {
+            return FormatMetric(metric, localization.Culture);
+        }
+
+        if (string.Equals(metric.SemanticKey, "connectionStatus", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(metric.Value, "validated", StringComparison.OrdinalIgnoreCase))
+        {
+            return localization.GetString("status.connection.validated", "Connection validated");
+        }
+
+        if (string.Equals(metric.SemanticKey, "quotaUnavailable", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(metric.Value, "Unavailable", StringComparison.OrdinalIgnoreCase))
+        {
+            return localization.GetString("status.quotaUnavailable", "Quota unavailable");
+        }
+
+        return FormatMetric(metric, localization.Culture);
     }
 }

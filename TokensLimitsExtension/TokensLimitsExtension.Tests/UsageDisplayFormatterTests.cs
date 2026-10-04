@@ -132,6 +132,59 @@ public sealed class UsageDisplayFormatterTests
         Assert.Equal("Оценка: Total balance: 10 USD", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, Localization));
     }
 
+    [Theory]
+    [InlineData("quotaUnavailable", "Unavailable", "Quota unavailable", "Квота недоступна")]
+    [InlineData("connectionStatus", "validated", "Connection validated", "Подключение проверено")]
+    public void FormatMetricLocalizesAzureSemanticValues(
+        string semanticKey,
+        string value,
+        string expectedEnglish,
+        string expectedRussian)
+    {
+        var metric = Metric("Provider value", value, null, semanticKey);
+        var english = new TestLocalizationService(CultureInfo.GetCultureInfo("en-US"));
+        var russian = new TestLocalizationService(CultureInfo.GetCultureInfo("ru-RU"));
+
+        Assert.Equal(expectedEnglish, UsageDisplayFormatter.FormatMetric(metric, english));
+        Assert.Equal(expectedRussian, UsageDisplayFormatter.FormatMetric(metric, russian));
+    }
+
+    [Theory]
+    [InlineData("quotaUnavailable", "Unavailable", "Quota unavailable", "Квота недоступна")]
+    [InlineData("connectionStatus", "validated", "Connection status", "Состояние подключения")]
+    public void GetMetricNameLocalizesAzureSemanticLabels(
+        string semanticKey,
+        string value,
+        string expectedEnglish,
+        string expectedRussian)
+    {
+        var metric = Metric("Provider value", value, null, semanticKey);
+        var english = new TestLocalizationService(CultureInfo.GetCultureInfo("en-US"));
+        var russian = new TestLocalizationService(CultureInfo.GetCultureInfo("ru-RU"));
+
+        Assert.Equal(expectedEnglish, UsageDisplayFormatter.GetMetricName(metric, english));
+        Assert.Equal(expectedRussian, UsageDisplayFormatter.GetMetricName(metric, russian));
+    }
+
+    [Fact]
+    public void FormatDockBandSubtitleLocalizesAzureSemanticLabelsAndValues()
+    {
+        var snapshot = Snapshot(metrics:
+        [
+            Metric("Quota", "Unavailable", null, "quotaUnavailable"),
+            Metric("Connection", "validated", null, "connectionStatus"),
+        ]);
+        var english = new TestLocalizationService(CultureInfo.GetCultureInfo("en-US"));
+        var russian = new TestLocalizationService(CultureInfo.GetCultureInfo("ru-RU"));
+
+        Assert.Equal(
+            "Quota unavailable: Quota unavailable, Connection status: Connection validated",
+            UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, english));
+        Assert.Equal(
+            "Квота недоступна: Квота недоступна, Состояние подключения: Подключение проверено",
+            UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, russian));
+    }
+
     private static UsageSnapshot Snapshot(
         UsageWindow? primary = null,
         UsageWindow? secondary = null,
@@ -175,8 +228,14 @@ public sealed class UsageDisplayFormatterTests
                 "metrics.tokens5h" => "Tokens in 5 hours",
                 "metrics.tokens7d" => "Tokens in 7 days",
                 "metrics.totalBalance" => "Total balance",
+                "metrics.quotaUnavailable" => IsRussian ? "Квота недоступна" : "Quota unavailable",
+                "metrics.connectionStatus" => IsRussian ? "Состояние подключения" : "Connection status",
+                "status.connection.validated" => IsRussian ? "Подключение проверено" : "Connection validated",
+                "status.quotaUnavailable" => IsRussian ? "Квота недоступна" : "Quota unavailable",
                 _ => fallback ?? key,
             };
+
+        private bool IsRussian => Culture.TwoLetterISOLanguageName == "ru";
 
         public string Format(string key, params object?[] arguments)
             => string.Format(Culture, GetString(key), arguments);
