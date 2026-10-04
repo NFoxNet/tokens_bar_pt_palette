@@ -228,7 +228,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
             {
                 failures.Add(new UsageProviderRequestException(
-                    $"{endpoint.Name}: request timed out after {_requestTimeout.TotalSeconds:0.#} seconds."));
+                    $"{endpoint.Name}: request timed out after {_requestTimeout.TotalSeconds:0.#} seconds.",
+                    failureKind: UsageProviderFailureKind.Timeout));
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or XmlException or InvalidOperationException or UsageProviderRequestException or UsageProviderConfigurationException)
             {
@@ -241,12 +242,14 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return UsageJsonParser.Merge(_descriptor, snapshots);
         }
 
-        var lastRequestFailure = failures.OfType<UsageProviderRequestException>().LastOrDefault();
+        var selectedFailure = SelectAggregateFailure(failures);
+        var selectedRequestFailure = selectedFailure as UsageProviderRequestException;
         throw new UsageProviderRequestException(
             $"Не удалось получить реальные данные {_descriptor.DisplayName}: {DescribeFailures(failures)}",
-            failures.LastOrDefault(),
-            lastRequestFailure?.RetryAfter,
-            lastRequestFailure?.StatusCode);
+            selectedFailure,
+            selectedRequestFailure?.RetryAfter,
+            selectedRequestFailure?.StatusCode,
+            GetFailureKind(selectedFailure));
     }
 
     public void Dispose()
@@ -2989,6 +2992,47 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         => failures.Count == 0
             ? "источник не отвечает"
             : string.Join("; ", failures.Select(failure => failure.Message).Distinct(StringComparer.Ordinal));
+
+    private static Exception? SelectAggregateFailure(List<Exception> failures)
+        => failures
+            .Where(failure => failure is not UsageProviderConfigurationException)
+            .OrderBy(GetFailurePriority)
+            .FirstOrDefault()
+            ?? failures.LastOrDefault();
+
+    private static int GetFailurePriority(Exception? failure)
+        => GetFailureKind(failure) switch
+        {
+            UsageProviderFailureKind.Authentication => 0,
+            UsageProviderFailureKind.RateLimited => 1,
+            UsageProviderFailureKind.Network => 2,
+            UsageProviderFailureKind.Timeout => 3,
+            UsageProviderFailureKind.UnsupportedResponse => 4,
+            _ => 5,
+        };
+
+    private static UsageProviderFailureKind GetFailureKind(Exception? failure)
+    {
+        if (failure is UsageProviderRequestException requestFailure)
+        {
+            return requestFailure.StatusCode switch
+            {
+                HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => UsageProviderFailureKind.Authentication,
+                HttpStatusCode.TooManyRequests => UsageProviderFailureKind.RateLimited,
+                _ when requestFailure.FailureKind != UsageProviderFailureKind.Unknown => requestFailure.FailureKind,
+                _ => UsageProviderFailureKind.UnsupportedResponse,
+            };
+        }
+
+        return failure switch
+        {
+            UsageProviderConfigurationException => UsageProviderFailureKind.Unknown,
+            HttpRequestException => UsageProviderFailureKind.Network,
+            TimeoutException or TaskCanceledException => UsageProviderFailureKind.Timeout,
+            JsonException or XmlException or InvalidOperationException => UsageProviderFailureKind.UnsupportedResponse,
+            _ => UsageProviderFailureKind.Unknown,
+        };
+    }
 
     private async Task<UsageSnapshot> ExecuteWithDeadlineAsync(
         Func<CancellationToken, Task<UsageSnapshot>> operation,
