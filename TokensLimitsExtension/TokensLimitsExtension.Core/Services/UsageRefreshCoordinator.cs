@@ -102,8 +102,15 @@ public sealed class UsageRefreshCoordinator : IDisposable
             }
 
             var now = _timeProvider.GetUtcNow();
-            var cooldownUntil = provider.State.RetryAfterUntil;
-            if (_cooldownUntil.TryGetValue(provider.Descriptor.Id, out var scheduledCooldownUntil)
+            var providerState = provider.State;
+            var cooldownUntil = providerState.RetryAfterUntil;
+            if (providerState.ErrorKind == UsageProviderErrorKind.None
+                && !providerState.IsRefreshing
+                && cooldownUntil is null)
+            {
+                _cooldownUntil.Remove(provider.Descriptor.Id);
+            }
+            else if (_cooldownUntil.TryGetValue(provider.Descriptor.Id, out var scheduledCooldownUntil)
                 && (cooldownUntil is null || scheduledCooldownUntil > cooldownUntil))
             {
                 cooldownUntil = scheduledCooldownUntil;

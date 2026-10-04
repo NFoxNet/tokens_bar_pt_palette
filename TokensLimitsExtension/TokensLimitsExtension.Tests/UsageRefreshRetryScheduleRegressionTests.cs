@@ -64,6 +64,28 @@ public sealed class UsageRefreshRetryScheduleRegressionTests
         Assert.Equal(TimeSpan.FromMinutes(1), timer.DueTime);
     }
 
+    [Fact]
+    public async Task CacheClearAllowsSameProviderToRefreshDuringPreviousCooldown()
+    {
+        var start = new DateTimeOffset(2026, 10, 5, 12, 0, 0, TimeSpan.Zero);
+        var time = new ManualTimeProvider(start);
+        var settings = new TestSettings(TimeSpan.FromMinutes(1));
+        var provider = new RateLimitedProvider();
+        using var cache = new UsageSnapshotCache(provider, settings, time);
+        using var coordinator = new UsageRefreshCoordinator(settings, time);
+
+        coordinator.UpdateProviders([cache]);
+        await provider.FirstCall.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var timer = await time.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(TimeSpan.FromSeconds(120), timer.DueTime);
+
+        cache.Clear();
+        await coordinator.RefreshProviderAsync(cache);
+
+        await provider.SecondCall.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, provider.CallCount);
+    }
+
     private sealed class TestSettings(TimeSpan refreshInterval) : IUsageRefreshSettings
     {
         public TimeSpan RefreshInterval { get; private set; } = refreshInterval;
