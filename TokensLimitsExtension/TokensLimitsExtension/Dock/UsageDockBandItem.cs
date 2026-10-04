@@ -16,6 +16,10 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     private readonly IUsageProviderStateSource? _stateSource;
     private readonly UsageRefreshCoordinator? _coordinator;
     private readonly ILocalizationService _localization;
+    private readonly CopyTextCommand _diagnosticsCommand;
+    private readonly CommandContextItem _refreshMoreCommand;
+    private readonly CommandContextItem? _dashboardMoreCommand;
+    private readonly CommandContextItem _diagnosticsMoreCommand;
     private readonly object _lifecycleGate = new();
     private int _isActive = 1;
     private int _disposed;
@@ -31,6 +35,21 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         Subtitle = _localization.GetString("details.loading", "Loading…");
         DockSubtitle = Subtitle;
         Icon = ProviderIconCatalog.For(_provider.Descriptor.Id);
+        _diagnosticsCommand = new CopyTextCommand(BuildSafeDiagnostics(_stateSource?.State));
+        _refreshMoreCommand = new CommandContextItem(new AnonymousCommand(() => _ = ManualRefreshAsync()));
+        _diagnosticsMoreCommand = new CommandContextItem(_diagnosticsCommand);
+        _dashboardMoreCommand = Uri.TryCreate(_provider.Descriptor.DashboardUrl, UriKind.Absolute, out var dashboardUrl)
+            && dashboardUrl.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                ? new CommandContextItem(new OpenUrlCommand(dashboardUrl.AbsoluteUri))
+                : null;
+        UpdateMoreCommandLabels();
+        var moreCommands = new System.Collections.Generic.List<IContextItem>
+        {
+            _refreshMoreCommand,
+        };
+        if (_dashboardMoreCommand is not null) moreCommands.Add(_dashboardMoreCommand);
+        moreCommands.Add(_diagnosticsMoreCommand);
+        MoreCommands = moreCommands.ToArray();
         _localization.LanguageChanged += LocalizationOnLanguageChanged;
         if (_stateSource is not null) _stateSource.StateChanged += StateSourceOnStateChanged;
         _ = RefreshAsync();
@@ -51,6 +70,20 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         }
         try { ApplySnapshot(await _provider.GetUsageSnapshotAsync(cancellationToken).ConfigureAwait(false)); }
         catch { ApplyUnavailable(); }
+    }
+
+    private async Task ManualRefreshAsync()
+    {
+        if (IsDisposed || !IsActive) return;
+        if (_stateSource is not null)
+        {
+            if (_coordinator is not null) await _coordinator.RefreshProviderAsync(_stateSource, force: true).ConfigureAwait(false);
+            else await _stateSource.RefreshAsync(force: true).ConfigureAwait(false);
+            ApplyState(_stateSource.State);
+            return;
+        }
+
+        await RefreshAsync().ConfigureAwait(false);
     }
     public void Dispose()
     {
@@ -109,6 +142,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
     {
         if (!IsActive) return;
+        UpdateMoreCommandLabels();
         if (_stateSource is not null)
         {
             ApplyState(_stateSource.State);
@@ -117,16 +151,33 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     private void ApplyState(UsageProviderState state)
     {
         if (IsDisposed || !IsActive) return;
+        UpdateDiagnostics();
         if (state.Snapshot is { } snapshot)
         {
             ApplySnapshot(snapshot);
+            var statuses = new System.Collections.Generic.List<string>();
+            if (state.IsRefreshing)
+            {
+                statuses.Add(_localization.GetString("status.refreshing", "Refreshing…"));
+            }
             if (state.IsStale)
             {
-                DockSubtitle = $"{DockSubtitle} · {GetStatusWarning(state)}";
+                statuses.Add(GetStatusWarning(state));
+            }
+
+            if (statuses.Count > 0)
+            {
+                DockSubtitle = string.Concat(DockSubtitle, " · ", string.Join(" · ", statuses));
                 Subtitle = DockSubtitle;
             }
         }
-        else if (!state.IsRefreshing) ApplyUnavailable(state);
+        else if (state.IsRefreshing)
+        {
+            Title = _provider.Descriptor.DisplayName;
+            DockSubtitle = _localization.GetString("status.refreshingSubtitle", "Fetching the latest provider data.");
+            Subtitle = DockSubtitle;
+        }
+        else ApplyUnavailable(state);
     }
     private void ApplySnapshot(UsageSnapshot snapshot) { if (IsDisposed || !IsActive) return; Title = snapshot.ProviderDisplayName; DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization); Subtitle = DockSubtitle; }
     private void ApplyUnavailable(UsageProviderState? state = null)
@@ -136,6 +187,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         var suffix = state is { ErrorKind: not UsageProviderErrorKind.None } ? $" · {GetStatusWarning(state)}" : string.Empty;
         Subtitle = unavailable + suffix;
         DockSubtitle = Subtitle;
+        UpdateDiagnostics();
     }
 
     private string GetStatusWarning(UsageProviderState state)
@@ -144,8 +196,35 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
             UsageProviderErrorKind.MissingConfiguration => _localization.GetString("status.dock.configure", "Configure"),
             UsageProviderErrorKind.Authentication => _localization.GetString("status.dock.authentication", "Sign in"),
             UsageProviderErrorKind.RateLimited => _localization.GetString("status.dock.rateLimited", "Rate limited"),
-            UsageProviderErrorKind.Timeout or UsageProviderErrorKind.Network => _localization.GetString("status.dock.network", "Offline"),
+            UsageProviderErrorKind.Timeout => _localization.GetString("status.dock.timeout", "Timed out"),
+            UsageProviderErrorKind.Network => _localization.GetString("status.dock.network", "Offline"),
             UsageProviderErrorKind.UnsupportedResponse => _localization.GetString("status.dock.unsupported", "Unsupported response"),
             _ => _localization.GetString("status.stale", "Stale"),
         };
+
+    private void UpdateDiagnostics()
+    {
+        if (!IsDisposed) _diagnosticsCommand.Text = BuildSafeDiagnostics(_stateSource?.State);
+    }
+
+    private void UpdateMoreCommandLabels()
+    {
+        _refreshMoreCommand.Title = _localization.GetString("action.refresh", "Refresh");
+        _refreshMoreCommand.Subtitle = _localization.GetString("action.refreshSubtitle", "Fetch the latest provider snapshot.");
+        if (_dashboardMoreCommand is not null)
+        {
+            _dashboardMoreCommand.Title = _localization.GetString("action.openDashboard", "Open provider dashboard");
+            _dashboardMoreCommand.Subtitle = _localization.GetString("action.openDashboardSubtitle", "Open the trusted provider website.");
+        }
+
+        _diagnosticsMoreCommand.Title = _localization.GetString("action.copyDiagnostics", "Copy safe diagnostics");
+        _diagnosticsMoreCommand.Subtitle = _localization.GetString("action.copyDiagnosticsSubtitle", "Copy status without credentials.");
+    }
+
+    private string BuildSafeDiagnostics(UsageProviderState? state)
+        => string.Join(Environment.NewLine,
+            $"provider={_provider.Descriptor.Id}",
+            $"error={state?.ErrorKind.ToString() ?? "Unknown"}",
+            $"stale={state?.IsStale ?? false}",
+            $"retry_after_until={state?.RetryAfterUntil?.ToUniversalTime().ToString("O") ?? "none"}");
 }

@@ -1,0 +1,38 @@
+{
+  "Commit": "2e6314a04d251f432ed182871831a71a34d97e3f",
+  "SyntheticOnly": true,
+  "ManualRefresh": {
+    "InitialCalls": 1,
+    "AfterAction": 1,
+    "AfterForce": 2
+  },
+  "Cooldown": {
+    "InitialCalls": 1,
+    "AfterForce": 1,
+    "AfterDefault": 2,
+    "RetryAfterSeconds": 120.0
+  },
+  "WindowLabel": {
+    "ActualWindow": "30д",
+    "Dock": "5ч\\70%, 7д\\—"
+  },
+  "EstimatedBalance": {
+    "IsEstimate": true,
+    "Dock": "Total balance: 12 USD",
+    "CurrentProviderCombinationConfirmed": false
+  },
+  "Timeouts": [
+    {
+      "Provider": "aiand",
+      "ActualKind": "UnsupportedResponse",
+      "DesiredTransportKind": "Timeout",
+      "StubHttp": true
+    },
+    {
+      "Provider": "deepseek",
+      "ActualKind": "MissingConfiguration",
+      "DesiredTransportKind": "Timeout",
+      "StubHttp": true
+    }
+  ]
+}

@@ -16,8 +16,12 @@ namespace TokensLimitsExtension.Core.Providers;
 /// and parsing are deliberately shared, while endpoint URLs and response fields
 /// remain data-driven so adding a provider does not touch the Dock or pages.
 /// </summary>
-public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
+public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConnectionValidator, IDisposable
 {
+    public bool SupportsConnectionValidation => string.Equals(
+        _descriptor.Id,
+        "azureopenai",
+        StringComparison.OrdinalIgnoreCase);
     private const string ProductUserAgent = "TokensLimitsExtension";
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan MaximumCancellableTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
@@ -77,6 +81,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (_descriptor.Id.Equals("azureopenai", StringComparison.OrdinalIgnoreCase))
+        {
+            return CreateAzureQuotaUnavailableSnapshot();
+        }
 
         if (_descriptor.Id.Equals("jetbrains", StringComparison.OrdinalIgnoreCase))
         {
@@ -228,7 +237,8 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
             {
                 failures.Add(new UsageProviderRequestException(
-                    $"{endpoint.Name}: request timed out after {_requestTimeout.TotalSeconds:0.#} seconds."));
+                    $"{endpoint.Name}: request timed out after {_requestTimeout.TotalSeconds:0.#} seconds.",
+                    failureKind: UsageProviderFailureKind.Timeout));
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or XmlException or InvalidOperationException or UsageProviderRequestException or UsageProviderConfigurationException)
             {
@@ -241,18 +251,83 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             return UsageJsonParser.Merge(_descriptor, snapshots);
         }
 
-        var lastRequestFailure = failures.OfType<UsageProviderRequestException>().LastOrDefault();
+        var selectedFailure = SelectAggregateFailure(failures);
+        var selectedRequestFailure = selectedFailure as UsageProviderRequestException;
+        var effectiveRetryAfter = GetEffectiveRetryAfter(failures);
         throw new UsageProviderRequestException(
             $"Не удалось получить реальные данные {_descriptor.DisplayName}: {DescribeFailures(failures)}",
-            failures.LastOrDefault(),
-            lastRequestFailure?.RetryAfter,
-            lastRequestFailure?.StatusCode);
+            selectedFailure,
+            effectiveRetryAfter,
+            selectedRequestFailure?.StatusCode,
+            GetFailureKind(selectedFailure));
     }
 
     public void Dispose()
     {
         Interlocked.Exchange(ref _disposed, 1);
         GC.SuppressFinalize(this);
+    }
+
+    public Task<UsageSnapshot> ValidateConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_descriptor.Id.Equals("azureopenai", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Connection validation is not supported for {_descriptor.DisplayName}.");
+        }
+
+        return ExecuteWithDeadlineAsync(ValidateAzureOpenAiConnectionAsync, cancellationToken);
+    }
+
+    private UsageSnapshot CreateAzureQuotaUnavailableSnapshot()
+        => new(
+            _descriptor.Id,
+            _descriptor.DisplayName,
+            null,
+            null,
+            null,
+            false)
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Source = "metadata",
+            Metrics = [new UsageMetric("Quota", "Unavailable", SemanticKey: "quotaUnavailable")],
+        };
+
+    private async Task<UsageSnapshot> ValidateAzureOpenAiConnectionAsync(CancellationToken cancellationToken)
+    {
+        var endpoint = UsageProviderEndpointCatalog.For(_descriptor.Id)
+            .Single(candidate => candidate.Name.Equals("validation", StringComparison.OrdinalIgnoreCase));
+        var credential = ResolveCredential();
+        if (string.IsNullOrWhiteSpace(credential.ApiKey))
+        {
+            throw new UsageProviderConfigurationException("Для Azure OpenAI не задан API-ключ.");
+        }
+
+        using var request = CreateRequest(endpoint, credential);
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw CreateHttpFailure("Azure OpenAI connection validation", response);
+        }
+
+        _ = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        _logger("[TokensLimits] Provider azureopenai: connection validation succeeded.");
+        return new UsageSnapshot(
+            _descriptor.Id,
+            _descriptor.DisplayName,
+            null,
+            null,
+            null,
+            false)
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Source = "manual connection validation",
+            Metrics = [new UsageMetric("Connection status", "validated", SemanticKey: "connectionStatus")],
+        };
     }
 
     private static TimeSpan? GetRetryAfter(RetryConditionHeaderValue? retryAfter)
@@ -2989,6 +3064,65 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
         => failures.Count == 0
             ? "источник не отвечает"
             : string.Join("; ", failures.Select(failure => failure.Message).Distinct(StringComparer.Ordinal));
+
+    private static Exception? SelectAggregateFailure(List<Exception> failures)
+        => failures
+            .Where(failure => failure is not UsageProviderConfigurationException)
+            .OrderBy(GetFailurePriority)
+            .FirstOrDefault()
+            ?? failures.LastOrDefault();
+
+    private static TimeSpan? GetEffectiveRetryAfter(List<Exception> failures)
+    {
+        TimeSpan? effectiveRetryAfter = null;
+        foreach (var requestFailure in failures.OfType<UsageProviderRequestException>())
+        {
+            // Keep the longest positive delay advertised by any attempted endpoint.
+            // This can conservatively add time spent on later endpoints for delta or date headers.
+            if (requestFailure.RetryAfter is { } retryAfter
+                && retryAfter > TimeSpan.Zero
+                && (effectiveRetryAfter is null || retryAfter > effectiveRetryAfter.Value))
+            {
+                effectiveRetryAfter = retryAfter;
+            }
+        }
+
+        return effectiveRetryAfter;
+    }
+
+    private static int GetFailurePriority(Exception? failure)
+        => GetFailureKind(failure) switch
+        {
+            UsageProviderFailureKind.Authentication => 0,
+            UsageProviderFailureKind.RateLimited => 1,
+            UsageProviderFailureKind.Network => 2,
+            UsageProviderFailureKind.Timeout => 3,
+            UsageProviderFailureKind.UnsupportedResponse => 4,
+            _ => 5,
+        };
+
+    private static UsageProviderFailureKind GetFailureKind(Exception? failure)
+    {
+        if (failure is UsageProviderRequestException requestFailure)
+        {
+            return requestFailure.StatusCode switch
+            {
+                HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => UsageProviderFailureKind.Authentication,
+                HttpStatusCode.TooManyRequests => UsageProviderFailureKind.RateLimited,
+                _ when requestFailure.FailureKind != UsageProviderFailureKind.Unknown => requestFailure.FailureKind,
+                _ => UsageProviderFailureKind.UnsupportedResponse,
+            };
+        }
+
+        return failure switch
+        {
+            UsageProviderConfigurationException => UsageProviderFailureKind.Unknown,
+            HttpRequestException => UsageProviderFailureKind.Network,
+            TimeoutException or TaskCanceledException => UsageProviderFailureKind.Timeout,
+            JsonException or XmlException or InvalidOperationException => UsageProviderFailureKind.UnsupportedResponse,
+            _ => UsageProviderFailureKind.Unknown,
+        };
+    }
 
     private async Task<UsageSnapshot> ExecuteWithDeadlineAsync(
         Func<CancellationToken, Task<UsageSnapshot>> operation,

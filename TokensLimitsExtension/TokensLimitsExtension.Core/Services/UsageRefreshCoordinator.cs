@@ -91,31 +91,71 @@ public sealed class UsageRefreshCoordinator : IDisposable
     public Task RefreshProviderAsync(IUsageProviderStateSource provider, bool force = false)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        CancellationToken token;
+        if (!TryBeginProviderOperation(provider, out var token))
+        {
+            return Task.CompletedTask;
+        }
+
+        return RefreshProviderSafelyAsync(provider, force, token);
+    }
+
+    public Task ValidateProviderConnectionAsync(
+        UsageSnapshotCache provider,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        if (!provider.SupportsConnectionValidation)
+        {
+            throw new InvalidOperationException($"Provider '{provider.Descriptor.Id}' does not support connection validation.");
+        }
+
+        if (!TryBeginProviderOperation(provider, out var providerToken))
+        {
+            return Task.CompletedTask;
+        }
+
+        return ValidateProviderConnectionSafelyAsync(provider, providerToken, cancellationToken);
+    }
+
+    private bool TryBeginProviderOperation(IUsageProviderStateSource provider, out CancellationToken token)
+    {
         lock (_gate)
         {
             if (Volatile.Read(ref _disposed) != 0
                 || !IsCurrentProviderUnsafe(provider)
                 || !_providerTokens.TryGetValue(provider.Descriptor.Id, out var source))
             {
-                return Task.CompletedTask;
+                token = default;
+                return false;
             }
 
-            if (force
-                && _cooldownUntil.TryGetValue(provider.Descriptor.Id, out var cooldownUntil))
+            var now = _timeProvider.GetUtcNow();
+            var providerState = provider.State;
+            var cooldownUntil = providerState.RetryAfterUntil;
+            if (providerState.ErrorKind == UsageProviderErrorKind.None
+                && !providerState.IsRefreshing
+                && cooldownUntil is null)
             {
-                if (cooldownUntil > _timeProvider.GetUtcNow())
-                {
-                    return Task.CompletedTask;
-                }
-
                 _cooldownUntil.Remove(provider.Descriptor.Id);
             }
+            else if (_cooldownUntil.TryGetValue(provider.Descriptor.Id, out var scheduledCooldownUntil)
+                && (cooldownUntil is null || scheduledCooldownUntil > cooldownUntil))
+            {
+                cooldownUntil = scheduledCooldownUntil;
+            }
 
+            if (cooldownUntil > now)
+            {
+                _nextRefreshAt[provider.Descriptor.Id] = cooldownUntil.Value;
+                ScheduleNearestRefreshUnsafe();
+                token = default;
+                return false;
+            }
+
+            _cooldownUntil.Remove(provider.Descriptor.Id);
             token = source.Token;
+            return true;
         }
-
-        return RefreshProviderSafelyAsync(provider, force, token);
     }
 
     public void Dispose()
@@ -178,6 +218,30 @@ public sealed class UsageRefreshCoordinator : IDisposable
         }
     }
 
+    private async Task ValidateProviderConnectionSafelyAsync(
+        UsageSnapshotCache provider,
+        CancellationToken providerToken,
+        CancellationToken cancellationToken)
+    {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(providerToken, cancellationToken);
+        try
+        {
+            await provider.ValidateConnectionAsync(linkedCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (linkedCts.IsCancellationRequested)
+        {
+            // The caller stops waiting, or the provider is no longer active.
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"[TokensLimits] coordinator validation failed for {provider.Descriptor.Id}: {exception.GetType().Name}");
+        }
+        finally
+        {
+            ScheduleAfterRefresh(provider);
+        }
+    }
+
     private void SettingsOnChanged(object? sender, EventArgs e)
     {
         if (Volatile.Read(ref _disposed) == 0)
@@ -220,6 +284,11 @@ public sealed class UsageRefreshCoordinator : IDisposable
     {
         var now = _timeProvider.GetUtcNow();
         var state = provider.State;
+        if (state.RetryAfterUntil is { } retryAfterUntil && retryAfterUntil > now)
+        {
+            return retryAfterUntil;
+        }
+
         if (state.ErrorKind == UsageProviderErrorKind.None)
         {
             _transientFailureCounts.Remove(provider.Descriptor.Id);
@@ -235,7 +304,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
         if (state.RetryAfter is { } retryAfter && retryAfter > TimeSpan.Zero)
         {
             _transientFailureCounts.Remove(provider.Descriptor.Id);
-            return now + retryAfter;
+            return state.RetryAfterUntil ?? now + retryAfter;
         }
 
         if (state.ErrorKind is UsageProviderErrorKind.Network or UsageProviderErrorKind.Timeout or UsageProviderErrorKind.RateLimited)
@@ -273,10 +342,17 @@ public sealed class UsageRefreshCoordinator : IDisposable
             var now = _timeProvider.GetUtcNow();
             foreach (var provider in _providers)
             {
-                var lastSuccess = provider.State.LastSuccessfulRefreshAt;
-                _nextRefreshAt[provider.Descriptor.Id] = lastSuccess is null
+                var state = provider.State;
+                var lastSuccess = state.LastSuccessfulRefreshAt;
+                var nextRefreshAt = lastSuccess is null
                     ? now
                     : Max(now, lastSuccess.Value + _refreshInterval);
+                if (state.RetryAfterUntil is { } retryAfterUntil && retryAfterUntil > now)
+                {
+                    nextRefreshAt = Max(nextRefreshAt, retryAfterUntil);
+                }
+
+                _nextRefreshAt[provider.Descriptor.Id] = nextRefreshAt;
             }
             ScheduleNearestRefreshUnsafe();
         }

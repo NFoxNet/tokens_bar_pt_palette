@@ -20,8 +20,6 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
     private const int MaxSessionLineCharacters = 262_144;
     private const int MaxCachedTokenEventsPerFile = 100_000;
     private readonly IReadOnlyList<string> _codexHomes;
-    private readonly long _fiveHourLimitTokens;
-    private readonly long _weeklyLimitTokens;
     private readonly TimeProvider _timeProvider;
     private readonly Action<string>? _logger;
     private readonly Action<long>? _readBytesObserver;
@@ -45,8 +43,6 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"))
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         Limits = new CodexFallbackOptions(fiveHourLimitTokens, weeklyLimitTokens);
-        _fiveHourLimitTokens = Limits.FiveHourLimitTokens;
-        _weeklyLimitTokens = Limits.WeeklyLimitTokens;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger;
         _readBytesObserver = readBytesObserver;

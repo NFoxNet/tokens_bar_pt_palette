@@ -14,6 +14,8 @@ public static class UsageDisplayFormatter
             "tokens5h" => localization.GetString("metrics.tokens5h", metric.Name),
             "tokens7d" => localization.GetString("metrics.tokens7d", metric.Name),
             "totalbalance" => localization.GetString("metrics.totalBalance", metric.Name),
+            "quotaunavailable" => localization.GetString("metrics.quotaUnavailable", "Quota unavailable"),
+            "connectionstatus" => localization.GetString("metrics.connectionStatus", "Connection status"),
             _ => metric.Name,
         };
     }
@@ -31,31 +33,42 @@ public static class UsageDisplayFormatter
 
     public static string FormatDockBandSubtitle(UsageSnapshot snapshot, ILocalizationService? localization = null)
     {
-        if (localization is null)
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var estimatePrefix = snapshot.IsEstimate
+            ? localization?.GetString("status.estimate", "Estimate: ") ?? "Оценка: "
+            : string.Empty;
+        var metrics = GetPrioritizedMetrics(snapshot.Metrics);
+        if (snapshot.PrimaryWindow is null && snapshot.SecondaryWindow is null)
         {
-            return $"5ч\\{FormatDockPercent(snapshot.PrimaryWindow)}, 7д\\{FormatDockPercent(snapshot.SecondaryWindow)}";
+            if (metrics.Length == 0)
+            {
+                return localization?.GetString("status.unavailable", "Usage unavailable") ?? "Лимиты недоступны";
+            }
+
+            var metricsToDisplay = GetMetricsForMetricsOnly(metrics);
+            return estimatePrefix + string.Join(", ", metricsToDisplay.Select(metric => FormatDockMetric(metric, localization)));
         }
 
-        var estimatePrefix = snapshot.IsEstimate ? localization.GetString("status.estimate", "Estimate: ") : string.Empty;
-        var totalBalance = snapshot.Metrics.FirstOrDefault(metric =>
+        var windows = new List<string>(2);
+        if (snapshot.PrimaryWindow is not null)
+        {
+            windows.Add(FormatDockWindow(snapshot.PrimaryWindow, isPrimary: true, localization));
+        }
+        if (snapshot.SecondaryWindow is not null)
+        {
+            windows.Add(FormatDockWindow(snapshot.SecondaryWindow, isPrimary: false, localization));
+        }
+
+        var subtitle = string.Join(", ", windows);
+        var totalBalance = metrics.FirstOrDefault(metric =>
             string.Equals(metric.SemanticKey, "totalBalance", StringComparison.OrdinalIgnoreCase));
         if (totalBalance is not null)
         {
-            return $"{localization.GetString("metrics.totalBalance", "Total balance")}: {FormatMetric(totalBalance, localization.Culture)}";
-        }
-        if (snapshot.PrimaryWindow is null
-            && snapshot.SecondaryWindow is null
-            && snapshot.Metrics.Count > 0)
-        {
-            var metrics = snapshot.Metrics
-                .Take(2)
-                .Select(metric => $"{GetMetricName(metric, localization)}: {TrimMetricValue(FormatMetric(metric, localization.Culture))}");
-            return estimatePrefix + string.Join(", ", metrics);
+            subtitle += $", {FormatDockMetric(totalBalance, localization)}";
         }
 
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{estimatePrefix}{localization.Format("time.hours", 5)}\\{FormatDockPercent(snapshot.PrimaryWindow)}, {localization.Format("time.days", 7)}\\{FormatDockPercent(snapshot.SecondaryWindow)}");
+        return estimatePrefix + subtitle;
     }
 
     public static string FormatTimeUntilReset(DateTimeOffset resetAt, DateTimeOffset now, ILocalizationService? localization = null)
@@ -119,6 +132,11 @@ public static class UsageDisplayFormatter
         }
 
         var seconds = window.LimitWindowSeconds;
+        if (seconds % 60 != 0)
+        {
+            return fallback;
+        }
+
         if (seconds % (7 * 24 * 60 * 60) == 0)
         {
             var weeks = seconds / (7 * 24 * 60 * 60);
@@ -138,6 +156,11 @@ public static class UsageDisplayFormatter
         }
 
         var seconds = window.LimitWindowSeconds;
+        if (seconds % 60 != 0)
+        {
+            return fallback;
+        }
+
         if (seconds % (7 * 24 * 60 * 60) == 0)
         {
             var weeks = seconds / (7 * 24 * 60 * 60);
@@ -159,6 +182,63 @@ public static class UsageDisplayFormatter
 
     private static string TrimMetricValue(string value)
         => value.Length <= 24 ? value : value[..24] + "…";
+
+    private static UsageMetric[] GetPrioritizedMetrics(IReadOnlyList<UsageMetric> metrics)
+        => metrics
+            .Select((metric, index) => (metric, index))
+            .OrderBy(item => GetMetricPriority(item.metric))
+            .ThenBy(item => item.index)
+            .Select(item => item.metric)
+            .ToArray();
+
+    private static int GetMetricPriority(UsageMetric metric)
+        => metric.SemanticKey?.ToLowerInvariant() switch
+        {
+            "tokens5h" => 0,
+            "tokens7d" => 1,
+            "totalbalance" => 2,
+            _ => 3,
+        };
+
+    private static string FormatDockMetric(UsageMetric metric, ILocalizationService? localization)
+    {
+        var name = localization is null ? metric.Name : GetMetricName(metric, localization);
+        if (string.Equals(metric.SemanticKey, "totalBalance", StringComparison.OrdinalIgnoreCase)
+            && localization is not null)
+        {
+            name = localization.GetString("metrics.totalBalance", "Total balance");
+        }
+
+        var culture = localization?.Culture ?? CultureInfo.InvariantCulture;
+        var value = localization is null ? FormatMetric(metric, culture) : FormatMetric(metric, localization);
+        return $"{TrimMetricValue(name)}: {TrimMetricValue(value)}";
+    }
+
+    private static string FormatDockWindow(UsageWindow window, bool isPrimary, ILocalizationService? localization)
+    {
+        var fallback = localization is null
+            ? isPrimary ? "Основное" : "Дополнительное"
+            : localization.GetString(
+                isPrimary ? "details.primary" : "details.secondary",
+                isPrimary ? "Primary" : "Secondary");
+        var label = localization is null
+            ? GetLegacyWindowShortLabel(window, fallback)
+            : GetWindowShortLabel(window, fallback, localization);
+        return $"{label}\\{FormatDockPercent(window)}";
+    }
+
+    private static IEnumerable<UsageMetric> GetMetricsForMetricsOnly(IReadOnlyList<UsageMetric> metrics)
+    {
+        var totalBalance = metrics.FirstOrDefault(metric =>
+            string.Equals(metric.SemanticKey, "totalBalance", StringComparison.OrdinalIgnoreCase));
+        if (totalBalance is null)
+        {
+            return metrics.Take(2);
+        }
+
+        return new[] { totalBalance }
+            .Concat(metrics.Where(metric => !ReferenceEquals(metric, totalBalance)).Take(1));
+    }
 
     private static int GetRemainingPercent(double usedPercent)
     {
@@ -188,5 +268,30 @@ public static class UsageDisplayFormatter
         }
 
         return metric.Unit is null ? metric.Value : $"{metric.Value} {metric.Unit}";
+    }
+
+    public static string FormatMetric(UsageMetric metric, ILocalizationService localization)
+    {
+        ArgumentNullException.ThrowIfNull(metric);
+        ArgumentNullException.ThrowIfNull(localization);
+
+        if (metric.NumericValue is decimal)
+        {
+            return FormatMetric(metric, localization.Culture);
+        }
+
+        if (string.Equals(metric.SemanticKey, "connectionStatus", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(metric.Value, "validated", StringComparison.OrdinalIgnoreCase))
+        {
+            return localization.GetString("status.connection.validated", "Connection validated");
+        }
+
+        if (string.Equals(metric.SemanticKey, "quotaUnavailable", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(metric.Value, "Unavailable", StringComparison.OrdinalIgnoreCase))
+        {
+            return localization.GetString("status.quotaUnavailable", "Quota unavailable");
+        }
+
+        return FormatMetric(metric, localization.Culture);
     }
 }
