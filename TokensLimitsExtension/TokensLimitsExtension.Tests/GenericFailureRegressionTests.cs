@@ -62,6 +62,54 @@ public sealed class GenericFailureRegressionTests
     }
 
     [Fact]
+    public async Task PreservesRetryAfterWhenLaterAuthenticationFailureWins()
+    {
+        var retryAfter = TimeSpan.FromSeconds(120);
+        var handler = new CallbackHandler((request, _) => Task.FromResult(
+            request.RequestUri!.Host == "api.deepseek.com"
+                ? Response(HttpStatusCode.TooManyRequests, retryAfter)
+                : Response(request.RequestUri.AbsolutePath.Contains("summary", StringComparison.Ordinal)
+                    ? HttpStatusCode.Unauthorized
+                    : HttpStatusCode.InternalServerError)));
+        using var provider = CreateProvider(
+            handler,
+            TimeSpan.FromSeconds(1),
+            ("apiKey", "test-key"),
+            ("cookieHeader", "session=test-cookie"));
+        using var cache = new UsageSnapshotCache(provider);
+
+        await cache.RefreshAsync();
+
+        Assert.Equal(UsageProviderErrorKind.Authentication, cache.State.ErrorKind);
+        Assert.Equal(retryAfter, cache.State.RetryAfter);
+        Assert.Equal(4, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task UsesLongestPositiveRetryAfterAcrossAllAttemptedEndpoints()
+    {
+        var retryAfter = TimeSpan.FromSeconds(120);
+        var handler = new CallbackHandler((request, _) => Task.FromResult(
+            request.RequestUri!.Host == "api.deepseek.com"
+                ? Response(HttpStatusCode.TooManyRequests, retryAfter)
+                : request.RequestUri.AbsolutePath.Contains("summary", StringComparison.Ordinal)
+                    ? Response(HttpStatusCode.Unauthorized, TimeSpan.FromSeconds(40))
+                    : Response(HttpStatusCode.InternalServerError, TimeSpan.FromSeconds(20))));
+        using var provider = CreateProvider(
+            handler,
+            TimeSpan.FromSeconds(1),
+            ("apiKey", "test-key"),
+            ("cookieHeader", "session=test-cookie"));
+        using var cache = new UsageSnapshotCache(provider);
+
+        await cache.RefreshAsync();
+
+        Assert.Equal(UsageProviderErrorKind.Authentication, cache.State.ErrorKind);
+        Assert.Equal(retryAfter, cache.State.RetryAfter);
+        Assert.Equal(4, handler.Requests.Count);
+    }
+
+    [Fact]
     public async Task CallerCancellationRemainsCancellation()
     {
         using var started = new ManualResetEventSlim();

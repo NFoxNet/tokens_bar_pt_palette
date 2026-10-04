@@ -244,10 +244,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
 
         var selectedFailure = SelectAggregateFailure(failures);
         var selectedRequestFailure = selectedFailure as UsageProviderRequestException;
+        var effectiveRetryAfter = GetEffectiveRetryAfter(failures);
         throw new UsageProviderRequestException(
             $"Не удалось получить реальные данные {_descriptor.DisplayName}: {DescribeFailures(failures)}",
             selectedFailure,
-            selectedRequestFailure?.RetryAfter,
+            effectiveRetryAfter,
             selectedRequestFailure?.StatusCode,
             GetFailureKind(selectedFailure));
     }
@@ -2999,6 +3000,24 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
             .OrderBy(GetFailurePriority)
             .FirstOrDefault()
             ?? failures.LastOrDefault();
+
+    private static TimeSpan? GetEffectiveRetryAfter(List<Exception> failures)
+    {
+        TimeSpan? effectiveRetryAfter = null;
+        foreach (var requestFailure in failures.OfType<UsageProviderRequestException>())
+        {
+            // Keep the longest positive delay advertised by any attempted endpoint.
+            // For date headers, this can conservatively add time spent on later endpoints.
+            if (requestFailure.RetryAfter is { } retryAfter
+                && retryAfter > TimeSpan.Zero
+                && (effectiveRetryAfter is null || retryAfter > effectiveRetryAfter.Value))
+            {
+                effectiveRetryAfter = retryAfter;
+            }
+        }
+
+        return effectiveRetryAfter;
+    }
 
     private static int GetFailurePriority(Exception? failure)
         => GetFailureKind(failure) switch
