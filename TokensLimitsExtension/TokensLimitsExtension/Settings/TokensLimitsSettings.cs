@@ -266,9 +266,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
                     field.DefaultValue ?? string.Empty)
                 {
                     IsRequired = false,
-                    Placeholder = field.IsSecret
-                        ? string.Empty
-                        : string.Empty,
+                    Placeholder = string.Empty,
                 };
                 _providerFields.Add(setting.Key, setting);
                 if (field.IsSecret)
