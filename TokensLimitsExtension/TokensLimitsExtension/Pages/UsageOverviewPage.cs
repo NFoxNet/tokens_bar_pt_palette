@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CommandPalette.Extensions;
@@ -22,9 +21,10 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     private readonly ILocalizationService _localization;
     private readonly UsageRefreshCoordinator? _coordinator;
     private readonly ICommand? _settingsCommand;
-    private IListItem[] _items;
-    private string[] _itemProviderIds = [];
-    private string? _renderSignature;
+    private IListItem[] _items = [];
+    private UsageSnapshotCache[] _itemCaches = [];
+    private UsageProviderState[] _renderedStates = [];
+    private long _renderRevision;
     private int _disposed;
 
     public UsageOverviewPage(
@@ -47,7 +47,6 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         PlaceholderText = Name;
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         ShowDetails = true;
-        _items = CreateLoadingItems();
         _localization.LanguageChanged += LocalizationOnLanguageChanged;
         Subscribe(_caches);
         RebuildItems();
@@ -78,15 +77,15 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         ArgumentNullException.ThrowIfNull(caches);
         ArgumentNullException.ThrowIfNull(pages);
         if (caches.Count != pages.Count) throw new ArgumentException("Provider caches and pages must have the same length.");
-        UsageSnapshotCache[] previous;
         lock (_providerGate)
         {
-            previous = _caches.ToArray();
+            if (Volatile.Read(ref _disposed) != 0) return;
+            Unsubscribe(_caches);
             _caches = caches;
             _pages = pages;
+            Subscribe(caches);
+            _renderRevision++;
         }
-        Unsubscribe(previous);
-        Subscribe(caches);
         RebuildItems();
         UsageSnapshotCache[] updatedCaches;
         lock (_providerGate) updatedCaches = _caches.ToArray();
@@ -101,80 +100,129 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _localization.LanguageChanged -= LocalizationOnLanguageChanged;
-        Unsubscribe(_caches);
+        lock (_providerGate) Unsubscribe(_caches);
         GC.SuppressFinalize(this);
     }
 
-    private void RebuildItems()
+    private void RebuildItems(bool languageChanged = false)
     {
-        if (Volatile.Read(ref _disposed) != 0) return;
-        IReadOnlyList<UsageSnapshotCache> caches;
-        IReadOnlyList<TokensLimitsPage> pages;
-        lock (_providerGate) { caches = _caches; pages = _pages; }
-        var entries = new List<(UsageSnapshotCache Cache, ListPage Page, string Title, string Subtitle, Details Details, IContextItem[] MoreCommands)>();
-        for (var index = 0; index < caches.Count; index++)
+        while (Volatile.Read(ref _disposed) == 0)
         {
-            var cache = caches[index];
-            var state = cache.State;
-            var subtitle = state.Snapshot is not null
-                ? FormatSnapshotSubtitle(state)
-                : GetStatusText(state);
-            entries.Add((cache, pages[index], cache.Descriptor.DisplayName, subtitle, CreateDetails(state), CreateMoreCommands(cache, state)));
-        }
-        var signature = entries.Count == 0
-            ? $"empty\u001e{_localization.GetString("overview.empty.title", "No providers enabled")}\u001e{_localization.GetString("overview.empty.subtitle", "Enable providers in the extension settings.")}"
-            : string.Join('\u001f', entries.Select(entry =>
-                $"{entry.Cache.Descriptor.Id}\u001e{RuntimeHelpers.GetHashCode(entry.Page)}\u001e{entry.Title}\u001e{entry.Subtitle}\u001e{entry.Details.Title}\u001e{entry.Details.Body}\u001e{string.Join('\u001d', entry.MoreCommands.Select(GetContextSignature))}"));
-        if (string.Equals(signature, _renderSignature, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        if (entries.Count == _itemProviderIds.Length
-            && entries.Select(entry => entry.Cache.Descriptor.Id).SequenceEqual(_itemProviderIds, StringComparer.OrdinalIgnoreCase)
-            && _items.Length == entries.Count
-            && _items.Zip(entries).All(pair => pair.First is ListItem item
-                && ReferenceEquals(item.Command, pair.Second.Page)))
-        {
-            for (var index = 0; index < entries.Count; index++)
+            IReadOnlyList<UsageSnapshotCache> caches;
+            IReadOnlyList<TokensLimitsPage> pages;
+            long revision;
+            lock (_providerGate) { caches = _caches; pages = _pages; revision = _renderRevision; }
+            // Cache events hold their state lock. Never read another cache under the page lock.
+            var states = caches.Select(cache => cache.State).ToArray();
+            var changed = false;
+            lock (_providerGate)
             {
-                var item = (ListItem)_items[index];
-                item.Title = entries[index].Title;
-                item.Subtitle = entries[index].Subtitle;
-                item.Details = entries[index].Details;
-                item.MoreCommands = entries[index].MoreCommands;
+                if (Volatile.Read(ref _disposed) != 0) return;
+                if (revision != _renderRevision) continue;
+                var sameComposition = caches.Count == _itemCaches.Length && _items.Length == caches.Count;
+                for (var index = 0; sameComposition && index < caches.Count; index++)
+                {
+                    sameComposition = ReferenceEquals(caches[index], _itemCaches[index])
+                        && ReferenceEquals(_items[index].Command, pages[index]);
+                }
+
+                if (caches.Count == 0)
+                {
+                    var title = _localization.GetString("overview.empty.title", "No providers enabled");
+                    var subtitle = _localization.GetString("overview.empty.subtitle", "Enable providers in the extension settings.");
+                    if (_itemCaches.Length != 0 || _items.Length != 1)
+                    {
+                        Volatile.Write(ref _items, [new ListItem(_settingsCommand ?? new NoOpCommand()) { Title = title, Subtitle = subtitle }]);
+                        _itemCaches = [];
+                        _renderedStates = [];
+                        changed = true;
+                    }
+                    else
+                    {
+                        var item = (ListItem)_items[0];
+                        changed = item.Title != title || item.Subtitle != subtitle;
+                        if (changed) { item.Title = title; item.Subtitle = subtitle; }
+                    }
+                }
+                else if (sameComposition)
+                {
+                    for (var index = 0; index < caches.Count; index++)
+                    {
+                        changed |= UpdateItem(index, states[index], languageChanged);
+                    }
+                }
+                else
+                {
+                    var items = new IListItem[caches.Count];
+                    for (var index = 0; index < caches.Count; index++)
+                    {
+                        var state = states[index];
+                        items[index] = new ListItem(pages[index])
+                        {
+                            Title = caches[index].Descriptor.DisplayName,
+                            Subtitle = state.Snapshot is null ? GetStatusText(state) : FormatSnapshotSubtitle(state),
+                            Details = new Details
+                            {
+                                Title = _localization.GetString("overview.detailsTitle", "Provider details"),
+                                Body = CreateDetailsBody(state),
+                            },
+                            MoreCommands = CreateMoreCommands(caches[index], state),
+                        };
+                    }
+                    _itemCaches = caches.ToArray();
+                    _renderedStates = states;
+                    Volatile.Write(ref _items, items);
+                    changed = true;
+                }
+                _renderRevision++;
             }
-
-            _renderSignature = signature;
-            RaiseItemsChanged(entries.Count);
+            if (changed) RaiseItemsChanged(_items.Length);
             return;
         }
-
-        var items = entries
-            .Select(entry => (IListItem)new ListItem(entry.Page)
-            {
-                Title = entry.Title,
-                Subtitle = entry.Subtitle,
-                Details = entry.Details,
-                MoreCommands = entry.MoreCommands,
-            })
-            .ToList();
-        if (items.Count == 0) items.Add(new ListItem(_settingsCommand ?? new NoOpCommand())
-        {
-            Title = _localization.GetString("overview.empty.title", "No providers enabled"),
-            Subtitle = _localization.GetString("overview.empty.subtitle", "Enable providers in the extension settings."),
-        });
-        _itemProviderIds = entries.Select(entry => entry.Cache.Descriptor.Id).ToArray();
-        _renderSignature = signature;
-        Volatile.Write(ref _items, items.ToArray());
-        RaiseItemsChanged(items.Count);
     }
 
-    private IListItem[] CreateLoadingItems() => [new ListItem(new NoOpCommand())
+    private bool UpdateItem(int index, UsageProviderState state, bool languageChanged = false)
     {
-        Title = _localization.GetString("overview.providers", "Enabled providers"),
-        Subtitle = _localization.GetString("overview.loading", "Loading…"),
-    }];
+        var previous = _renderedStates[index];
+        _renderedStates[index] = state;
+        if (!languageChanged && ReferenceEquals(previous.Snapshot, state.Snapshot)
+            && previous.IsRefreshing == state.IsRefreshing && previous.ErrorKind == state.ErrorKind
+            && previous.RetryAfterUntil == state.RetryAfterUntil) return false;
+
+        var item = (ListItem)_items[index];
+        var subtitle = state.Snapshot is null ? GetStatusText(state) : FormatSnapshotSubtitle(state);
+        var details = (Details)item.Details!;
+        var detailsTitle = _localization.GetString("overview.detailsTitle", "Provider details");
+        var detailsBody = CreateDetailsBody(state);
+        var changed = item.Subtitle != subtitle || details.Title != detailsTitle || details.Body != detailsBody;
+        if (item.Subtitle != subtitle) item.Subtitle = subtitle;
+        if (details.Title != detailsTitle) details.Title = detailsTitle;
+        if (details.Body != detailsBody) details.Body = detailsBody;
+        var commands = item.MoreCommands!;
+        for (var commandIndex = 0; commandIndex < commands.Length; commandIndex++)
+        {
+            var context = (CommandContextItem)commands[commandIndex];
+            var title = context.Command switch
+            {
+                CopyTextCommand => _localization.GetString("action.copyDiagnostics", "Copy safe diagnostics"),
+                OpenUrlCommand => _localization.GetString("action.openDashboard", "Open provider dashboard"),
+                _ when commandIndex == 0 => _localization.GetString("action.refresh", "Refresh"),
+                _ => _localization.GetString("action.validateConnection", "Validate connection"),
+            };
+            if (context.Title != title) { context.Title = title; changed = true; }
+            if (context.Command is CopyTextCommand copy)
+            {
+                var text = BuildSafeDiagnostics(_itemCaches[index], state);
+                if (copy.Text != text) { copy.Text = text; changed = true; }
+            }
+            else if (commandIndex > 0 && context.Command is AnonymousCommand)
+            {
+                var commandSubtitle = _localization.GetString("action.validateConnectionSubtitle", "Send one deployment request to check connection; may consume quota.");
+                if (context.Subtitle != commandSubtitle) { context.Subtitle = commandSubtitle; changed = true; }
+            }
+        }
+        return changed;
+    }
 
     private string GetStatusText(UsageProviderState state)
     {
@@ -212,7 +260,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         return string.Join(" · ", parts);
     }
 
-    private Details CreateDetails(UsageProviderState state)
+    private string CreateDetailsBody(UsageProviderState state)
     {
         var status = state.Snapshot is null
             ? GetStatusText(state)
@@ -243,11 +291,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
             lines.Add(_localization.GetString("status.refreshingSubtitle", "Fetching the latest provider data."));
         }
 
-        return new Details
-        {
-            Title = _localization.GetString("overview.detailsTitle", "Provider details"),
-            Body = string.Join(Environment.NewLine + Environment.NewLine, lines),
-        };
+        return string.Join(Environment.NewLine + Environment.NewLine, lines);
     }
 
     private static string EscapeDetailsText(string value)
@@ -371,16 +415,6 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
             _ => _localization.GetString("status.kind.unknown", "Unknown error"),
         };
 
-    private static string GetCommandSignature(ICommand? command)
-        => command is CopyTextCommand copy
-            ? $"copy:{copy.Text}"
-            : command?.GetType().FullName ?? string.Empty;
-
-    private static string GetContextSignature(IContextItem item)
-        => item is CommandContextItem context
-            ? $"{context.Title}\u001e{context.Subtitle}\u001e{GetCommandSignature(context.Command)}"
-            : item.GetType().FullName ?? string.Empty;
-
     private void Subscribe(IEnumerable<UsageSnapshotCache> caches)
     {
         foreach (var cache in caches) cache.StateChanged += CacheOnStateChanged;
@@ -389,12 +423,38 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     {
         foreach (var cache in caches) cache.StateChanged -= CacheOnStateChanged;
     }
-    private void CacheOnStateChanged(object? sender, EventArgs e) => RebuildItems();
+    private void CacheOnStateChanged(object? sender, EventArgs e)
+    {
+        if (sender is not UsageSnapshotCache cache || Volatile.Read(ref _disposed) != 0) return;
+        var state = cache.State;
+        var changed = false;
+        lock (_providerGate)
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            for (var index = 0; index < _caches.Count; index++)
+            {
+                if (!ReferenceEquals(_caches[index], cache)) continue;
+                _renderRevision++;
+                if (index < _itemCaches.Length && ReferenceEquals(_itemCaches[index], cache)
+                    && ReferenceEquals(_items[index].Command, _pages[index]))
+                {
+                    changed = UpdateItem(index, state);
+                }
+                break;
+            }
+        }
+        if (changed) RaiseItemsChanged(_items.Length);
+    }
     private void LocalizationOnLanguageChanged(object? sender, EventArgs e)
     {
-        Title = _localization.GetString("app.title", "Tokens Limits");
-        Name = _localization.GetString("overview.providers", "Enabled providers");
-        PlaceholderText = Name;
-        RebuildItems();
+        lock (_providerGate)
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            Title = _localization.GetString("app.title", "Tokens Limits");
+            Name = _localization.GetString("overview.providers", "Enabled providers");
+            PlaceholderText = Name;
+            _renderRevision++;
+        }
+        RebuildItems(languageChanged: true);
     }
 }
