@@ -52,10 +52,12 @@
 - PowerShell helper suites: installer, release helpers и unregister прошли в отдельных процессах. Это stub-тесты: реальный PowerToys/AppX/сертификаты не изменялись.
 - Shared Azure validation и первый Native UX checkpoint интегрированы: Debug x64 168 unit + 46 integration, все прошли. Исправлены waiter-only cancellation, поздняя ошибка после смены аккаунта и публикация ошибки общего запроса после отмены всех ожидающих.
 - Release x64/ARM64 до последнего UI checkpoint прошли; по два известных внешних IL2104 (WinRT SDK), ноль ошибок. После финального UI изменения сборки повторяются.
-- Review: исходные COM/manifest/provider IDs/lock files не изменены; CodeX home composition и formatter получили независимое review. Найденные UI edge cases исправляются отдельным follow-up.
+- Review: исходные COM/manifest/provider IDs/lock files не изменены; Codex home composition и formatter получили независимое review. Найденные UI edge cases закрыты отдельным follow-up `5718145`.
 
 ## Финальная проверка
 
 Порядок: независимая review scoped commits → cherry-pick в integration branch → тесты общих сценариев actual ICommand.Invoke/cache/disabled/locale → Debug x64 locked restore/build/test → PowerShell helper suites → Release x64/ARM64 build без подписи/установки → diff/status/новые артефакты → final whole-branch review и fixes отдельными commits.
 
 Нельзя считать задачу завершённой по сообщениям исполнителей: итоговые counts и SHA записываются после локальной проверки интегрированной ветки. Старый Probe.ps1 воспроизводит дефекты исходного аудита и не является regression suite обновлённой версии.
+
+Финал: product commit `5718145`, locked restore / Debug x64 build с `-warnaserror` прошли без предупреждений и ошибок; unit 168/168 + integration 53/53. Повтор для раздельных TRX подтверждён чтением counters обоих файлов. Release x64 и ARM64 прошли (по два известных внешних IL2104, ноль ошибок). Итог и ограничения — RESULTS.md. Все 17 согласованных пунктов реализованы; U6/Q4 отложены. Worker worktrees переданы штатному archive после проверки чистого status; integration worktree остаётся активным.
