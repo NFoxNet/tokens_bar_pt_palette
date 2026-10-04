@@ -73,7 +73,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         long fiveHourTokens = 0;
         long weeklyTokens = 0;
         var visitedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var tokenEventCount = 0;
+        var hasTokenEvents = false;
 
         foreach (var home in _codexHomes)
         {
@@ -88,9 +88,9 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
 
                     try
                     {
-                        var events = await ReadEventsAsync(file, cancellationToken).ConfigureAwait(false);
-                        tokenEventCount += events.Count;
-                        foreach (var tokenEvent in events)
+                        var session = await ReadEventsAsync(file, weeklyCutoff, cancellationToken).ConfigureAwait(false);
+                        hasTokenEvents |= session.HasTokenEvents;
+                        foreach (var tokenEvent in session.Events)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             if (tokenEvent.Timestamp >= weeklyCutoff && tokenEvent.Timestamp <= now)
@@ -136,7 +136,7 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             }
         }
 
-        if (tokenEventCount == 0)
+        if (!hasTokenEvents)
         {
             throw new InvalidDataException(
                 "Codex local session history does not contain readable token usage events.");
@@ -170,22 +170,35 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private async Task<IReadOnlyList<TokenEvent>> ReadEventsAsync(
+    private async Task<CachedSessionFile> ReadEventsAsync(
         string file,
+        DateTimeOffset weeklyCutoff,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var fileInfo = new FileInfo(file);
         var length = fileInfo.Length;
         var lastWriteTimeUtc = fileInfo.LastWriteTimeUtc;
         if (_fileCache.TryGetValue(file, out var cached)
+            && weeklyCutoff >= cached.WeeklyCutoff
             && cached.Length == length
             && cached.LastWriteTimeUtc == lastWriteTimeUtc)
         {
-            return cached.Events;
+            var retained = cached.Events.Any(tokenEvent => tokenEvent.Timestamp < weeklyCutoff)
+                ? cached.Events.Where(tokenEvent => tokenEvent.Timestamp >= weeklyCutoff).ToList()
+                : cached.Events;
+            var unchanged = cached with { WeeklyCutoff = weeklyCutoff, Events = retained };
+            _fileCache[file] = unchanged;
+            return unchanged;
         }
 
-        var canAppend = cached is not null && length > cached.Length;
-        var events = canAppend ? new List<TokenEvent>(cached!.Events) : [];
+        // Published event lists stay immutable so concurrent snapshots can read them safely.
+        // A clock rollback must reparse events discarded by a later rolling cutoff.
+        var canAppend = cached is not null && weeklyCutoff >= cached.WeeklyCutoff && length > cached.Length;
+        var events = canAppend
+            ? cached!.Events.Where(tokenEvent => tokenEvent.Timestamp >= weeklyCutoff).ToList()
+            : [];
+        var hasTokenEvents = canAppend && cached!.HasTokenEvents;
         var previousCumulative = canAppend ? cached!.PreviousCumulative : 0L;
         var startOffset = canAppend
             ? cached!.EndsWithNewline
@@ -196,6 +209,12 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         {
             if (TryReadTokenEvent(line, out var timestamp, out var delta, ref previousCumulative))
             {
+                hasTokenEvents = true;
+                if (timestamp < weeklyCutoff)
+                {
+                    continue;
+                }
+
                 if (events.Count >= MaxCachedTokenEventsPerFile)
                 {
                     throw new InvalidDataException(
@@ -206,13 +225,16 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
             }
         }
 
-        _fileCache[file] = new CachedSessionFile(
+        var parsed = new CachedSessionFile(
             length,
             lastWriteTimeUtc,
             previousCumulative,
             await EndsWithNewlineAsync(file, length, _readBytesObserver, cancellationToken).ConfigureAwait(false),
+            weeklyCutoff,
+            hasTokenEvents,
             events);
-        return events;
+        _fileCache[file] = parsed;
+        return parsed;
     }
 
     private static IEnumerable<string> EnumerateSessionFiles(string home)
@@ -519,7 +541,9 @@ public sealed class CodexLocalSessionFallback : ICodexUsageFallback, IDisposable
         DateTime LastWriteTimeUtc,
         long PreviousCumulative,
         bool EndsWithNewline,
+        DateTimeOffset WeeklyCutoff,
+        bool HasTokenEvents,
         IReadOnlyList<TokenEvent> Events);
 
-    private sealed record TokenEvent(DateTimeOffset Timestamp, long Delta);
+    private readonly record struct TokenEvent(DateTimeOffset Timestamp, long Delta);
 }
