@@ -18,6 +18,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     private readonly object _providerGate = new();
     private readonly ILocalizationService _localization;
     private readonly UsageRefreshCoordinator? _coordinator;
+    private readonly ICommand? _settingsCommand;
     private IListItem[] _items;
     private string[] _itemProviderIds = [];
     private string? _renderSignature;
@@ -29,12 +30,14 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         Action<string>? logger = null,
         IUsageRefreshSettings? refreshSettings = null,
         ILocalizationService? localization = null,
-        UsageRefreshCoordinator? coordinator = null)
+        UsageRefreshCoordinator? coordinator = null,
+        ICommand? settingsCommand = null)
     {
         _caches = caches ?? throw new ArgumentNullException(nameof(caches));
         _pages = pages ?? throw new ArgumentNullException(nameof(pages));
         _localization = localization ?? InvariantLocalizationService.Instance;
         _coordinator = coordinator;
+        _settingsCommand = settingsCommand;
         Id = "com.tokenslimits.overview";
         Title = _localization.GetString("app.title", "Tokens Limits");
         Name = _localization.GetString("overview.providers", "Enabled providers");
@@ -141,7 +144,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
                 Subtitle = entry.Subtitle,
             })
             .ToList();
-        if (items.Count == 0) items.Add(new ListItem(new NoOpCommand())
+        if (items.Count == 0) items.Add(new ListItem(_settingsCommand ?? new NoOpCommand())
         {
             Title = _localization.GetString("overview.empty.title", "No providers enabled"),
             Subtitle = _localization.GetString("overview.empty.subtitle", "Enable providers in the extension settings."),

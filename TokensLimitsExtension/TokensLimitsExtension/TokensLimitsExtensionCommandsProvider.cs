@@ -43,6 +43,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private string[] _coordinatorProviderIds = [];
     private bool _rebuildInProgress;
     private bool _rebuildRequested;
+    private bool _hasBuiltComposition;
     private int _disposed;
 
     public TokensLimitsExtensionCommandsProvider(
@@ -88,7 +89,14 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             .Select(provider => new UsageSnapshotCache(provider, _settings))
             .ToArray();
         _refreshCoordinator = new UsageRefreshCoordinator(_settings);
-        _overviewPage = new UsageOverviewPage([], [], LogMessage, _settings, _settings.Localization, _refreshCoordinator);
+        _overviewPage = new UsageOverviewPage(
+            [],
+            [],
+            LogMessage,
+            _settings,
+            _settings.Localization,
+            _refreshCoordinator,
+            _settings.Settings.SettingsPage);
         _dockBandPage = new TokensLimitsDockBandPage(_settings.Localization);
         _dockBands =
         [
@@ -256,7 +264,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         bool hasSameComposition;
         lock (_surfaceGate)
         {
-            hasSameComposition = _enabledProviderIds.SequenceEqual(enabledIds, StringComparer.OrdinalIgnoreCase)
+            hasSameComposition = _hasBuiltComposition
+                && _enabledProviderIds.SequenceEqual(enabledIds, StringComparer.OrdinalIgnoreCase)
                 && _pages.All(page => page.IsActive)
                 && _dockPages.All(page => page.IsActive)
                 && _dockBandItems.All(item => item.IsActive);
@@ -404,6 +413,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         }
 
         _overviewPage.UpdateProviders(enabledCaches, pages);
+        _hasBuiltComposition = true;
         if (IsRebuildSuperseded())
         {
             return;
@@ -502,22 +512,42 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 
     private static CodexUsageService CreateDefaultService()
     {
-        var codexHome = (Environment.GetEnvironmentVariable("CODEX_HOME") ?? string.Empty)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault();
-        codexHome ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
-        var logger = LogMessage;
         var httpClient = new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(15),
         };
-        var auth = new CodexFileAuthTokenProvider(Path.Combine(codexHome, "auth.json"), httpClient);
+        return CreateDefaultService(
+            Environment.GetEnvironmentVariable("CODEX_HOME"),
+            httpClient,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            httpClient);
+    }
+
+    internal static string[] ParseCodexHomes(string? codexHome, string userProfileDirectory)
+    {
+        var homes = (codexHome ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return homes.Length > 0
+            ? homes
+            : [Path.Combine(userProfileDirectory, ".codex")];
+    }
+
+    internal static CodexUsageService CreateDefaultService(
+        string? codexHome,
+        HttpClient httpClient,
+        string userProfileDirectory,
+        IDisposable? ownedResource = null)
+    {
+        ArgumentNullException.ThrowIfNull(httpClient);
+        var homes = ParseCodexHomes(codexHome, userProfileDirectory);
+        var logger = LogMessage;
+        var auth = new CodexFileAuthTokenProvider(Path.Combine(homes[0], "auth.json"), httpClient);
         return new CodexUsageService(
             auth,
             new CodexUsageClient(httpClient, logger, () => auth.AccountId),
-            new CodexLocalSessionFallback(codexHome, logger: logger),
+            new CodexLocalSessionFallback(string.Join(',', homes), logger: logger),
             logger,
-            httpClient);
+            ownedResource);
     }
 
     private static void LogMessage(string message)
