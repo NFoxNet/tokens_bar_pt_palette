@@ -51,6 +51,6 @@ public sealed class CodexUsageNormalizerTests
             null,
             false);
 
-        Assert.Equal("5ч\\98%, 7д\\—", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot));
+        Assert.Equal("5ч\\98%", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot));
     }
 }
