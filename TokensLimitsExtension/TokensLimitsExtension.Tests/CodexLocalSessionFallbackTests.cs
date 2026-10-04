@@ -2,6 +2,8 @@ using TokensLimitsExtension.Core.Services;
 using TokensLimitsExtension.Core.Models;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Reflection;
+using System.Collections;
 using Xunit.Abstractions;
 
 namespace TokensLimitsExtension.Tests;
@@ -431,6 +433,245 @@ public sealed class CodexLocalSessionFallbackTests
         {
             Directory.Delete(home, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetainsOnlyRollingWindowEventsWhenHistoricalEventsExceedTheBudget(bool includeRecentEvent)
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        await using (var writer = new StreamWriter(file, append: false))
+        {
+            var oldLine = CreateTokenCountLine(now.AddDays(-30), 1);
+            for (var index = 0; index < 100_001; index++)
+            {
+                await writer.WriteLineAsync(oldLine);
+            }
+
+            if (includeRecentEvent)
+            {
+                await writer.WriteLineAsync(CreateTokenCountLine(now.AddMinutes(-1), 25));
+            }
+        }
+
+        try
+        {
+            using var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+            var unchanged = await provider.GetSnapshotAsync(CancellationToken.None);
+
+            Assert.True(snapshot.IsEstimate);
+            Assert.Equal(includeRecentEvent ? 25 : 0, snapshot.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(includeRecentEvent ? 25 : 0, unchanged.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(includeRecentEvent ? 1 : 0, GetRetainedEventCount(provider));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EvictsExpiredEventsFromUnchangedFilesAndKeepsBoundaryAndFutureEvents()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        await File.WriteAllLinesAsync(Path.Combine(sessions, "session.jsonl"), [
+            CreateTokenCountLine(now.AddDays(-7), 1),
+            CreateTokenCountLine(now.AddDays(-7).AddTicks(-1), 2),
+            CreateTokenCountLine(now.AddHours(-5), 4),
+            CreateTokenCountLine(now.AddHours(-5).AddTicks(-1), 8),
+            CreateTokenCountLine(now.AddMinutes(1), 16),
+        ]);
+
+        try
+        {
+            var clock = new MutableTimeProvider(now);
+            var bytesRead = 0L;
+            using var provider = new CodexLocalSessionFallback(home, timeProvider: clock, readBytesObserver: bytes => bytesRead += bytes);
+            var initial = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(13, initial.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(4, initial.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(4, GetRetainedEventCount(provider));
+
+            bytesRead = 0;
+            clock.Now = now.AddMinutes(1);
+            var advanced = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(28, advanced.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(16, advanced.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(3, GetRetainedEventCount(provider));
+            Assert.Equal(0, bytesRead);
+
+            clock.Now = now.AddDays(8);
+            var expired = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(0, expired.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(0, GetRetainedEventCount(provider));
+            Assert.Equal(0, bytesRead);
+
+            clock.Now = now;
+            var rewound = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(13, rewound.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(4, GetRetainedEventCount(provider));
+            Assert.True(bytesRead > 0);
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task KeepsCumulativeBaselineWhenExpiredEventsAreEvictedBeforeAppend()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        var sessions = Path.Combine(home, "sessions");
+        Directory.CreateDirectory(sessions);
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(sessions, "session.jsonl");
+        await File.WriteAllLinesAsync(file, [CreateCumulativeTokenCountLine(now.AddDays(-8), 100)]);
+
+        try
+        {
+            using var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            var oldOnly = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(0, oldOnly.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(0, GetRetainedEventCount(provider));
+
+            await File.AppendAllTextAsync(file, CreateCumulativeTokenCountLine(now.AddHours(-1), 150) + Environment.NewLine);
+            var appended = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(50, appended.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(1, GetRetainedEventCount(provider));
+
+            await File.AppendAllTextAsync(file, CreateCumulativeTokenCountLine(now, 20) + Environment.NewLine);
+            var reset = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(70, reset.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(2, GetRetainedEventCount(provider));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CompletesPartialCumulativeTailAfterEvictingHistoricalEvents()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(home, "sessions"));
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(home, "sessions", "session.jsonl");
+        var tail = CreateCumulativeTokenCountLine(now.AddHours(-1), 150);
+        await File.WriteAllTextAsync(file, CreateCumulativeTokenCountLine(now.AddDays(-8), 100) + Environment.NewLine + tail[..^1]);
+
+        try
+        {
+            using var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            var initial = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(0, initial.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(0, GetRetainedEventCount(provider));
+
+            await File.AppendAllTextAsync(file, "}" + Environment.NewLine);
+            var completed = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(50, completed.Metrics.Single(metric => metric.SemanticKey == "tokens5h").NumericValue);
+            Assert.Equal(1, GetRetainedEventCount(provider));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReReadsReplacedOrTruncatedHistoryAndDropsDeletedFiles(bool truncate)
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(home, "sessions"));
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(home, "sessions", "session.jsonl");
+        var old = CreateCumulativeTokenCountLine(now.AddDays(-8), 100) + Environment.NewLine;
+        await File.WriteAllTextAsync(file, truncate ? old + old : old);
+
+        try
+        {
+            using var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now));
+            await provider.GetSnapshotAsync(CancellationToken.None);
+            var lastWrite = File.GetLastWriteTimeUtc(file);
+            await File.WriteAllTextAsync(file, CreateCumulativeTokenCountLine(now.AddHours(-1), 200) + Environment.NewLine);
+            File.SetLastWriteTimeUtc(file, lastWrite.AddSeconds(2));
+            var replaced = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(200, replaced.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(1, GetRetainedEventCount(provider));
+
+            File.Delete(file);
+            await Assert.ThrowsAsync<InvalidDataException>(() => provider.GetSnapshotAsync(CancellationToken.None));
+            Assert.Equal(0, GetRetainedEventCount(provider));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CancelledAppendDoesNotPublishPartiallyReadEventsOrCumulativeState()
+    {
+        var home = Path.Combine(Path.GetTempPath(), $"codex-home-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(home, "sessions"));
+        var now = new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
+        var file = Path.Combine(home, "sessions", "session.jsonl");
+        await File.WriteAllLinesAsync(file, [CreateCumulativeTokenCountLine(now.AddHours(-2), 100)]);
+
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            var cancelOnRead = false;
+            using var provider = new CodexLocalSessionFallback(home, timeProvider: new FixedTimeProvider(now), readBytesObserver: _ =>
+            {
+                if (cancelOnRead)
+                {
+                    cancellation.Cancel();
+                }
+            });
+            await provider.GetSnapshotAsync(CancellationToken.None);
+            await File.AppendAllTextAsync(file, CreateCumulativeTokenCountLine(now.AddHours(-1), 150) + Environment.NewLine);
+            cancelOnRead = true;
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provider.GetSnapshotAsync(cancellation.Token));
+            Assert.Equal(1, GetRetainedEventCount(provider));
+
+            cancelOnRead = false;
+            var retried = await provider.GetSnapshotAsync(CancellationToken.None);
+            Assert.Equal(150, retried.Metrics.Single(metric => metric.SemanticKey == "tokens7d").NumericValue);
+            Assert.Equal(2, GetRetainedEventCount(provider));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    private static int GetRetainedEventCount(CodexLocalSessionFallback provider)
+    {
+        // Inspect retention without exposing a production API solely for resource tests.
+        var cache = typeof(CodexLocalSessionFallback).GetField("_fileCache", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(provider)!;
+        var values = (IEnumerable)cache.GetType().GetProperty("Values")!.GetValue(cache)!;
+        return values.Cast<object>().Sum(value => ((IEnumerable)value.GetType().GetProperty("Events")!.GetValue(value)!)
+            .Cast<object>().Count());
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

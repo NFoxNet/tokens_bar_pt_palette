@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -137,6 +138,43 @@ internal static class UsageJsonParser
             Source = "http://127.0.0.1:11434/api/tags",
             Metrics = metrics,
         };
+    }
+
+    public static UsageSnapshot ParseUtf8(
+        UsageProviderDescriptor descriptor,
+        string source,
+        ReadOnlyMemory<byte> raw,
+        DateTimeOffset fetchedAt)
+    {
+        var normalized = raw;
+        while (!normalized.IsEmpty)
+        {
+            if (normalized.Span[0] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+            {
+                normalized = normalized[1..];
+            }
+            else if (normalized.Span.StartsWith("\uFEFF"u8))
+            {
+                normalized = normalized[3..];
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(normalized);
+            return Parse(descriptor, source, document.RootElement, fetchedAt);
+        }
+        catch (Exception ex) when (ex is JsonException
+            || ex is InvalidOperationException { InnerException: DecoderFallbackException })
+        {
+            // Preserve text envelopes and the existing decoder's replacement of
+            // malformed UTF-8; normal JSON never needs a UTF-16 body.
+            return ParseText(descriptor, source, Encoding.UTF8.GetString(raw.Span), fetchedAt);
+        }
     }
 
     public static UsageSnapshot ParseText(

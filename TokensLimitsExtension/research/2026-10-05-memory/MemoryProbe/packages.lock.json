@@ -1,0 +1,57 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0-windows10.0.26100": {
+      "JPSoftworks.CommandPalette.Extensions.Toolkit.Logging.Abstractions": {
+        "type": "Transitive",
+        "resolved": "0.9.3-preview.2",
+        "contentHash": "UiuemgzqLaaFqJtpd5//FOe0bB0KM3WMs789D46ErDYwnaz3BPV+1dslAqhjmLj6k2cgGK74ReokXa/ujrm+dA=="
+      },
+      "tokenslimitsextension": {
+        "type": "Project",
+        "dependencies": {
+          "JPSoftworks.CommandPalette.Extensions.Toolkit": "[0.9.3-preview.2, )",
+          "Microsoft.CommandPalette.Extensions": "[0.9.260303001, )",
+          "Microsoft.Windows.CsWinRT": "[2.2.0, )",
+          "Shmuelie.WinRTServer": "[2.2.1, )",
+          "TokensLimitsExtension.Core": "[1.0.0, )"
+        }
+      },
+      "tokenslimitsextension.core": {
+        "type": "Project"
+      },
+      "JPSoftworks.CommandPalette.Extensions.Toolkit": {
+        "type": "CentralTransitive",
+        "requested": "[0.9.3-preview.2, )",
+        "resolved": "0.9.3-preview.2",
+        "contentHash": "SPXjHtjaMe7oQDJvvpdsUwCc+2d2XLFSorz0WvVexLOGXVdrxv9wgoLyhNiHE+uDlJjU1n086sm2RrSsd0Nm2A==",
+        "dependencies": {
+          "JPSoftworks.CommandPalette.Extensions.Toolkit.Logging.Abstractions": "0.9.3-preview.2",
+          "Microsoft.CommandPalette.Extensions": "0.9.260303001",
+          "Shmuelie.WinRTServer": "2.2.1"
+        }
+      },
+      "Microsoft.CommandPalette.Extensions": {
+        "type": "CentralTransitive",
+        "requested": "[0.9.260303001, )",
+        "resolved": "0.9.260303001",
+        "contentHash": "D7nGAJBkgd9dMUDHvaj19wdqsvV//oHZR94RDMoHa2WD1u7C9TYtgR2yxT+MDJ5CQMtOs1VRLL9pEFqiQXvuFA==",
+        "dependencies": {
+          "Microsoft.Windows.CsWinRT": "2.2.0"
+        }
+      },
+      "Microsoft.Windows.CsWinRT": {
+        "type": "CentralTransitive",
+        "requested": "[2.2.0, )",
+        "resolved": "2.2.0",
+        "contentHash": "R8MDVawukHrKgYCFgYaoLfbAna/FrImEFRxDK9k8ITbrXv3KLE5uN6tRqrNV83H4MFdqJ/uiA/hg1cSsXkl0vw=="
+      },
+      "Shmuelie.WinRTServer": {
+        "type": "CentralTransitive",
+        "requested": "[2.2.1, )",
+        "resolved": "2.2.1",
+        "contentHash": "Nt+t3cMga8YWXToaTw//CGjO9mTQORc+qSKyrVXZAhnyUWiZ7flhFBTWI1igp+2o2PYl5CCNHYfz9JI4F25GPA=="
+      }
+    }
+  }
+}

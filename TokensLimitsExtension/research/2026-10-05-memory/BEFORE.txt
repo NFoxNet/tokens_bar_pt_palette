@@ -1,0 +1,13 @@
+runtime=10.0.12; os=Microsoft Windows NT 10.0.26200.0; arch=X64; warmups=1; repeats=5
+codex-cache fileBytes=1515003 events=10000old+100recent coldAllocBytes=6,121,184 coldMs=264.04 coldReadBytes=1515004 cachedEventsAfterCold=10100 warmAllocBytes=3,576 warmMs=0.99 warmReadBytes=0 cachedEventsAfterWarm=10100 parsedTokens5h=200 parsedTokens7d=200
+codex-jsonl targetBytes=10240 actualBytes=10240 allocBytes=170,979 elapsedMs=1.63 parsedTokens5h=3
+codex-jsonl targetBytes=102400 actualBytes=102400 allocBytes=854,925 elapsedMs=3.49 parsedTokens5h=3
+codex-jsonl targetBytes=1047552 actualBytes=1047552 allocBytes=3,662,909 elapsedMs=12.35 parsedTokens5h=3
+codex-client-json targetBytes=10240 bodyBytes=10240 allocBytes=166,965 elapsedMs=0.37 requests=6 parsedPrimaryUsed=2 parsedPrimaryReset=1790000000 parsedPrimarySeconds=18000 parsedSecondary=False
+codex-client-json targetBytes=102400 bodyBytes=102400 allocBytes=545,416 elapsedMs=0.52 requests=6 parsedPrimaryUsed=2 parsedPrimaryReset=1790000000 parsedPrimarySeconds=18000 parsedSecondary=False
+codex-client-json targetBytes=1047552 bodyBytes=1047552 allocBytes=6,293,224 elapsedMs=2.05 requests=6 parsedPrimaryUsed=2 parsedPrimaryReset=1790000000 parsedPrimarySeconds=18000 parsedSecondary=False
+generic-json targetBytes=10240 bodyBytes=10240 allocBytes=453,712 elapsedMs=1.46 requests=12 parsedPrimaryUsed=15 parsedWeeklyUsed=28 parsedMetric=used percent:15
+generic-json targetBytes=102400 bodyBytes=102400 allocBytes=1,358,846 elapsedMs=2.20 requests=12 parsedPrimaryUsed=15 parsedWeeklyUsed=28 parsedMetric=used percent:15
+generic-json targetBytes=1047552 bodyBytes=1047552 allocBytes=13,670,005 elapsedMs=7.63 requests=12 parsedPrimaryUsed=15 parsedWeeklyUsed=28 parsedMetric=used percent:15
+ui providers=5 initialRows=5 overviewRows=5 providerRefreshFanoutAllocBytes=1,286,102 providerRefreshFanoutElapsedMs=4.82 detailsUnopenedInitialRows=1 detailsUnopenedAfterRefreshRows=8 detailsOpenedInitialRows=8 oneProviderFanoutRefreshAllocBytes=264,830 detailsOpenedRepeatRows=8 detailsReferencesStableAfterOneProviderRefresh=0/4
+ui providers=15 initialRows=15 overviewRows=15 providerRefreshFanoutAllocBytes=7,814,984 providerRefreshFanoutElapsedMs=39.87 detailsUnopenedInitialRows=1 detailsUnopenedAfterRefreshRows=8 detailsOpenedInitialRows=8 oneProviderFanoutRefreshAllocBytes=559,517 detailsOpenedRepeatRows=8 detailsReferencesStableAfterOneProviderRefresh=0/14

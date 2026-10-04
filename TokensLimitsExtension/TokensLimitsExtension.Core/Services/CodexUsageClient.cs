@@ -81,8 +81,21 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
 
                 try
                 {
-                    using var document = JsonDocument.Parse(body);
-                    return ParseSnapshot(document.RootElement);
+                    var encoding = GetContentEncoding(response.Content);
+                    using var document = encoding.CodePage == Encoding.UTF8.CodePage
+                        ? JsonDocument.Parse(body)
+                        : JsonDocument.Parse(encoding.GetString(body.Span));
+                    try
+                    {
+                        return ParseSnapshot(document.RootElement);
+                    }
+                    catch (InvalidOperationException ex) when (ex.InnerException is DecoderFallbackException)
+                    {
+                        // Match the previous decoder's replacement behavior only
+                        // when a malformed UTF-8 string is actually encountered.
+                        using var decodedDocument = JsonDocument.Parse(encoding.GetString(body.Span));
+                        return ParseSnapshot(decodedDocument.RootElement);
+                    }
                 }
                 catch (Exception ex) when (ex is JsonException or InvalidDataException or FormatException)
                 {
@@ -341,7 +354,7 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
         return null;
     }
 
-    private async Task<string> ReadBoundedResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
+    private async Task<ReadOnlyMemory<byte>> ReadBoundedResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
     {
         if (content.Headers.ContentLength is { } contentLength && contentLength > _options.MaxResponseBodyBytes)
         {
@@ -373,7 +386,9 @@ public sealed class CodexUsageClient : ICodexUsageClient, IDisposable
                 await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             }
 
-            return GetContentEncoding(content).GetString(bytes.GetBuffer(), 0, checked((int)bytes.Length));
+            // MemoryStream owns an ordinary managed array; disposing the stream
+            // does not invalidate it. The document is disposed before this body leaves scope.
+            return bytes.GetBuffer().AsMemory(0, checked((int)bytes.Length));
         }
         finally
         {

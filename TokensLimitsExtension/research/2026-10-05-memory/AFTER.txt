@@ -1,0 +1,13 @@
+runtime=10.0.12; os=Microsoft Windows NT 10.0.26200.0; arch=X64; warmups=1; repeats=5
+codex-cache fileBytes=1515003 events=10000old+100recent coldAllocBytes=5,462,024 coldMs=223.87 coldReadBytes=1515004 cachedEventsAfterCold=100 warmAllocBytes=3,760 warmMs=0.90 warmReadBytes=0 cachedEventsAfterWarm=100 parsedTokens5h=200 parsedTokens7d=200
+codex-jsonl targetBytes=10240 actualBytes=10240 allocBytes=171,157 elapsedMs=1.99 parsedTokens5h=3
+codex-jsonl targetBytes=102400 actualBytes=102400 allocBytes=854,992 elapsedMs=3.08 parsedTokens5h=3
+codex-jsonl targetBytes=1047552 actualBytes=1047552 allocBytes=3,610,291 elapsedMs=16.85 parsedTokens5h=3
+codex-client-json targetBytes=10240 bodyBytes=10240 allocBytes=146,469 elapsedMs=0.19 requests=6 parsedPrimaryUsed=2 parsedPrimaryReset=1790000000 parsedPrimarySeconds=18000 parsedSecondary=False
+codex-client-json targetBytes=102400 bodyBytes=102400 allocBytes=340,600 elapsedMs=0.33 requests=6 parsedPrimaryUsed=2 parsedPrimaryReset=1790000000 parsedPrimarySeconds=18000 parsedSecondary=False
+codex-client-json targetBytes=1047552 bodyBytes=1047552 allocBytes=4,198,104 elapsedMs=0.85 requests=6 parsedPrimaryUsed=2 parsedPrimaryReset=1790000000 parsedPrimarySeconds=18000 parsedSecondary=False
+generic-json targetBytes=10240 bodyBytes=10240 allocBytes=391,968 elapsedMs=1.32 requests=12 parsedPrimaryUsed=15 parsedWeeklyUsed=28 parsedMetric=used percent:15
+generic-json targetBytes=102400 bodyBytes=102400 allocBytes=744,200 elapsedMs=1.58 requests=12 parsedPrimaryUsed=15 parsedWeeklyUsed=28 parsedMetric=used percent:15
+generic-json targetBytes=1047552 bodyBytes=1047552 allocBytes=7,830,957 elapsedMs=5.40 requests=12 parsedPrimaryUsed=15 parsedWeeklyUsed=28 parsedMetric=used percent:15
+ui providers=5 initialRows=5 overviewRows=5 providerRefreshFanoutAllocBytes=51,272 providerRefreshFanoutElapsedMs=0.57 detailsUnopenedInitialRows=0 detailsUnopenedAfterRefreshRows=0 detailsOpenedInitialRows=8 oneProviderFanoutRefreshAllocBytes=89,608 detailsOpenedRepeatRows=8 detailsReferencesStableAfterOneProviderRefresh=4/4
+ui providers=15 initialRows=15 overviewRows=15 providerRefreshFanoutAllocBytes=148,800 providerRefreshFanoutElapsedMs=1.07 detailsUnopenedInitialRows=0 detailsUnopenedAfterRefreshRows=0 detailsOpenedInitialRows=8 oneProviderFanoutRefreshAllocBytes=89,093 detailsOpenedRepeatRows=8 detailsReferencesStableAfterOneProviderRefresh=14/14

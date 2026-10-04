@@ -9,6 +9,55 @@ namespace TokensLimitsExtension.Tests;
 public sealed class CodexUsageClientTests
 {
     [Fact]
+    public async Task PreservesReplacementDecodingForMalformedUtf8Strings()
+    {
+        var bytes = Encoding.UTF8.GetBytes("{\"plan\":\"Pro @\",\"rate_limit\":{\"primary_window\":{\"used_percent\":2,\"reset_at\":1790000000,\"limit_window_seconds\":18000}}}");
+        bytes[Array.IndexOf(bytes, (byte)'@')] = 0xff;
+        using var client = new CodexUsageClient(new BytesHandler(bytes));
+
+        var snapshot = await client.FetchUsageAsync("test-token", CancellationToken.None);
+
+        Assert.Equal("Pro \uFFFD", snapshot.Plan);
+    }
+
+    [Fact]
+    public async Task ParsesLargeUtf8ResponseWithoutAllocatingAWholeUtf16Body()
+    {
+        var json = "{\"padding\":\"" + new string('x', 196_608)
+            + "\",\"plan\":\"Тест 🚀\",\"rate_limit\":{\"primary_window\":{\"used_percent\":2,\"reset_at\":1790000000,\"limit_window_seconds\":18000}}}";
+        var bytes = Encoding.UTF8.GetBytes(json);
+        using var client = new CodexUsageClient(new BytesHandler(bytes));
+        await client.FetchUsageAsync("test-token", CancellationToken.None);
+
+        // The in-memory handler and reads complete synchronously, so this measures
+        // only this request's thread after JSON and byte-array pools are warm.
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var request = client.FetchUsageAsync("test-token", CancellationToken.None);
+        Assert.True(request.IsCompletedSuccessfully);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        var snapshot = await request;
+
+        Assert.Equal("Тест 🚀", snapshot.Plan);
+        Assert.Equal(2, snapshot.PrimaryUsedPercent);
+        Assert.True(allocated < bytes.Length * 3L, $"Allocated {allocated} bytes for a {bytes.Length}-byte response.");
+    }
+
+    [Theory]
+    [InlineData("utf-16")]
+    [InlineData("iso-8859-1")]
+    [InlineData("invalid-charset")]
+    public async Task PreservesResponseCharsetConversion(string charset)
+    {
+        const string json = "{\"plan\":\"Pro é\",\"rate_limit\":{\"primary_window\":{\"used_percent\":2,\"reset_at\":1790000000,\"limit_window_seconds\":18000}}}";
+        var encoding = charset == "invalid-charset" ? Encoding.UTF8 : Encoding.GetEncoding(charset);
+        using var client = new CodexUsageClient(new BytesHandler(encoding.GetBytes(json), charset));
+
+        var snapshot = await client.FetchUsageAsync("test-token", CancellationToken.None);
+
+        Assert.Equal("Pro é", snapshot.Plan);
+    }
+
+    [Fact]
     public async Task ParsesWindowsPlanAndAdditionalRateLimits()
     {
         const string json = """
@@ -162,6 +211,16 @@ public sealed class CodexUsageClientTests
 
         Assert.False(snapshot.HasPrimaryWindow);
         Assert.True(snapshot.HasSecondaryWindow);
+    }
+
+    private sealed class BytesHandler(byte[] bytes, string? charset = null) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var content = new ByteArrayContent(bytes);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = charset };
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
     }
 
     private sealed class StubHandler(string responseBody, HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
