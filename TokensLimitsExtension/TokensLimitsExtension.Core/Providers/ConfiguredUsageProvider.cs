@@ -18,6 +18,10 @@ namespace TokensLimitsExtension.Core.Providers;
 /// </summary>
 public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConnectionValidator, IDisposable
 {
+    public bool SupportsConnectionValidation => string.Equals(
+        _descriptor.Id,
+        "azureopenai",
+        StringComparison.OrdinalIgnoreCase);
     private const string ProductUserAgent = "TokensLimitsExtension";
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan MaximumCancellableTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);

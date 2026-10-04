@@ -91,14 +91,42 @@ public sealed class UsageRefreshCoordinator : IDisposable
     public Task RefreshProviderAsync(IUsageProviderStateSource provider, bool force = false)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        CancellationToken token;
+        if (!TryBeginProviderOperation(provider, out var token))
+        {
+            return Task.CompletedTask;
+        }
+
+        return RefreshProviderSafelyAsync(provider, force, token);
+    }
+
+    public Task ValidateProviderConnectionAsync(
+        UsageSnapshotCache provider,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        if (!provider.SupportsConnectionValidation)
+        {
+            throw new InvalidOperationException($"Provider '{provider.Descriptor.Id}' does not support connection validation.");
+        }
+
+        if (!TryBeginProviderOperation(provider, out var providerToken))
+        {
+            return Task.CompletedTask;
+        }
+
+        return ValidateProviderConnectionSafelyAsync(provider, providerToken, cancellationToken);
+    }
+
+    private bool TryBeginProviderOperation(IUsageProviderStateSource provider, out CancellationToken token)
+    {
         lock (_gate)
         {
             if (Volatile.Read(ref _disposed) != 0
                 || !IsCurrentProviderUnsafe(provider)
                 || !_providerTokens.TryGetValue(provider.Descriptor.Id, out var source))
             {
-                return Task.CompletedTask;
+                token = default;
+                return false;
             }
 
             var now = _timeProvider.GetUtcNow();
@@ -120,18 +148,14 @@ public sealed class UsageRefreshCoordinator : IDisposable
             {
                 _nextRefreshAt[provider.Descriptor.Id] = cooldownUntil.Value;
                 ScheduleNearestRefreshUnsafe();
-                return Task.CompletedTask;
+                token = default;
+                return false;
             }
 
-            if (_cooldownUntil.ContainsKey(provider.Descriptor.Id))
-            {
-                _cooldownUntil.Remove(provider.Descriptor.Id);
-            }
-
+            _cooldownUntil.Remove(provider.Descriptor.Id);
             token = source.Token;
+            return true;
         }
-
-        return RefreshProviderSafelyAsync(provider, force, token);
     }
 
     public void Dispose()
@@ -187,6 +211,30 @@ public sealed class UsageRefreshCoordinator : IDisposable
             // provider failure here so it cannot become an unobserved task fault;
             // the cache normally classifies its own provider failures.
             Debug.WriteLine($"[TokensLimits] coordinator refresh failed for {provider.Descriptor.Id}: {exception.GetType().Name}");
+        }
+        finally
+        {
+            ScheduleAfterRefresh(provider);
+        }
+    }
+
+    private async Task ValidateProviderConnectionSafelyAsync(
+        UsageSnapshotCache provider,
+        CancellationToken providerToken,
+        CancellationToken cancellationToken)
+    {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(providerToken, cancellationToken);
+        try
+        {
+            await provider.ValidateConnectionAsync(linkedCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (linkedCts.IsCancellationRequested)
+        {
+            // The caller stops waiting, or the provider is no longer active.
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"[TokensLimits] coordinator validation failed for {provider.Descriptor.Id}: {exception.GetType().Name}");
         }
         finally
         {

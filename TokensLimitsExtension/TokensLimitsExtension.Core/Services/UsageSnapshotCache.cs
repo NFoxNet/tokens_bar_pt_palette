@@ -21,6 +21,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
     private DateTimeOffset _fetchedAt;
     private UsageProviderState _state = new(null, null, null, false);
     private Task<UsageSnapshot>? _inFlightRefresh;
+    private InFlightOperationKind _inFlightOperationKind;
     private long _invalidationVersion;
     private long _configurationGeneration;
     private int _disposed;
@@ -45,6 +46,9 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
     }
 
     public UsageProviderDescriptor Descriptor => _provider.Descriptor;
+
+    public bool SupportsConnectionValidation
+        => _provider is IUsageProviderConnectionValidator { SupportsConnectionValidation: true };
 
     public event EventHandler? StateChanged;
 
@@ -107,6 +111,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
             previousGeneration = _generationCts;
             _generationCts = new CancellationTokenSource();
             _inFlightRefresh = null;
+            _inFlightOperationKind = InFlightOperationKind.None;
             _state = _state with
             {
                 Snapshot = null,
@@ -129,6 +134,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
             previousGeneration = _generationCts;
             _generationCts = new CancellationTokenSource();
             _inFlightRefresh = null;
+            _inFlightOperationKind = InFlightOperationKind.None;
             _invalidationVersion++;
             _configurationGeneration++;
             _state = _state with { IsRefreshing = false, ErrorKind = UsageProviderErrorKind.None, RetryAfter = null, RetryAfterUntil = null };
@@ -142,38 +148,155 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (TryGetFreshSnapshot(out var cachedSnapshot))
-        {
-            return cachedSnapshot;
-        }
-
         Task<UsageSnapshot> refreshTask;
         lock (_stateGate)
         {
-            if (TryGetFreshSnapshotUnsafe(out cachedSnapshot))
+            if (_inFlightRefresh is not null)
+            {
+                refreshTask = _inFlightRefresh;
+            }
+            else if (TryGetFreshSnapshotUnsafe(out var cachedSnapshot))
             {
                 return cachedSnapshot;
             }
-
-            if (_inFlightRefresh is null)
-            {
-                refreshTask = FetchSnapshotAsync(_generationCts.Token);
-                _inFlightRefresh = refreshTask;
-                _ = refreshTask.ContinueWith(
-                    _ => ClearInFlightRefresh(refreshTask),
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-            }
             else
             {
-                refreshTask = _inFlightRefresh;
+                refreshTask = StartSharedOperationUnsafe(FetchSnapshotAsync(_generationCts.Token), InFlightOperationKind.Refresh);
             }
         }
 
         // A page that goes away stops waiting without cancelling the provider
         // request shared with the Dock and other pages.
         return await refreshTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task ValidateConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!SupportsConnectionValidation)
+        {
+            throw new InvalidOperationException($"Provider '{Descriptor.Id}' does not support connection validation.");
+        }
+
+        Task<UsageSnapshot> validationTask;
+        lock (_stateGate)
+        {
+            if (_state.RetryAfterUntil is { } retryAfterUntil && retryAfterUntil > _timeProvider.GetUtcNow())
+            {
+                return;
+            }
+
+            if (_inFlightOperationKind == InFlightOperationKind.Validation && _inFlightRefresh is not null)
+            {
+                validationTask = _inFlightRefresh;
+            }
+            else
+            {
+                var previousRefresh = _inFlightRefresh;
+                var configurationGeneration = _configurationGeneration;
+                validationTask = RunConnectionValidationAsync(previousRefresh, configurationGeneration, _generationCts.Token);
+                StartSharedOperationUnsafe(validationTask, InFlightOperationKind.Validation);
+                SetRefreshingStateUnsafe();
+            }
+        }
+
+        RaiseStateChanged();
+        await validationTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<UsageSnapshot> RunConnectionValidationAsync(
+        Task<UsageSnapshot>? previousRefresh,
+        long configurationGeneration,
+        CancellationToken generationToken)
+    {
+        await Task.Yield();
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(generationToken, _lifetimeCts.Token);
+        BeginSharedOperationState(configurationGeneration, linkedCts.Token);
+        try
+        {
+            if (previousRefresh is not null)
+            {
+                await previousRefresh.ConfigureAwait(false);
+            }
+
+            linkedCts.Token.ThrowIfCancellationRequested();
+            var validator = (IUsageProviderConnectionValidator)_provider;
+            var validatedSnapshot = await validator.ValidateConnectionAsync(linkedCts.Token).ConfigureAwait(false);
+            linkedCts.Token.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            var fetchedAt = _timeProvider.GetUtcNow();
+            validatedSnapshot = validatedSnapshot with { FetchedAt = fetchedAt };
+            lock (_stateGate)
+            {
+                EnsureConfigurationGenerationUnsafe(configurationGeneration, linkedCts.Token);
+                _snapshot = validatedSnapshot;
+                _fetchedAt = fetchedAt;
+                _state = new UsageProviderState(validatedSnapshot, fetchedAt, fetchedAt, false);
+            }
+            RaiseStateChanged();
+            return validatedSnapshot;
+        }
+        catch (OperationCanceledException) when (linkedCts.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            lock (_stateGate)
+            {
+                EnsureConfigurationGenerationUnsafe(configurationGeneration, linkedCts.Token);
+                _state = _state with
+                {
+                    Snapshot = _snapshot,
+                    IsRefreshing = false,
+                    ErrorKind = UsageProviderErrorClassifier.Classify(exception),
+                    RetryAfter = UsageProviderErrorClassifier.GetRetryAfter(exception),
+                    RetryAfterUntil = UsageProviderErrorClassifier.GetRetryAfter(exception) is { } retryAfter && retryAfter > TimeSpan.Zero
+                        ? _timeProvider.GetUtcNow() + retryAfter
+                        : null,
+                };
+            }
+            RaiseStateChanged();
+            throw;
+        }
+    }
+
+    private Task<UsageSnapshot> StartSharedOperationUnsafe(
+        Task<UsageSnapshot> operation,
+        InFlightOperationKind kind)
+    {
+        _inFlightOperationKind = kind;
+        _inFlightRefresh = operation;
+        _ = operation.ContinueWith(
+            _ => ClearInFlightRefresh(operation),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return operation;
+    }
+
+    private void SetRefreshingStateUnsafe()
+    {
+        _state = _state with
+        {
+            IsRefreshing = true,
+            LastAttemptAt = _timeProvider.GetUtcNow(),
+            ErrorKind = UsageProviderErrorKind.None,
+            RetryAfter = null,
+            RetryAfterUntil = null,
+        };
+    }
+
+    private void BeginSharedOperationState(long configurationGeneration, CancellationToken token)
+    {
+        lock (_stateGate)
+        {
+            EnsureConfigurationGenerationUnsafe(configurationGeneration, token);
+            ThrowIfDisposed();
+            SetRefreshingStateUnsafe();
+        }
+        RaiseStateChanged();
     }
 
     private async Task<UsageSnapshot> FetchSnapshotAsync(CancellationToken generationToken)
@@ -211,7 +334,11 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
 
                 _snapshot = freshSnapshot;
                 _fetchedAt = fetchedAt;
-                _state = new UsageProviderState(freshSnapshot, fetchedAt, fetchedAt, false);
+                _state = new UsageProviderState(
+                    freshSnapshot,
+                    fetchedAt,
+                    fetchedAt,
+                    _inFlightOperationKind == InFlightOperationKind.Validation);
             }
             RaiseStateChanged();
             return freshSnapshot;
@@ -225,6 +352,11 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
             if (ReferenceEquals(_inFlightRefresh, completedTask))
             {
                 _inFlightRefresh = null;
+                _inFlightOperationKind = InFlightOperationKind.None;
+                if (completedTask.IsFaulted)
+                {
+                    _ = completedTask.Exception;
+                }
             }
         }
     }
@@ -252,7 +384,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         {
             InvalidateUnlessRefreshIsAlreadyInFlight();
         }
-        else if (TryGetFreshSnapshot(out _))
+        else if (TryGetFreshSnapshotWhenIdle())
         {
             return;
         }
@@ -266,8 +398,11 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
         {
-            var state = State;
-            UpdateState(isRefreshing: false, errorKind: state.ErrorKind, retryAfter: state.RetryAfter, preserveRetryAfterUntil: true);
+            if (!HasInFlightOperation())
+            {
+                var state = State;
+                UpdateState(isRefreshing: false, errorKind: state.ErrorKind, retryAfter: state.RetryAfter, preserveRetryAfterUntil: true);
+            }
             throw;
         }
         catch (OperationCanceledException) when (HasConfigurationGenerationChanged(configurationGeneration))
@@ -310,6 +445,32 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         {
             return TryGetFreshSnapshotUnsafe(out snapshot);
         }
+    }
+
+    private bool HasInFlightOperation()
+    {
+        lock (_stateGate)
+        {
+            return _inFlightRefresh is not null;
+        }
+    }
+
+    private bool TryGetFreshSnapshotWhenIdle()
+    {
+        lock (_stateGate)
+        {
+            return _inFlightRefresh is null && TryGetFreshSnapshotUnsafe(out _);
+        }
+    }
+
+    private void EnsureConfigurationGenerationUnsafe(long generation, CancellationToken token)
+    {
+        if (generation != _configurationGeneration)
+        {
+            throw new OperationCanceledException("Provider configuration changed during connection validation.", token);
+        }
+
+        token.ThrowIfCancellationRequested();
     }
 
     private bool TryGetFreshSnapshotUnsafe(out UsageSnapshot snapshot)
@@ -367,6 +528,11 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
     {
         lock (_stateGate)
         {
+            if (!isRefreshing && _inFlightRefresh is { IsCompleted: false })
+            {
+                isRefreshing = true;
+            }
+
             _state = _state with
             {
                 Snapshot = _snapshot,
@@ -420,5 +586,12 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
     private void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+    }
+
+    private enum InFlightOperationKind
+    {
+        None,
+        Refresh,
+        Validation,
     }
 }

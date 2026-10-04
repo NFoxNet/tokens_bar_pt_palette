@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text;
+using TokensLimitsExtension.Core.Models;
 using TokensLimitsExtension.Core.Providers;
+using TokensLimitsExtension.Core.Services;
 
 namespace TokensLimitsExtension.Tests;
 
@@ -82,6 +84,146 @@ public sealed class AzureValidationTests
         Assert.Equal(UsageProviderFailureKind.Timeout, exception.FailureKind);
     }
 
+    [Fact]
+    public async Task CacheAndCoordinatorCoalesceManualValidationAndAutomaticRequests()
+    {
+        var handler = new BlockingRecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        using var provider = CreateProvider(httpClient);
+        var settings = new TestRefreshSettings();
+        using var cache = new UsageSnapshotCache(provider, settings);
+        using var coordinator = new UsageRefreshCoordinator(settings);
+        coordinator.UpdateProviders([cache]);
+
+        var automaticSnapshot = await cache.GetUsageSnapshotAsync();
+        Assert.Equal("quotaUnavailable", Assert.Single(automaticSnapshot.Metrics).SemanticKey);
+        Assert.Equal(0, handler.RequestCount);
+
+        var firstValidation = coordinator.ValidateProviderConnectionAsync(cache);
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var secondValidation = coordinator.ValidateProviderConnectionAsync(cache);
+        var automaticWaiter = cache.GetUsageSnapshotAsync();
+        Assert.True(cache.State.IsRefreshing);
+        Assert.Equal(1, handler.RequestCount);
+
+        handler.Release.TrySetResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+        await Task.WhenAll(firstValidation, secondValidation);
+        var sharedSnapshot = await automaticWaiter;
+
+        Assert.Equal("connectionStatus", Assert.Single(sharedSnapshot.Metrics).SemanticKey);
+        Assert.Equal("connectionStatus", Assert.Single(cache.State.Snapshot!.Metrics).SemanticKey);
+        Assert.False(cache.State.IsRefreshing);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task CancellingOneValidationWaiterDoesNotCancelSharedOperationOrClearBusyState()
+    {
+        var handler = new BlockingRecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        using var provider = CreateProvider(httpClient);
+        using var cache = new UsageSnapshotCache(provider);
+        var cancelledWaiter = new CancellationTokenSource();
+        var sharedTask = cache.ValidateConnectionAsync();
+        var cancelledTask = cache.ValidateConnectionAsync(cancelledWaiter.Token);
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        cancelledWaiter.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledTask);
+        Assert.True(cache.State.IsRefreshing);
+
+        handler.Release.TrySetResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+        await sharedTask;
+        Assert.False(cache.State.IsRefreshing);
+        Assert.Equal("validated", Assert.Single(cache.State.Snapshot!.Metrics).Value);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task ClearingCredentialsCancelsValidationWithoutPublishingItsOldSnapshot()
+    {
+        var handler = new BlockingRecordingHandler();
+        using var httpClient = new HttpClient(handler);
+        using var provider = CreateProvider(httpClient);
+        using var cache = new UsageSnapshotCache(provider);
+        var validation = cache.ValidateConnectionAsync();
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        cache.Clear();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => validation);
+        Assert.Null(cache.State.Snapshot);
+        Assert.Equal(UsageProviderErrorKind.None, cache.State.ErrorKind);
+        Assert.False(cache.State.IsRefreshing);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task ManualValidationWaitsForAutomaticRefreshWithoutClearingBusyState()
+    {
+        var provider = new DelayedValidationProvider();
+        using var cache = new UsageSnapshotCache(provider);
+
+        var automaticRefresh = cache.RefreshAsync();
+        await provider.AutomaticStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var validation = cache.ValidateConnectionAsync();
+        Assert.Equal(0, provider.ValidationCount);
+
+        provider.ReleaseAutomatic.TrySetResult();
+        await automaticRefresh;
+        await provider.ValidationStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(cache.State.IsRefreshing);
+
+        provider.ReleaseValidation.TrySetResult();
+        await validation;
+        Assert.False(cache.State.IsRefreshing);
+        Assert.Equal("validated", Assert.Single(cache.State.Snapshot!.Metrics).Value);
+        Assert.Equal(1, provider.ValidationCount);
+    }
+
+    [Fact]
+    public async Task CoordinatorDoesNotValidateInactiveProviderOrDuringRetryAfterCooldown()
+    {
+        var attempt = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            attempt++;
+            return attempt == 1
+                ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Headers = { RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(30)) },
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                }
+                : new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                };
+        });
+        using var httpClient = new HttpClient(handler);
+        using var provider = CreateProvider(httpClient);
+        var settings = new TestRefreshSettings();
+        using var cache = new UsageSnapshotCache(provider, settings);
+        using var coordinator = new UsageRefreshCoordinator(settings);
+
+        await coordinator.ValidateProviderConnectionAsync(cache);
+        Assert.Empty(handler.Requests);
+
+        coordinator.UpdateProviders([cache]);
+        await cache.GetUsageSnapshotAsync();
+        await coordinator.ValidateProviderConnectionAsync(cache);
+        Assert.Single(handler.Requests);
+        Assert.Equal(UsageProviderErrorKind.RateLimited, cache.State.ErrorKind);
+
+        await coordinator.ValidateProviderConnectionAsync(cache);
+        Assert.Single(handler.Requests);
+    }
+
     private static ConfiguredUsageProvider CreateProvider(HttpClient httpClient, TimeSpan? requestTimeout = null)
         => new(
             UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "azureopenai"),
@@ -117,6 +259,74 @@ public sealed class AzureValidationTests
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK);
         }
+    }
+
+    private sealed class BlockingRecordingHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<HttpResponseMessage> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int RequestCount;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref RequestCount);
+            Started.TrySetResult();
+            return await Release.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private sealed class TestRefreshSettings : IUsageRefreshSettings
+    {
+        public TimeSpan RefreshInterval => TimeSpan.FromMinutes(1);
+
+        public event EventHandler? Changed
+        {
+            add { }
+            remove { }
+        }
+    }
+
+    private sealed class DelayedValidationProvider : IUsageProvider, IUsageProviderConnectionValidator
+    {
+        public UsageProviderDescriptor Descriptor { get; } = UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "azureopenai");
+
+        public bool SupportsConnectionValidation => true;
+
+        public TaskCompletionSource AutomaticStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ReleaseAutomatic { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ValidationStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ReleaseValidation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int ValidationCount;
+
+        public async Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            AutomaticStarted.TrySetResult();
+            await ReleaseAutomatic.Task.WaitAsync(cancellationToken);
+            return CreateSnapshot("metadata");
+        }
+
+        public async Task<UsageSnapshot> ValidateConnectionAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref ValidationCount);
+            ValidationStarted.TrySetResult();
+            await ReleaseValidation.Task.WaitAsync(cancellationToken);
+            return CreateSnapshot("manual connection validation");
+        }
+
+        private UsageSnapshot CreateSnapshot(string source)
+            => new(Descriptor.Id, Descriptor.DisplayName, null, null, null, false)
+            {
+                Source = source,
+                Metrics = [new UsageMetric("Connection", source == "metadata" ? "Unavailable" : "validated", SemanticKey: source == "metadata" ? "quotaUnavailable" : "connectionStatus")],
+            };
     }
 
     private sealed record RequestDetails(HttpMethod Method, Uri Uri, string ApiKey, string Body);
