@@ -9,6 +9,68 @@ namespace TokensLimitsExtension.Tests;
 public sealed class ProviderCatalogTests
 {
     [Fact]
+    public async Task GenericAdapterParsesLargeUtf8ResponseWithoutCopyingAndDecodingTheWholeBody()
+    {
+        var json = "{\"padding\":\"" + new string('x', 196_608)
+            + "\",\"balance_infos\":[{\"currency\":\"USD\",\"total_balance\":\"8.95\"}]}";
+        var bytes = Encoding.UTF8.GetBytes(json);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "deepseek"),
+            new TestConfiguration(("deepseek", "apiKey", "test-key")),
+            new HttpClient(new BinaryStubHandler(bytes)));
+        await provider.GetUsageSnapshotAsync();
+
+        // No asynchronous I/O is involved; measure a warm request on its own thread.
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var request = provider.GetUsageSnapshotAsync();
+        Assert.True(request.IsCompletedSuccessfully);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        var snapshot = await request;
+
+        Assert.Equal(8.95m, Assert.Single(snapshot.Metrics).NumericValue);
+        Assert.True(allocated < bytes.Length * 3L, $"Allocated {allocated} bytes for a {bytes.Length}-byte response.");
+    }
+
+    [Theory]
+    [InlineData("utf-8")]
+    [InlineData("utf-16")]
+    [InlineData("iso-8859-1")]
+    [InlineData("invalid-charset")]
+    public async Task GenericAdapterPreservesResponseCharsetConversion(string charset)
+    {
+        const string json = "{\"plan\":\"Pro é\",\"usage\":7}";
+        var encoding = charset == "invalid-charset" ? Encoding.UTF8 : Encoding.GetEncoding(charset);
+        var content = new ByteArrayContent(encoding.GetBytes(json));
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = charset };
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "groq"),
+            new TestConfiguration(("groq", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(content)));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal("Pro é", snapshot.Plan);
+        Assert.Equal("7", Assert.Single(snapshot.Metrics, metric => metric.Name == "usage").Value);
+    }
+
+    [Theory]
+    [InlineData(" \t\uFEFF\r\n{\"usage\":7}")]
+    [InlineData(")]}'\n{\"usage\":7}")]
+    [InlineData("diagnostic\n{\"unrelated\":true}\n{\"usage\":7}")]
+    [InlineData("<root><usage>7</usage></root>")]
+    public async Task GenericAdapterPreservesBomXssiJsonlAndXmlResponses(string body)
+    {
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "groq"),
+            new TestConfiguration(("groq", "apiKey", "test-key")),
+            new HttpClient(new ContentHandler(new ByteArrayContent(Encoding.UTF8.GetBytes(body)))));
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        Assert.Equal("7", Assert.Single(snapshot.Metrics).Value);
+    }
+
+    [Fact]
     public async Task GenericAdapterRejectsAResponseBodyLargerThanItsConfiguredLimit()
     {
         using var provider = new ConfiguredUsageProvider(

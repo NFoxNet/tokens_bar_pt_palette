@@ -221,12 +221,12 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
                     continue;
                 }
 
-                var body = await ReadBoundedResponseBodyAsync(response.Content, requestCts.Token).ConfigureAwait(false);
-                var snapshot = UsageJsonParser.ParseText(
-                    _descriptor,
-                    endpoint.Name,
-                    body,
-                    DateTimeOffset.UtcNow);
+                var body = await ReadBoundedResponseMemoryAsync(response.Content, requestCts.Token).ConfigureAwait(false);
+                var encoding = GetContentEncoding(response.Content);
+                var now = DateTimeOffset.UtcNow;
+                var snapshot = encoding.CodePage == Encoding.UTF8.CodePage
+                    ? UsageJsonParser.ParseUtf8(_descriptor, endpoint.Name, body, now)
+                    : UsageJsonParser.ParseText(_descriptor, endpoint.Name, encoding.GetString(body.Span), now);
                 snapshots.Add(snapshot);
                 _logger($"[TokensLimits] Provider {_descriptor.Id}: snapshot fetched from {endpoint.Name}.");
             }
@@ -314,7 +314,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
             throw CreateHttpFailure("Azure OpenAI connection validation", response);
         }
 
-        _ = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        _ = await ReadBoundedResponseMemoryAsync(response.Content, cancellationToken).ConfigureAwait(false);
         _logger("[TokensLimits] Provider azureopenai: connection validation succeeded.");
         return new UsageSnapshot(
             _descriptor.Id,
@@ -1183,7 +1183,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
             throw CreateHttpFailure("Kilo tRPC", response);
         }
 
-        var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var content = await ReadBoundedResponseMemoryAsync(response.Content, cancellationToken).ConfigureAwait(false);
         using var document = JsonDocument.Parse(content);
         var root = document.RootElement;
         var creditObjects = EnumerateJsonObjects(root)
@@ -1466,7 +1466,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
                 throw CreateHttpFailure("Ollama API", response);
             }
 
-            var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            var content = await ReadBoundedResponseMemoryAsync(response.Content, cancellationToken).ConfigureAwait(false);
             using var document = JsonDocument.Parse(content);
             var snapshot = UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
             _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from cloud model catalog.");
@@ -1484,7 +1484,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
                 throw CreateHttpFailure("Локальный Ollama API", response);
             }
 
-            var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            var content = await ReadBoundedResponseMemoryAsync(response.Content, cancellationToken).ConfigureAwait(false);
             using var document = JsonDocument.Parse(content);
             var snapshot = UsageJsonParser.ParseOllama(Descriptor, document.RootElement, DateTimeOffset.UtcNow);
             _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from local model catalog.");
@@ -1889,7 +1889,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
             throw CreateHttpFailure("Zed profile", response);
         }
 
-        var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var content = await ReadBoundedResponseMemoryAsync(response.Content, cancellationToken).ConfigureAwait(false);
         using var document = JsonDocument.Parse(content);
         var root = document.RootElement;
         var metrics = new List<UsageMetric>();
@@ -2087,7 +2087,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
                 throw CreateHttpFailure($"OpenAI {path}", response);
             }
 
-            var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            var content = await ReadBoundedResponseMemoryAsync(response.Content, cancellationToken).ConfigureAwait(false);
             using var document = JsonDocument.Parse(content);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object
@@ -2883,7 +2883,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
             throw CreateHttpFailure($"{Descriptor.DisplayName} gateway", response);
         }
 
-        var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var content = await ReadBoundedResponseMemoryAsync(response.Content, cancellationToken).ConfigureAwait(false);
         using var document = JsonDocument.Parse(content);
         var snapshot = UsageJsonParser.Parse(Descriptor, "token-plan/usage", document.RootElement, DateTimeOffset.UtcNow);
         _logger($"[TokensLimits] Provider {Descriptor.Id}: snapshot fetched from token-plan gateway.");
@@ -2965,7 +2965,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
             throw CreateHttpFailure("Deepgram", response);
         }
 
-        var content = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var content = await ReadBoundedResponseMemoryAsync(response.Content, cancellationToken).ConfigureAwait(false);
         using var document = JsonDocument.Parse(content);
         return document.RootElement.Clone();
     }
@@ -3148,11 +3148,14 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
 
     private async Task<string> ReadBoundedResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
     {
-        var bytes = await ReadBoundedResponseBytesAsync(content, cancellationToken).ConfigureAwait(false);
-        return GetContentEncoding(content).GetString(bytes);
+        var bytes = await ReadBoundedResponseMemoryAsync(content, cancellationToken).ConfigureAwait(false);
+        return GetContentEncoding(content).GetString(bytes.Span);
     }
 
     private async Task<byte[]> ReadBoundedResponseBytesAsync(HttpContent content, CancellationToken cancellationToken)
+        => (await ReadBoundedResponseMemoryAsync(content, cancellationToken).ConfigureAwait(false)).ToArray();
+
+    private async Task<ReadOnlyMemory<byte>> ReadBoundedResponseMemoryAsync(HttpContent content, CancellationToken cancellationToken)
     {
         if (content.Headers.ContentLength is { } contentLength && contentLength > _maxResponseBodyBytes)
         {
@@ -3182,7 +3185,9 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
                 await bytes.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             }
 
-            return bytes.ToArray();
+            // This is a managed MemoryStream buffer, not the rented read buffer.
+            // Its lifetime continues with the returned memory after stream disposal.
+            return bytes.GetBuffer().AsMemory(0, checked((int)bytes.Length));
         }
         finally
         {

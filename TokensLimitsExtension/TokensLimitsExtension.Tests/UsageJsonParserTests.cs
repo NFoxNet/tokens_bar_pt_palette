@@ -1,9 +1,25 @@
+using System.Text;
 using TokensLimitsExtension.Core.Providers;
 
 namespace TokensLimitsExtension.Tests;
 
 public sealed class UsageJsonParserTests
 {
+    [Fact]
+    public void PreservesReplacementDecodingForMalformedUtf8Strings()
+    {
+        var bytes = Encoding.UTF8.GetBytes("{\"plan\":\"Pro @\",\"usage\":7}");
+        bytes[Array.IndexOf(bytes, (byte)'@')] = 0xff;
+
+        var snapshot = UsageJsonParser.ParseUtf8(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "groq"),
+            "test",
+            bytes,
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal("Pro \uFFFD", snapshot.Plan);
+    }
+
     [Fact]
     public void NormalizesDeepSeekBalanceWithCurrencyInsteadOfPickingJsonFieldOrder()
     {
