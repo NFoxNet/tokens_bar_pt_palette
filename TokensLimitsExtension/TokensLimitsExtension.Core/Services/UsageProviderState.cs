@@ -15,6 +15,8 @@ public sealed record UsageProviderState(
     UsageProviderErrorKind ErrorKind = UsageProviderErrorKind.None,
     TimeSpan? RetryAfter = null)
 {
+    public DateTimeOffset? RetryAfterUntil { get; init; }
+
     public bool IsStale => Snapshot is not null && ErrorKind != UsageProviderErrorKind.None;
 }
 

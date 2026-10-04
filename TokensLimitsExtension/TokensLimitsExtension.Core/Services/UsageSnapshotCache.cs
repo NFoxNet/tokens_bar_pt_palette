@@ -114,6 +114,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
                 IsRefreshing = false,
                 ErrorKind = UsageProviderErrorKind.None,
                 RetryAfter = null,
+                RetryAfterUntil = null,
             };
         }
         previousGeneration.Cancel();
@@ -130,7 +131,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
             _inFlightRefresh = null;
             _invalidationVersion++;
             _configurationGeneration++;
-            _state = _state with { IsRefreshing = false, ErrorKind = UsageProviderErrorKind.None, RetryAfter = null };
+            _state = _state with { IsRefreshing = false, ErrorKind = UsageProviderErrorKind.None, RetryAfter = null, RetryAfterUntil = null };
         }
         previousGeneration.Cancel();
         RaiseStateChanged();
@@ -266,7 +267,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
         {
             var state = State;
-            UpdateState(isRefreshing: false, errorKind: state.ErrorKind, retryAfter: state.RetryAfter);
+            UpdateState(isRefreshing: false, errorKind: state.ErrorKind, retryAfter: state.RetryAfter, preserveRetryAfterUntil: true);
             throw;
         }
         catch (OperationCanceledException) when (HasConfigurationGenerationChanged(configurationGeneration))
@@ -358,18 +359,27 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
         }
     }
 
-    private void UpdateState(bool isRefreshing, UsageProviderErrorKind errorKind, TimeSpan? retryAfter)
+    private void UpdateState(
+        bool isRefreshing,
+        UsageProviderErrorKind errorKind,
+        TimeSpan? retryAfter,
+        bool preserveRetryAfterUntil = false)
     {
         lock (_stateGate)
         {
             _state = _state with
             {
                 Snapshot = _snapshot,
-                LastSuccessfulRefreshAt = _snapshot is null ? null : _fetchedAt,
+                LastSuccessfulRefreshAt = _snapshot is null ? null : _state.LastSuccessfulRefreshAt,
                 LastAttemptAt = isRefreshing ? _timeProvider.GetUtcNow() : _state.LastAttemptAt,
                 IsRefreshing = isRefreshing,
                 ErrorKind = errorKind,
                 RetryAfter = retryAfter,
+                RetryAfterUntil = preserveRetryAfterUntil
+                    ? _state.RetryAfterUntil
+                    : retryAfter is { } duration && duration > TimeSpan.Zero
+                        ? _timeProvider.GetUtcNow() + duration
+                        : null,
             };
         }
 
@@ -387,6 +397,7 @@ public sealed class UsageSnapshotCache : IUsageProviderStateSource, IRefreshCanc
                 LastAttemptAt = _timeProvider.GetUtcNow(),
                 ErrorKind = hasLastKnownSnapshot ? _state.ErrorKind : UsageProviderErrorKind.None,
                 RetryAfter = hasLastKnownSnapshot ? _state.RetryAfter : null,
+                RetryAfterUntil = hasLastKnownSnapshot ? _state.RetryAfterUntil : null,
             };
         }
 

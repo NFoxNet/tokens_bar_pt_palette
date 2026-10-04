@@ -101,14 +101,21 @@ public sealed class UsageRefreshCoordinator : IDisposable
                 return Task.CompletedTask;
             }
 
-            if (force
-                && _cooldownUntil.TryGetValue(provider.Descriptor.Id, out var cooldownUntil))
+            var now = _timeProvider.GetUtcNow();
+            var cooldownUntil = provider.State.RetryAfterUntil;
+            if (_cooldownUntil.TryGetValue(provider.Descriptor.Id, out var scheduledCooldownUntil)
+                && (cooldownUntil is null || scheduledCooldownUntil > cooldownUntil))
             {
-                if (cooldownUntil > _timeProvider.GetUtcNow())
-                {
-                    return Task.CompletedTask;
-                }
+                cooldownUntil = scheduledCooldownUntil;
+            }
 
+            if (cooldownUntil > now)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (_cooldownUntil.ContainsKey(provider.Descriptor.Id))
+            {
                 _cooldownUntil.Remove(provider.Descriptor.Id);
             }
 
@@ -235,7 +242,7 @@ public sealed class UsageRefreshCoordinator : IDisposable
         if (state.RetryAfter is { } retryAfter && retryAfter > TimeSpan.Zero)
         {
             _transientFailureCounts.Remove(provider.Descriptor.Id);
-            return now + retryAfter;
+            return state.RetryAfterUntil ?? now + retryAfter;
         }
 
         if (state.ErrorKind is UsageProviderErrorKind.Network or UsageProviderErrorKind.Timeout or UsageProviderErrorKind.RateLimited)
