@@ -44,9 +44,12 @@
 
 ## Ход выполнения
 
-- Baseline: locked restore прошёл; выполняется Debug x64 test всей solution в integration worktree.
+- Baseline: locked restore и Debug x64 test всей solution прошли: 119 unit + 22 integration.
 - Jev: новый вызов доступен, TypeSafe / jev-1.13.0 / status=ok, advisory next_step=contract_first, confidence=0.95. route confidence=0.23, reliable=false; route не используется как разрешение. decision_id не возвращён. Контракты согласованы явно исполнителями.
-- Refresh: подготовлен commit `26ae9cb5243f7061985510d3fed519986b4a6af2`, targeted tests 28/28; передано UX как зависимость. Root ещё выполняет отдельную review/интеграцию.
+- Первая интеграция: F1–F5/Core, F2/U5, F3, F4/U4 и S1–S4 сведены отдельными commits; Debug x64: 155 unit + 26 integration, все прошли.
+- Перекрёстное review выявило потерю Retry-After при сочетании 429/401 и остановку таймера после смены интервала. Оба исправления интегрированы отдельными commits с RED/GREEN fake-time/stub regressions.
+- Formatter review: actionable findings отсутствуют; неизвестные длительности используют локализованную роль окна. Native UX и общий Azure validation lifecycle ещё интегрируются.
+- PowerShell helper suites: installer, release helpers и unregister прошли в отдельных процессах. Это stub-тесты: реальный PowerToys/AppX/сертификаты не изменялись.
 
 ## Финальная проверка
 
