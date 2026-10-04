@@ -123,7 +123,7 @@ public sealed class TokensLimitsPageIntegrationTests
             null,
             false)
         {
-            Source = "https://provider.example/usage?access_token=test-token",
+            Source = "https://private-user:private-password@provider.example/usage?access_token=test-token",
         });
         using var cache = new UsageSnapshotCache(provider);
         using var page = new TokensLimitsPage(cache);
@@ -138,13 +138,14 @@ public sealed class TokensLimitsPageIntegrationTests
         Assert.Contains(items, item => item.Title == "Source" && item.Subtitle == "https://provider.example/usage");
         Assert.Contains(items, item => item.Title == "Last successful refresh");
         Assert.DoesNotContain(items, item => item.Subtitle.Contains("test-token", StringComparison.Ordinal));
+        Assert.DoesNotContain(items, item => item.Subtitle.Contains("private-password", StringComparison.Ordinal));
         Assert.Contains(items, item => item.Title == "Stale");
         Assert.Contains("Offline", dock.DockSubtitle, StringComparison.Ordinal);
         Assert.Contains(overview.GetItems(), item => item.Subtitle.Contains("Stale", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task IdenticalRefreshStateKeepsDetailsItemsStable()
+    public async Task RefreshingAndUpdatedTimestampKeepDetailsItemsStable()
     {
         var snapshot = new UsageSnapshot(
             "stable",
@@ -159,12 +160,21 @@ public sealed class TokensLimitsPageIntegrationTests
         await page.RefreshAsync();
         var firstItems = page.GetItems();
         var itemsChanged = 0;
-        page.ItemsChanged += (_, _) => itemsChanged++;
+        var sawRefreshing = false;
+        page.ItemsChanged += (_, _) =>
+        {
+            itemsChanged++;
+            sawRefreshing |= page.GetItems().Any(item =>
+                item.Title == "Last updated"
+                && item.Subtitle.Contains("Refreshing", StringComparison.Ordinal));
+        };
 
         await cache.RefreshAsync(force: true);
 
         var secondItems = page.GetItems();
-        Assert.Equal(0, itemsChanged);
+        Assert.Equal(2, itemsChanged);
+        Assert.True(sawRefreshing);
+        Assert.Contains(secondItems, item => item.Title == "Last updated");
         Assert.Equal(firstItems.Length, secondItems.Length);
         Assert.All(firstItems.Zip(secondItems), pair => Assert.Same(pair.First, pair.Second));
     }
@@ -418,7 +428,7 @@ public sealed class TokensLimitsPageIntegrationTests
             ampToggle.Value = true;
             ApplySettingsChange(settings);
             await initialAmpPage.RefreshAsync();
-            Assert.Equal(callsBeforeEnable + 1, amp.CallCount);
+            Assert.InRange(amp.CallCount, callsBeforeEnable + 1, callsBeforeEnable + 2);
             Assert.True(initialAmpPage.IsActive);
             Assert.True(initialAmpDockPage.IsActive);
             Assert.True(initialAmpDockItem.IsActive);
