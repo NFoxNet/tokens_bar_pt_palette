@@ -111,6 +111,8 @@ public sealed class UsageRefreshCoordinator : IDisposable
 
             if (cooldownUntil > now)
             {
+                _nextRefreshAt[provider.Descriptor.Id] = cooldownUntil.Value;
+                ScheduleNearestRefreshUnsafe();
                 return Task.CompletedTask;
             }
 
@@ -227,6 +229,11 @@ public sealed class UsageRefreshCoordinator : IDisposable
     {
         var now = _timeProvider.GetUtcNow();
         var state = provider.State;
+        if (state.RetryAfterUntil is { } retryAfterUntil && retryAfterUntil > now)
+        {
+            return retryAfterUntil;
+        }
+
         if (state.ErrorKind == UsageProviderErrorKind.None)
         {
             _transientFailureCounts.Remove(provider.Descriptor.Id);
@@ -280,10 +287,17 @@ public sealed class UsageRefreshCoordinator : IDisposable
             var now = _timeProvider.GetUtcNow();
             foreach (var provider in _providers)
             {
-                var lastSuccess = provider.State.LastSuccessfulRefreshAt;
-                _nextRefreshAt[provider.Descriptor.Id] = lastSuccess is null
+                var state = provider.State;
+                var lastSuccess = state.LastSuccessfulRefreshAt;
+                var nextRefreshAt = lastSuccess is null
                     ? now
                     : Max(now, lastSuccess.Value + _refreshInterval);
+                if (state.RetryAfterUntil is { } retryAfterUntil && retryAfterUntil > now)
+                {
+                    nextRefreshAt = Max(nextRefreshAt, retryAfterUntil);
+                }
+
+                _nextRefreshAt[provider.Descriptor.Id] = nextRefreshAt;
             }
             ScheduleNearestRefreshUnsafe();
         }
