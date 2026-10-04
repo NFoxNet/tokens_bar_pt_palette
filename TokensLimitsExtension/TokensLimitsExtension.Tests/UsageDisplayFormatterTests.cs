@@ -1,3 +1,4 @@
+using System.Globalization;
 using TokensLimitsExtension.Core.Models;
 using TokensLimitsExtension.Core.Services;
 
@@ -29,12 +30,30 @@ public sealed class UsageDisplayFormatterTests
         Assert.Equal("4ч\\75%", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, Localization));
     }
 
-    [Fact]
-    public void FormatDockBandSubtitleUsesSemanticLabelsForUnknownWindowDurations()
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(-1, false)]
+    [InlineData(30, true)]
+    [InlineData(90, false)]
+    public void FormatDockBandSubtitleLocalizesFallbackForUnknownWindowDurations(int seconds, bool isPrimary)
     {
-        var snapshot = Snapshot(primary: Window(10, 123));
+        var window = Window(10, seconds);
+        var snapshot = isPrimary ? Snapshot(primary: window) : Snapshot(secondary: window);
+        var english = new TestLocalizationService(CultureInfo.GetCultureInfo("en-US"));
 
-        Assert.Equal("Основное\\90%", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, Localization));
+        var englishLabel = isPrimary ? "Primary" : "Secondary";
+        var russianLabel = isPrimary ? "Основное" : "Дополнительное";
+        Assert.Equal($"{englishLabel}\\90%", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, english));
+        Assert.Equal($"{russianLabel}\\90%", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, Localization));
+    }
+
+    [Fact]
+    public void GetWindowLabelPreservesCallerFallbackForUnknownLocalizedDuration()
+    {
+        var window = Window(10, 30);
+        var english = new TestLocalizationService(CultureInfo.GetCultureInfo("en-US"));
+
+        Assert.Equal("Caller fallback", UsageDisplayFormatter.GetWindowLabel(window, "Caller fallback", english));
     }
 
     [Fact]
@@ -84,9 +103,8 @@ public sealed class UsageDisplayFormatterTests
 
         var result = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, Localization);
 
-        Assert.StartsWith("Токены за 5 часов: ", result);
-        Assert.Contains("Токены за 7 дней: weekly-value", result);
-        Assert.DoesNotContain("Balance:", result);
+        Assert.StartsWith("Total balance: balance-value, Токены за 5 часов: ", result);
+        Assert.DoesNotContain("Токены за 7 дней", result);
         Assert.True(result.Length < 100);
     }
 
@@ -135,4 +153,32 @@ public sealed class UsageDisplayFormatterTests
         decimal? numericValue = null,
         string? currency = null)
         => new(name, value, unit, SemanticKey: semanticKey, NumericValue: numericValue, CurrencyCode: currency);
+
+    private sealed class TestLocalizationService(CultureInfo culture) : ILocalizationService
+    {
+        public event EventHandler? LanguageChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public CultureInfo Culture { get; } = culture;
+
+        public string GetString(string key, string? fallback = null)
+            => key switch
+            {
+                "details.primary" => "Primary",
+                "details.secondary" => "Secondary",
+                "time.hours" => "{0}h",
+                "time.days" => "{0}d",
+                "time.minutes" => "{0}m",
+                "metrics.tokens5h" => "Tokens in 5 hours",
+                "metrics.tokens7d" => "Tokens in 7 days",
+                "metrics.totalBalance" => "Total balance",
+                _ => fallback ?? key,
+            };
+
+        public string Format(string key, params object?[] arguments)
+            => string.Format(Culture, GetString(key), arguments);
+    }
 }

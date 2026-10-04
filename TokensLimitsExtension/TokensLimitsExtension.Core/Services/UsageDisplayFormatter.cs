@@ -44,7 +44,8 @@ public static class UsageDisplayFormatter
                 return localization?.GetString("status.unavailable", "Usage unavailable") ?? "Лимиты недоступны";
             }
 
-            return estimatePrefix + string.Join(", ", metrics.Take(2).Select(metric => FormatDockMetric(metric, localization)));
+            var metricsToDisplay = GetMetricsForMetricsOnly(metrics);
+            return estimatePrefix + string.Join(", ", metricsToDisplay.Select(metric => FormatDockMetric(metric, localization)));
         }
 
         var windows = new List<string>(2);
@@ -155,8 +156,7 @@ public static class UsageDisplayFormatter
         var seconds = window.LimitWindowSeconds;
         if (seconds % 60 != 0)
         {
-            var key = fallback == "Основное" ? "details.primary" : "details.secondary";
-            return localization.GetString(key, fallback);
+            return fallback;
         }
 
         if (seconds % (7 * 24 * 60 * 60) == 0)
@@ -213,11 +213,28 @@ public static class UsageDisplayFormatter
 
     private static string FormatDockWindow(UsageWindow window, bool isPrimary, ILocalizationService? localization)
     {
-        var fallback = isPrimary ? "Основное" : "Дополнительное";
+        var fallback = localization is null
+            ? isPrimary ? "Основное" : "Дополнительное"
+            : localization.GetString(
+                isPrimary ? "details.primary" : "details.secondary",
+                isPrimary ? "Primary" : "Secondary");
         var label = localization is null
             ? GetLegacyWindowShortLabel(window, fallback)
             : GetWindowShortLabel(window, fallback, localization);
         return $"{label}\\{FormatDockPercent(window)}";
+    }
+
+    private static IEnumerable<UsageMetric> GetMetricsForMetricsOnly(IReadOnlyList<UsageMetric> metrics)
+    {
+        var totalBalance = metrics.FirstOrDefault(metric =>
+            string.Equals(metric.SemanticKey, "totalBalance", StringComparison.OrdinalIgnoreCase));
+        if (totalBalance is null)
+        {
+            return metrics.Take(2);
+        }
+
+        return new[] { totalBalance }
+            .Concat(metrics.Where(metric => !ReferenceEquals(metric, totalBalance)).Take(1));
     }
 
     private static int GetRemainingPercent(double usedPercent)
