@@ -3074,7 +3074,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
         foreach (var requestFailure in failures.OfType<UsageProviderRequestException>())
         {
             // Keep the longest positive delay advertised by any attempted endpoint.
-            // For date headers, this can conservatively add time spent on later endpoints.
+            // This can conservatively add time spent on later endpoints for delta or date headers.
             if (requestFailure.RetryAfter is { } retryAfter
                 && retryAfter > TimeSpan.Zero
                 && (effectiveRetryAfter is null || retryAfter > effectiveRetryAfter.Value))
