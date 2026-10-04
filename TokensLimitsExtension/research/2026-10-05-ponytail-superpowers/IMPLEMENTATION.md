@@ -50,6 +50,9 @@
 - Перекрёстное review выявило потерю Retry-After при сочетании 429/401 и остановку таймера после смены интервала. Оба исправления интегрированы отдельными commits с RED/GREEN fake-time/stub regressions.
 - Formatter review: actionable findings отсутствуют; неизвестные длительности используют локализованную роль окна. Native UX и общий Azure validation lifecycle ещё интегрируются.
 - PowerShell helper suites: installer, release helpers и unregister прошли в отдельных процессах. Это stub-тесты: реальный PowerToys/AppX/сертификаты не изменялись.
+- Shared Azure validation и первый Native UX checkpoint интегрированы: Debug x64 168 unit + 46 integration, все прошли. Исправлены waiter-only cancellation, поздняя ошибка после смены аккаунта и публикация ошибки общего запроса после отмены всех ожидающих.
+- Release x64/ARM64 до последнего UI checkpoint прошли; по два известных внешних IL2104 (WinRT SDK), ноль ошибок. После финального UI изменения сборки повторяются.
+- Review: исходные COM/manifest/provider IDs/lock files не изменены; CodeX home composition и formatter получили независимое review. Найденные UI edge cases исправляются отдельным follow-up.
 
 ## Финальная проверка
 
