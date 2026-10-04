@@ -16,7 +16,7 @@ namespace TokensLimitsExtension.Core.Providers;
 /// and parsing are deliberately shared, while endpoint URLs and response fields
 /// remain data-driven so adding a provider does not touch the Dock or pages.
 /// </summary>
-public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
+public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConnectionValidator, IDisposable
 {
     private const string ProductUserAgent = "TokensLimitsExtension";
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(20);
@@ -77,6 +77,11 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (_descriptor.Id.Equals("azureopenai", StringComparison.OrdinalIgnoreCase))
+        {
+            return CreateAzureQuotaUnavailableSnapshot();
+        }
 
         if (_descriptor.Id.Equals("jetbrains", StringComparison.OrdinalIgnoreCase))
         {
@@ -257,6 +262,68 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IDisposable
     {
         Interlocked.Exchange(ref _disposed, 1);
         GC.SuppressFinalize(this);
+    }
+
+    public Task<UsageSnapshot> ValidateConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_descriptor.Id.Equals("azureopenai", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Connection validation is not supported for {_descriptor.DisplayName}.");
+        }
+
+        return ExecuteWithDeadlineAsync(ValidateAzureOpenAiConnectionAsync, cancellationToken);
+    }
+
+    private UsageSnapshot CreateAzureQuotaUnavailableSnapshot()
+        => new(
+            _descriptor.Id,
+            _descriptor.DisplayName,
+            null,
+            null,
+            null,
+            false)
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Source = "metadata",
+            Metrics = [new UsageMetric("Quota", "Unavailable", SemanticKey: "quotaUnavailable")],
+        };
+
+    private async Task<UsageSnapshot> ValidateAzureOpenAiConnectionAsync(CancellationToken cancellationToken)
+    {
+        var endpoint = UsageProviderEndpointCatalog.For(_descriptor.Id)
+            .Single(candidate => candidate.Name.Equals("validation", StringComparison.OrdinalIgnoreCase));
+        var credential = ResolveCredential();
+        if (string.IsNullOrWhiteSpace(credential.ApiKey))
+        {
+            throw new UsageProviderConfigurationException("Для Azure OpenAI не задан API-ключ.");
+        }
+
+        using var request = CreateRequest(endpoint, credential);
+        using var response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw CreateHttpFailure("Azure OpenAI connection validation", response);
+        }
+
+        _ = await ReadBoundedResponseBytesAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        _logger("[TokensLimits] Provider azureopenai: connection validation succeeded.");
+        return new UsageSnapshot(
+            _descriptor.Id,
+            _descriptor.DisplayName,
+            null,
+            null,
+            null,
+            false)
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Source = "manual connection validation",
+            Metrics = [new UsageMetric("Connection status", "validated", SemanticKey: "connectionStatus")],
+        };
     }
 
     private static TimeSpan? GetRetryAfter(RetryConditionHeaderValue? retryAfter)
