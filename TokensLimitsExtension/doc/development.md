@@ -145,6 +145,23 @@ Lock-файлы общих Core/test проектов не привязаны к
 
 После сборки проверяйте оба готовых пакета через `..\scripts\Test-ReleasePackage.ps1`, передав путь к экспортированному `.cer`. Проверка подтверждает CMS подпись и точное совпадение signer-сертификата, сверяет содержимое с подписанной block map, а также проверяет publisher/version/architecture, COM CLSID, обязательные assets и `lang/en.json`/`lang/ru.json`. Она читает только локальные файлы, не устанавливает пакет, не меняет хранилища доверия и не требует сети. Доверие Windows проверяется отдельно во время установки.
 
+## Синтетическое сравнение памяти
+
+Offline harness и результаты до/после находятся в
+`research/2026-10-05-memory/`. Он использует временные JSONL, fake providers
+и stub HTTP, без пользовательских данных и сети. Из каталога solution:
+
+```powershell
+dotnet restore .\research\2026-10-05-memory\MemoryProbe\MemoryProbe.csproj -p:Platform=x64 --locked-mode
+dotnet build .\research\2026-10-05-memory\MemoryProbe\MemoryProbe.csproj --configuration Release -p:Platform=x64 --no-restore
+dotnet run --project .\research\2026-10-05-memory\MemoryProbe\MemoryProbe.csproj --configuration Release -p:Platform=x64 --no-build
+```
+
+Harness собирает managed library без trimming и не активирует COM/MSIX.
+Forced GC применяется только между его samples. Allocation и retained-event
+counts помогают сравнить одинаковые fixtures, но не заменяют live sampler.
+Подробности — в [отчёте](../research/2026-10-05-memory/RESULTS.md).
+
 ## Тестовые уровни
 
 - `TokensLimitsExtension.Tests` — парсинг, нормализация, auth, fallback, cache, registry и каталог провайдеров.
