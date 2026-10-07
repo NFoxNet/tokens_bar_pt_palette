@@ -123,6 +123,53 @@ public sealed class NativeUsageUxTests
         await refresh;
     }
 
+    [Theory]
+    [InlineData("en", UsageProviderErrorKind.None)]
+    [InlineData("ru", UsageProviderErrorKind.None)]
+    [InlineData("en", UsageProviderErrorKind.Network)]
+    [InlineData("ru", UsageProviderErrorKind.Network)]
+    public void DockKeepsSnapshotSubtitleStableDuringRefresh(string language, UsageProviderErrorKind errorKind)
+    {
+        using var userDirectory = new TestDirectory();
+        var localization = new JsonLocalizationService(
+            Path.Combine(AppContext.BaseDirectory, "lang"), userDirectory.Path, language);
+        var now = DateTimeOffset.UtcNow;
+        var state = new UsageProviderState(CreateSnapshot(now), now, now, false, errorKind);
+        var provider = new StateSourceProvider(state);
+        using var dock = new UsageDockBandItem(provider, localization: localization);
+        using var band = new TokensLimitsDockBandPage(localization);
+        band.UpdateItems([dock]);
+        var subtitle = dock.Subtitle;
+        Assert.Contains("65%", subtitle, StringComparison.Ordinal);
+        if (errorKind == UsageProviderErrorKind.Network)
+        {
+            Assert.Contains(localization.GetString("status.dock.network"), subtitle, StringComparison.Ordinal);
+        }
+        var itemsChanged = 0;
+        band.ItemsChanged += (_, _) => itemsChanged++;
+
+        provider.Publish(state with { IsRefreshing = true });
+
+        Assert.Equal(subtitle, dock.Subtitle);
+        Assert.Equal(subtitle, dock.DockSubtitle);
+        Assert.Equal(0, itemsChanged);
+
+        provider.Publish(state);
+
+        Assert.Equal(subtitle, dock.Subtitle);
+        Assert.Equal(0, itemsChanged);
+
+        provider.Publish(state with
+        {
+            Snapshot = state.Snapshot! with { PrimaryWindow = new UsageWindow(45, now.AddHours(4), 5 * 60 * 60) },
+            ErrorKind = UsageProviderErrorKind.None,
+        });
+
+        Assert.Contains("55%", dock.Subtitle, StringComparison.Ordinal);
+        Assert.Equal(dock.Subtitle, dock.DockSubtitle);
+        Assert.Equal(1, itemsChanged);
+    }
+
     [Fact]
     public async Task OverviewDetailsStripQueryAndFragmentFromRelativeSources()
     {
@@ -379,7 +426,11 @@ public sealed class NativeUsageUxTests
         public bool TryGetSnapshot(out UsageSnapshot snapshot) { snapshot = State.Snapshot!; return true; }
         public void Invalidate() { }
         public Task RefreshAsync(bool force = false, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public void Publish() => StateChanged?.Invoke(this, EventArgs.Empty);
+        public void Publish(UsageProviderState? state = null)
+        {
+            if (state is not null) State = state;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private sealed class TestRefreshSettings(TimeSpan refreshInterval) : IUsageRefreshSettings

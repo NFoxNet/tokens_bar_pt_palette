@@ -154,22 +154,14 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         UpdateDiagnostics();
         if (state.Snapshot is { } snapshot)
         {
-            ApplySnapshot(snapshot);
-            var statuses = new System.Collections.Generic.List<string>();
-            if (state.IsRefreshing)
-            {
-                statuses.Add(_localization.GetString("status.refreshing", "Refreshing…"));
-            }
+            var subtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization);
             if (state.IsStale)
             {
-                statuses.Add(GetStatusWarning(state));
+                subtitle = string.Concat(subtitle, " · ", GetStatusWarning(state));
             }
-
-            if (statuses.Count > 0)
-            {
-                DockSubtitle = string.Concat(DockSubtitle, " · ", string.Join(" · ", statuses));
-                Subtitle = DockSubtitle;
-            }
+            Title = snapshot.ProviderDisplayName;
+            DockSubtitle = subtitle;
+            Subtitle = subtitle;
         }
         else if (state.IsRefreshing)
         {
