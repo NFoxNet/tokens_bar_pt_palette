@@ -6,7 +6,7 @@ Tokens Limits — расширение Microsoft PowerToys Command Palette, ко
 
 Скачайте MSIX, сертификат, установщик и файл контрольных сумм из [GitHub Releases](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/latest), оставьте их в одной папке и запустите `Install-TokensLimitsExtension.cmd` двойным щелчком. Установщик остановит PowerToys перед обновлением, перенесёт устаревший pin Tokens Limits в Dock, если Command Palette закрыта, и запустит PowerToys снова. Подтверждение UAC требуется только для импорта сертификата и установки пакета. Не запускайте установщик командой «От имени администратора»: тогда PowerToys перезапустится с обычными правами пользователя. Если до установки PowerToys не работал, запустите его позже вручную.
 
-Подробности и полевые проверки v0.0.5.8 приведены на [странице релиза](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.8) и в [заметках к выпуску](TokensLimitsExtension/doc/release-notes-v0.0.5.8.md).
+Подробности и полевые проверки v0.0.5.9 приведены на [странице релиза](https://github.com/NFoxNet/tokens_bar_pt_palette/releases/tag/v0.0.5.9) и в [заметках к выпуску](TokensLimitsExtension/doc/release-notes-v0.0.5.9.md).
 
 Windows проверяет подпись пакета при установке; перед запуском установщика сравните скачанные файлы с `SHA256SUMS.txt`. При обновлении поверх существующей версии настройки и зашифрованные ключи сохраняются.
 
