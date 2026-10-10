@@ -91,6 +91,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         Settings.Add(_dockProviderOrder);
         Settings.Add(_dockMetric);
         AddDockVisibilitySettings();
+        AddFeatureSettings();
         AddProviderSettings();
         LoadSettings();
         _localization.ApplyPreference(_language.Value, notify: false);
@@ -354,6 +355,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     private void RefreshLocalizedSettings()
     {
+        RefreshFeatureSettings();
         _language.Label = _localization.GetString("settings.language");
         _language.Description = _localization.GetString("settings.languageDescription");
         _language.Choices =
@@ -426,6 +428,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         {
             _localization.ApplyPreference(_language.Value);
             ValidateRefreshInterval();
+            ValidateFeatureSettings();
             if (PersistAndMaskSecrets())
             {
                 SaveSettings();
