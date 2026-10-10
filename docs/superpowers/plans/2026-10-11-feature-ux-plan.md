@@ -54,7 +54,7 @@
 ## Task 4: Bounded history and native history page
 
 **Files:** Create Core `Models/UsageHistoryEntry.cs`, `Services/UsageHistoryStore.cs`, tests `UsageHistoryStoreTests.cs`, UI `Pages/UsageHistoryPage.cs` and Core `Services/UsageHistoryController.cs`, integration tests. Coordinator owns settings/wiring/catalog/lang. Update `doc/operations.md` and `doc/architecture.md`.
-**Interfaces:** Produce `UsageHistoryEntry` containing numeric windows/metrics, timestamp, provider ID, source, segment ID and fixed-window eligibility (unknown is ineligible); `UsageHistoryStore(string directory, int retentionDays = 14)` exposes `Append(UsageHistoryEntry entry)`, `Read(string providerId)`, `Clear()`. Controller starts a random per-process/config segment when identity is unknown; no credentials retained. UI constructor `UsageHistoryPage(UsageHistoryController controller, IReadOnlyList<UsageSnapshotCache> caches, ILocalizationService? localization = null)` uses the shared controller and bounded recent records.
+**Interfaces:** Produce `UsageHistoryEntry` containing numeric windows/metrics, timestamp, provider ID, source, segment ID and fixed-window eligibility (unknown is ineligible); `UsageHistoryStore(string directory, int retentionDays = 14)` exposes `Append(UsageHistoryEntry entry)`, `Read(string providerId)`, `Clear()`. Controller starts a random per-process/config segment when identity is unknown; no credentials retained. UI constructor `UsageHistoryPage(UsageHistoryController controller, IReadOnlyList<UsageSnapshotCache> caches, ILocalizationService? localization = null, TimeProvider? timeProvider = null)` uses the shared controller and bounded recent records.
 - [x] Add/run failing tests for 5-minute throttling, 7/14/30 retention, 8640 cap, numeric-only serialization, source/segment separation, oversized/corrupt input surfaced without overwrite, atomic writes and explicit clear.
 - [x] Implement bounded storage and opt-in lifecycle, native recent-measurement list and clear action; expose file failures safely.
 - [x] Run focused tests and update docs; commit milestone.
@@ -73,13 +73,17 @@
 - [x] Integrate independent worktree commits with explicit staging and resolve shared interfaces against the approved spec.
 - [x] Test settings defaults/serialization/change handling, disabled-feature allocations/subscriptions, existing compatibility and EN/RU keys.
 - [x] Run `dotnet restore TokensLimitsExtension.sln`; Debug x64 build and test with `--no-restore`; compare exit codes and test results. Expected: all checks pass.
-- [ ] Review each subsystem and final branch with independent agents; fix important findings with regression tests.
+- [x] Review each subsystem and final branch with independent agents; fix important findings with regression tests.
 - [x] Update plan progress, docs and evidence; commit integration milestone. Do not claim live Dock/ARM64 acceptance without actual checks.
 
 ## Execution and ownership
 
 User selected parallel subagents in separate worktrees and milestone commits. Dock worker owns existing settings/commands/formatter/Dock/lang/catalog files initially. Other workers create isolated new files and supply requested localization keys; coordinator integrates common files after Dock completion. Pace starts after the history contract is committed. No worker may modify unrelated files or publish.
 
-## Verification progress
+## Verification completed
 
-Implemented Tasks 1–5 and integration in isolated worktrees with milestone commits. Subsystem reviews are clean after fixes; whole-branch review is pending. At product commit `649eb99`, restore succeeded, Debug x64 build completed with 0 warnings/errors, and all 257 Core +116 integration tests passed. Live PowerToys/COM, ARM64 and real-settings upgrade acceptance remain unverified.
+All six tasks are complete. Isolated worktree milestones were integrated into `codex/feature-ux-development`. Subsystem reviews closed their Important findings. Whole-branch review of `a0f8784` found two pace presentation issues; the single fix wave `2e43776` binds pace to the active eligible series and re-evaluates cached numeric rows on host reads/events without disk/network work or a new timer. Scoped re-review passed with 0 Critical/Important/Material Minor remaining.
+
+At product commit `2e43776`, the coordinator independently ran restore, Debug x64 build (0 warnings/errors) and all 257 Core +141 integration tests (398 passed, 0 failed/skipped). The remaining source cleanup only removes a blank EOF line. [Verification report](../../../TokensLimitsExtension/doc/feature-ux-verification.md) contains scope, changed areas and acceptance gaps.
+
+Live PowerToys/COM, ARM64, real-settings/MSIX upgrade and real fixed-window payload availability remain unverified. No push, release or deployment was performed for this implementation step. The separate branch is retained as requested; original unrelated files are preserved.
