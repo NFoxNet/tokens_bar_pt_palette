@@ -121,6 +121,11 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
             return localization.GetString("setup.status.authRequired", "Authentication required");
         }
 
+        if (HasMissingConfiguration(descriptor))
+        {
+            return localization.GetString("setup.status.configurationRequired", "Setup incomplete");
+        }
+
         if (state is { ErrorKind: UsageProviderErrorKind.MissingConfiguration or UsageProviderErrorKind.Authentication })
         {
             return localization.GetString("setup.status.authRequired", "Authentication required");
@@ -139,6 +144,18 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
         if (state?.Snapshot is { } snapshot)
         {
             if (HasQuota(snapshot)) return localization.GetString("setup.status.ready", "Data received");
+            if (descriptor.Id.Equals("azureopenai", StringComparison.OrdinalIgnoreCase))
+            {
+                if (snapshot.Metrics.Any(metric => string.Equals(metric.SemanticKey, "connectionStatus", StringComparison.OrdinalIgnoreCase)
+                    && metric.Value.Equals("validated", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return FormatLocalized(localization, "setup.status.validatedNoQuota", "{0} · {1}",
+                        localization.GetString("status.connection.validated", "Connection validated"),
+                        localization.GetString("setup.status.quotaUnavailable", "Quota unavailable"));
+                }
+
+                return localization.GetString("setup.status.validationRequired", "Connection validation required");
+            }
             if (HasData(snapshot)) return localization.GetString("setup.status.quotaUnavailable", "Connected · quota unavailable");
             return localization.GetString("setup.status.unavailable", "Provider data unavailable");
         }
@@ -148,11 +165,21 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
 
     private bool HasMissingAuthentication(UsageProviderDescriptor descriptor)
     {
-        var required = GetRequiredFieldKeys(descriptor);
         var alternatives = GetAuthenticationOptionKeys(descriptor);
+        var required = GetRequiredAuthenticationFieldKeys(descriptor);
         return required.Any(key => string.IsNullOrWhiteSpace(_settings.GetValue(descriptor.Id, key)))
             || (alternatives.Length > 0
                 && !alternatives.Any(key => !string.IsNullOrWhiteSpace(_settings.GetValue(descriptor.Id, key))));
+    }
+
+    private bool HasMissingConfiguration(UsageProviderDescriptor descriptor)
+    {
+        var authenticationKeys = GetRequiredAuthenticationFieldKeys(descriptor)
+            .Concat(GetAuthenticationOptionKeys(descriptor))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return GetRequiredFieldKeys(descriptor)
+            .Where(key => !authenticationKeys.Contains(key))
+            .Any(key => string.IsNullOrWhiteSpace(_settings.GetValue(descriptor.Id, key)));
     }
 
     private static string CreateDetails(UsageProviderDescriptor descriptor, ILocalizationService localization)
@@ -164,11 +191,11 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
         }
 
         sections.Add(FormatLocalized(localization, "setup.authSource", "Authorization: {0}",
-            localization.GetString(AuthLocalizationKey(descriptor.AuthKind), AuthFallback(descriptor.AuthKind))));
+            localization.GetString(AuthLocalizationKey(descriptor), AuthFallback(descriptor))));
 
         var requiredKeys = GetRequiredFieldKeys(descriptor);
         var alternativeKeys = GetAuthenticationOptionKeys(descriptor);
-        var fields = descriptor.Settings.Select(field =>
+        var fields = GetSetupFields(descriptor).Select(field =>
         {
             var label = localization.GetString($"settings.field.{field.Key}.label", field.Label);
             var description = localization.GetString($"settings.field.{field.Key}.description", field.Description);
@@ -194,7 +221,7 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
 
         var requiredSettingKeys = requiredKeys.Concat(alternativeKeys).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var optionalFields = fields
-            .Where((_, index) => !requiredSettingKeys.Contains(descriptor.Settings[index].Key))
+            .Where((_, index) => !requiredSettingKeys.Contains(GetSetupFields(descriptor)[index].Key))
             .ToArray();
         if (optionalFields.Length > 0)
         {
@@ -300,6 +327,13 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
 
     private static string[] GetRequiredFieldKeys(UsageProviderDescriptor descriptor)
     {
+        if (descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        if (descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)) return ["sessionBundle"];
+
         var required = descriptor.AuthKind switch
         {
             UsageProviderAuthKind.ApiKey => new[] { "apiKey" },
@@ -313,9 +347,12 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
         };
         if (descriptor.Id.Equals("azureopenai", StringComparison.OrdinalIgnoreCase))
         {
-            required = [.. required, "deploymentName"];
+            required = [.. required, "baseUrl", "deploymentName"];
         }
-
+        else if (descriptor.Id.Equals("zed", StringComparison.OrdinalIgnoreCase))
+        {
+            required = [.. required, "userId"];
+        }
         return required
             .Where(key => descriptor.Settings.Any(field => field.Key.Equals(key, StringComparison.OrdinalIgnoreCase)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -323,7 +360,11 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
     }
 
     private static string[] GetAuthenticationOptionKeys(UsageProviderDescriptor descriptor)
-        => descriptor.AuthKind switch
+        => descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)
+            ? descriptor.Settings.Where(field => field.Key.Equals("apiKey", StringComparison.OrdinalIgnoreCase)
+                    || field.Key.Equals("adminApiKey", StringComparison.OrdinalIgnoreCase))
+                .Select(field => field.Key).ToArray()
+            : descriptor.AuthKind switch
         {
             UsageProviderAuthKind.ApiKeyOrCookie => descriptor.Settings
                 .Where(field => field.Key.Equals("apiKey", StringComparison.OrdinalIgnoreCase)
@@ -337,6 +378,24 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
             _ => [],
         };
 
+    private static string[] GetRequiredAuthenticationFieldKeys(UsageProviderDescriptor descriptor)
+    {
+        if (descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)) return [];
+        if (descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)) return ["sessionBundle"];
+        return descriptor.AuthKind switch
+        {
+            UsageProviderAuthKind.ApiKey => ["apiKey"],
+            UsageProviderAuthKind.Cookie => ["cookieHeader"],
+            UsageProviderAuthKind.OAuth => descriptor.Settings.Where(field => field.IsSecret).Select(field => field.Key).ToArray(),
+            _ => [],
+        };
+    }
+
+    private static UsageProviderSettingDescriptor[] GetSetupFields(UsageProviderDescriptor descriptor)
+        => descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)
+            ? descriptor.Settings.Where(field => field.Key.Equals("sessionBundle", StringComparison.OrdinalIgnoreCase)).ToArray()
+            : descriptor.Settings.ToArray();
+
     private static string FormatLocalized(ILocalizationService localization, string key, string fallback, params object?[] arguments)
         => string.Format(localization.Culture, localization.GetString(key, fallback), arguments);
 
@@ -346,16 +405,27 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
         return localization.GetString($"settings.field.{key}.label", setting.Label);
     }
 
-    private static string AuthLocalizationKey(UsageProviderAuthKind kind) => kind switch
+    private static string AuthLocalizationKey(UsageProviderDescriptor descriptor)
     {
-        UsageProviderAuthKind.ApiKey => "setup.auth.apiKey",
-        UsageProviderAuthKind.Cookie => "setup.auth.cookie",
-        UsageProviderAuthKind.OAuth => "setup.auth.oauth",
-        UsageProviderAuthKind.Local => "setup.auth.local",
-        UsageProviderAuthKind.ApiKeyOrCookie => "setup.auth.apiKeyOrCookie",
-        UsageProviderAuthKind.OAuthOrCookie => "setup.auth.oauthOrCookie",
-        _ => "setup.auth.none",
-    };
+        if (descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)) return "setup.auth.sessionBundle";
+        if (descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)) return "setup.auth.apiKeyOrAdminApiKey";
+        return descriptor.AuthKind switch
+        {
+            UsageProviderAuthKind.ApiKey => "setup.auth.apiKey",
+            UsageProviderAuthKind.Cookie => "setup.auth.cookie",
+            UsageProviderAuthKind.OAuth => "setup.auth.oauth",
+            UsageProviderAuthKind.Local => "setup.auth.local",
+            UsageProviderAuthKind.ApiKeyOrCookie => "setup.auth.apiKeyOrCookie",
+            UsageProviderAuthKind.OAuthOrCookie => "setup.auth.oauthOrCookie",
+            _ => "setup.auth.none",
+        };
+    }
+
+    private static string AuthFallback(UsageProviderDescriptor descriptor) => descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)
+        ? "Windsurf session bundle"
+        : descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)
+            ? "OpenAI API key or Admin API key"
+            : AuthFallback(descriptor.AuthKind);
 
     private static string AuthFallback(UsageProviderAuthKind kind) => kind switch
     {
