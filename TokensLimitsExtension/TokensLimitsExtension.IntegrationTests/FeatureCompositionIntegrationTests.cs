@@ -56,8 +56,38 @@ public sealed class FeatureCompositionIntegrationTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
+    [Fact]
+    public void HistorySurfacesExistOnlyWhileEnabledAndDoNotCreateFilesWithoutSamples()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"TokensLimits.FeatureComposition.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var settings = new TokensLimitsSettings(directory);
+            using var registry = new UsageProviderRegistry([]);
+            using var provider = new TokensLimitsExtensionCommandsProvider(null, registry, settings, settingsDrivenProviders: true);
+            var controllerField = typeof(TokensLimitsExtensionCommandsProvider).GetField("_historyController", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(controllerField);
+            Assert.Null(controllerField.GetValue(provider));
+            Assert.Null(provider.GetCommandItem("com.tokenslimits.history"));
+            var registered = Assert.IsAssignableFrom<IDictionary>(typeof(Microsoft.CommandPalette.Extensions.Toolkit.Settings)
+                .GetField("_settings", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(settings.Settings));
+            var toggle = Assert.IsType<ToggleSetting>(registered["tokensLimits.history.enabled"]);
+            toggle.Value = true;
+            NotifySettingsChanged(settings);
+            Assert.NotNull(controllerField.GetValue(provider));
+            Assert.NotNull(provider.GetCommandItem("com.tokenslimits.history"));
+            Assert.Contains(Assert.Single(provider.TopLevelCommands()).MoreCommands!, item => item is CommandContextItem context && context.Command?.Id == "com.tokenslimits.history");
+            Assert.False(Directory.Exists(Path.Combine(directory, "history")));
+            toggle.Value = false;
+            NotifySettingsChanged(settings);
+            Assert.Null(controllerField.GetValue(provider));
+            Assert.Null(provider.GetCommandItem("com.tokenslimits.history"));
+            Assert.DoesNotContain(Assert.Single(provider.TopLevelCommands()).MoreCommands!, item => item is CommandContextItem context && context.Command?.Id == "com.tokenslimits.history");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
     private static void NotifySettingsChanged(TokensLimitsSettings settings)
         => typeof(TokensLimitsSettings).GetMethod("OnSettingsChanged", BindingFlags.NonPublic | BindingFlags.Instance)!
             .Invoke(settings, [null, settings.Settings]);
 }
-

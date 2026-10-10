@@ -23,6 +23,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private readonly ICommandItem[] _commands;
     private ICommandItem[] _dockBands;
     private readonly TokensLimitsSettings _settings;
+    private readonly ICommand _settingsPageCommand;
     private readonly UsageProviderRegistry _providerRegistry;
     private readonly bool _ownsProviderRegistry;
     private TokensLimitsPage[] _pages = [];
@@ -64,6 +65,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         Id = "com.tokenslimits.extension";
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         _settings = settings ?? new TokensLimitsSettings();
+        _settingsPageCommand = _settings.Settings.SettingsPage;
         Settings = _settings.Settings;
         _settingsDrivenProviders = providerRegistry is null || settingsDrivenProviders;
         _ownsProviderRegistry = providerRegistry is null;
@@ -97,7 +99,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             _settings,
             _settings.Localization,
             _refreshCoordinator,
-            _settings.Settings.SettingsPage);
+            _settingsPageCommand);
         _setupPage = new ProviderSetupPage(_settings, [], _refreshCoordinator);
         _dockBandPage = new TokensLimitsDockBandPage(_settings.Localization);
         _dockBands =
@@ -157,6 +159,10 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
                 return new CommandItem(_setupPage) { Title = _settings.Localization.GetString("setup.name") };
             }
 
+            if (_historyPage is { } historyPage && id == historyPage.Id)
+            {
+                return new CommandItem(historyPage) { Title = _settings.Localization.GetString("history.title") };
+            }
             var dockPage = _dockPagesByProviderId.Values.FirstOrDefault(page => string.Equals(page.Id, id, StringComparison.Ordinal));
             if (dockPage is not null)
             {
@@ -302,6 +308,10 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         var enabledCaches = GetEnabledCaches();
         var enabledIds = enabledCaches.Select(cache => cache.Descriptor.Id).ToArray();
         UpdateFeatureControllers(enabledCaches);
+        if (IsRebuildSuperseded())
+        {
+            return;
+        }
         bool hasSameComposition;
         lock (_surfaceGate)
         {
@@ -547,13 +557,18 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             return;
         }
 
-        foreach (var providerId in args.ProviderIds)
+        lock (_rebuildGate)
         {
-            _notificationController?.ResetProvider(providerId);
-            var cache = _snapshotCaches.FirstOrDefault(candidate => candidate.Descriptor.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase));
-            if (cache is not null && _settings.IsEnabled(providerId))
+            if (Volatile.Read(ref _disposed) != 0) return;
+            foreach (var providerId in args.ProviderIds)
             {
-                _ = _refreshCoordinator.RefreshProviderAsync(cache);
+                _notificationController?.ResetProvider(providerId);
+                _historyController?.ResetProvider(providerId);
+                var cache = _snapshotCaches.FirstOrDefault(candidate => candidate.Descriptor.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase));
+                if (cache is not null && _settings.IsEnabled(providerId))
+                {
+                    _ = _refreshCoordinator.RefreshProviderAsync(cache);
+                }
             }
         }
     }

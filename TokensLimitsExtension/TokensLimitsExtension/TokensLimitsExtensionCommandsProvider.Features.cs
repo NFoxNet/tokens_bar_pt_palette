@@ -10,6 +10,9 @@ public partial class TokensLimitsExtensionCommandsProvider
 {
     private readonly ProviderSetupPage _setupPage;
     private UsageNotificationController? _notificationController;
+    private UsageHistoryStore? _historyStore;
+    private UsageHistoryController? _historyController;
+    private UsageHistoryPage? _historyPage;
 
     private void UpdateFeatureControllers(IReadOnlyList<UsageSnapshotCache> caches)
     {
@@ -36,6 +39,24 @@ public partial class TokensLimitsExtensionCommandsProvider
             _notificationController.Dispose();
             _notificationController = null;
         }
+        if (_settings.HistoryEnabled)
+        {
+            if (_historyController is null)
+            {
+                _historyStore = new UsageHistoryStore(_settings.HistoryStorageDirectory, _settings.HistoryRetentionDays);
+                _historyController = new UsageHistoryController(_historyStore, caches);
+                _historyPage = new UsageHistoryPage(_historyController, caches, _settings.Localization);
+            }
+            else
+            {
+                _historyStore!.SetRetentionDays(_settings.HistoryRetentionDays);
+                _historyPage!.UpdateProviders(caches);
+            }
+        }
+        else
+        {
+            DisposeHistory();
+        }
         UpdateFeatureNavigation();
     }
 
@@ -44,8 +65,12 @@ public partial class TokensLimitsExtensionCommandsProvider
         IContextItem[] navigation =
         [
             new CommandContextItem(_setupPage) { Title = _settings.Localization.GetString("setup.name") },
-            new CommandContextItem(_settings.Settings.SettingsPage) { Title = _settings.Localization.GetString("setup.action.settings") },
+            new CommandContextItem(_settingsPageCommand) { Title = _settings.Localization.GetString("setup.action.settings") },
         ];
+        if (_historyPage is not null)
+        {
+            navigation = [.. navigation, new CommandContextItem(_historyPage) { Title = _settings.Localization.GetString("history.title") }];
+        }
         ((CommandItem)_commands[0]).MoreCommands = navigation;
         _overviewPage.UpdateNavigationCommands(navigation);
     }
@@ -53,9 +78,19 @@ public partial class TokensLimitsExtensionCommandsProvider
     private void NotificationOnDeliveryFailed(object? sender, UsageNotificationDeliveryFailedEventArgs args)
         => LogMessage($"Notification delivery failed for {args.ProviderId}: {args.ErrorType}");
 
+    private void DisposeHistory()
+    {
+        _historyPage?.Dispose();
+        _historyPage = null;
+        _historyController?.Dispose();
+        _historyController = null;
+        _historyStore = null;
+    }
+
     private void DisposeFeatureControllers()
     {
         _setupPage.Dispose();
+        DisposeHistory();
         if (_notificationController is not null)
         {
             _notificationController.DeliveryFailed -= NotificationOnDeliveryFailed;
