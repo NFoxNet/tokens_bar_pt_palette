@@ -120,14 +120,37 @@ public sealed class UsageNotificationEvaluatorTests
     public void EmitsResetOnlyForAConfirmedFixedWindowBoundary()
     {
         var evaluator = new UsageNotificationEvaluator();
-        var oldWindow = FixedSnapshot(96, Now.AddHours(-5), Now.AddSeconds(-1), Now.AddMinutes(-1));
-        var newWindow = FixedSnapshot(2, Now, Now.AddHours(5), Now);
+        var oldWindow = FixedSnapshot(80, Now.AddHours(-5), Now.AddSeconds(-1), Now.AddMinutes(-1));
+        var newWindow = FixedSnapshot(95, Now, Now.AddHours(5), Now);
 
         Assert.Empty(evaluator.Evaluate("config-1", oldWindow, Now, 10));
         var notification = Assert.Single(evaluator.Evaluate("config-1", newWindow, Now, 10));
 
         Assert.Equal(UsageNotificationEventKind.WindowReset, notification.Kind);
         Assert.Equal(UsageNotificationWindow.Primary, notification.Window);
+    }
+
+    [Fact]
+    public void FreshEstimateBreaksConfirmedBaselineWithoutEmitting()
+    {
+        var evaluator = new UsageNotificationEvaluator();
+        var apiBaseline = Snapshot(80, Now.AddHours(2), Now.AddMinutes(-2)) with { Source = "api" };
+        var localEstimate = Snapshot(95, Now.AddHours(2), Now.AddMinutes(-1)) with { Source = "local", IsEstimate = true };
+        var apiAfterEstimate = Snapshot(95, Now.AddHours(2), Now) with { Source = "api" };
+
+        Assert.Empty(evaluator.Evaluate("config-1", apiBaseline, Now, 10));
+        Assert.Empty(evaluator.Evaluate("config-1", localEstimate, Now, 10));
+        Assert.Empty(evaluator.Evaluate("config-1", apiAfterEstimate, Now, 10));
+        Assert.Empty(evaluator.Evaluate(
+            "config-1",
+            Snapshot(80, Now.AddHours(2), Now.AddSeconds(1)) with { Source = "api" },
+            Now.AddSeconds(1),
+            10));
+        Assert.Single(evaluator.Evaluate(
+            "config-1",
+            Snapshot(92, Now.AddHours(2), Now.AddSeconds(2)) with { Source = "api" },
+            Now.AddSeconds(2),
+            10));
     }
 
     [Fact]

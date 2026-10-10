@@ -106,6 +106,11 @@ public sealed partial class UsageNotificationController : IDisposable
         List<Subscription> removed = [];
         lock (_gate)
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
             foreach (var (providerId, subscription) in _subscriptions.ToArray())
             {
                 if (next.TryGetValue(providerId, out var cache) && ReferenceEquals(cache, subscription.Cache))
@@ -181,7 +186,7 @@ public sealed partial class UsageNotificationController : IDisposable
             var state = cache.State;
             if (state.IsRefreshing
                 || state.ErrorKind != UsageProviderErrorKind.None
-                || state.Snapshot is not { IsEstimate: false, FetchedAt: { } fetchedAt } snapshot
+                || state.Snapshot is not { FetchedAt: { } fetchedAt } snapshot
                 || state.LastSuccessfulRefreshAt != fetchedAt
                 || fetchedAt > _timeProvider.GetUtcNow()
                 || (_lastEvaluatedAt.TryGetValue(providerId, out var previousFetch) && fetchedAt <= previousFetch))

@@ -40,10 +40,26 @@ public sealed class UsageNotificationEvaluator
             throw new ArgumentOutOfRangeException(nameof(thresholdPercent));
         }
 
-        if (snapshot.IsEstimate
-            || snapshot.FetchedAt is not { } fetchedAt
+        if (snapshot.FetchedAt is not { } fetchedAt
             || fetchedAt > now
             || now - fetchedAt > MaximumSnapshotAge)
+        {
+            return [];
+        }
+
+        var source = snapshot.Source ?? string.Empty;
+        var accountScope = snapshot.AccountScope ?? string.Empty;
+        foreach (var oldKey in _windows.Keys.Where(existing =>
+                     existing.ProviderId == snapshot.ProviderId
+                     && existing.SegmentId == segmentId
+                     && (snapshot.IsEstimate
+                         || existing.Source != source
+                         || existing.AccountScope != accountScope)).ToArray())
+        {
+            _windows.Remove(oldKey);
+        }
+
+        if (snapshot.IsEstimate)
         {
             return [];
         }
@@ -62,19 +78,10 @@ public sealed class UsageNotificationEvaluator
 
             var key = new WindowKey(
                 snapshot.ProviderId,
-                snapshot.Source ?? string.Empty,
-                snapshot.AccountScope ?? string.Empty,
+                source,
+                accountScope,
                 segmentId,
                 windowKind);
-            foreach (var oldKey in _windows.Keys.Where(existing =>
-                         existing.ProviderId == key.ProviderId
-                         && existing.SegmentId == key.SegmentId
-                         && existing.Window == key.Window
-                         && (existing.Source != key.Source || existing.AccountScope != key.AccountScope)).ToArray())
-            {
-                _windows.Remove(oldKey);
-            }
-
             var remainingPercent = 100 - window.UsedPercent;
             if (!_windows.TryGetValue(key, out var state))
             {
@@ -144,8 +151,7 @@ public sealed class UsageNotificationEvaluator
             && currentStartsAt > previousStartsAt
             && currentStartsAt >= previousResetAt
             && currentStartsAt <= currentFetchedAt
-            && currentFetchedAt < currentResetAt
-            && current.UsedPercent < previous.UsedPercent;
+            && currentFetchedAt < currentResetAt;
 
     public void ResetProvider(string providerId)
     {
