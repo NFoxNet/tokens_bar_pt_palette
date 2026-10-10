@@ -13,6 +13,7 @@ public sealed partial class UsageSummaryPage : ContentPage, IDisposable
     private readonly ILocalizationService _localization;
     private readonly Func<string> _metricSelection;
     private UsageSnapshotCache[] _caches = [];
+    private string? _lastMetricSelection;
     private int _disposed;
 
     public UsageSummaryPage(ILocalizationService localization, Func<string> metricSelection)
@@ -52,23 +53,30 @@ public sealed partial class UsageSummaryPage : ContentPage, IDisposable
         }
 
         var current = Volatile.Read(ref _caches);
-        if (current.SequenceEqual(caches))
+        var metricSelection = _metricSelection();
+        var providersChanged = !current.SequenceEqual(caches);
+        var metricChanged = !string.Equals(_lastMetricSelection, metricSelection, StringComparison.Ordinal);
+        if (!providersChanged && !metricChanged)
         {
             return;
         }
 
-        foreach (var cache in current)
+        if (providersChanged)
         {
-            cache.StateChanged -= OnCacheChanged;
+            foreach (var cache in current)
+            {
+                cache.StateChanged -= OnCacheChanged;
+            }
+
+            var updated = caches.ToArray();
+            Volatile.Write(ref _caches, updated);
+            foreach (var cache in updated)
+            {
+                cache.StateChanged += OnCacheChanged;
+            }
         }
 
-        var updated = caches.ToArray();
-        Volatile.Write(ref _caches, updated);
-        foreach (var cache in updated)
-        {
-            cache.StateChanged += OnCacheChanged;
-        }
-
+        _lastMetricSelection = metricSelection;
         RaiseItemsChanged();
     }
 

@@ -272,6 +272,24 @@ public sealed class NativeUsageUxTests
         Assert.DoesNotContain(@"C:\Users\Private", body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DockSummaryPublishesWhenMetricChangesWithoutProviderChanges()
+    {
+        using var cache = new UsageSnapshotCache(new SnapshotProvider(DateTimeOffset.UtcNow));
+        await cache.RefreshAsync(force: true);
+        var metric = "all";
+        using var summary = new UsageSummaryPage(InvariantLocalizationService.Instance, () => metric);
+        summary.UpdateProviders([cache]);
+        var itemsChanged = 0;
+        summary.ItemsChanged += (_, _) => itemsChanged++;
+
+        metric = "secondary";
+        summary.UpdateProviders([cache]);
+
+        Assert.Equal(1, itemsChanged);
+        Assert.Contains("Not available", Assert.IsType<MarkdownContent>(Assert.Single(summary.GetContent())).Body, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("en", "Not available")]
     [InlineData("ru", "Недоступно")]
