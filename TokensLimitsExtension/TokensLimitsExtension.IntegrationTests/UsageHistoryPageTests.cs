@@ -84,7 +84,7 @@ public sealed class UsageHistoryPageTests
             using var controller = new UsageHistoryController(new UsageHistoryStore(directory), [cache]);
             using var page = new UsageHistoryPage(controller, [cache]);
 
-            Assert.Contains(page.GetItems(), item => item.Title == "History could not be read");
+            Assert.Contains(page.GetItems(), item => item.Title == "History storage error");
             Assert.Equal("{broken", File.ReadAllText(System.IO.Path.Combine(directory, providerHash + ".json")));
         }
         finally

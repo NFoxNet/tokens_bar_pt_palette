@@ -25,7 +25,8 @@ public sealed class UsageHistoryController : IDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, UsageSnapshotCache> _caches = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ProviderHistoryState> _states = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, UsageHistoryErrorKind> _errors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, UsageHistoryErrorKind> _readErrors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, UsageHistoryErrorKind> _writeErrors = new(StringComparer.OrdinalIgnoreCase);
     private UsageHistoryErrorKind? _clearError;
     private bool _disposed;
 
@@ -47,7 +48,9 @@ public sealed class UsageHistoryController : IDisposable
         {
             lock (_gate)
             {
-                return _clearError ?? _errors.Values.Select(error => (UsageHistoryErrorKind?)error).FirstOrDefault();
+                return _clearError
+                    ?? _readErrors.Values.Select(error => (UsageHistoryErrorKind?)error).FirstOrDefault()
+                    ?? _writeErrors.Values.Select(error => (UsageHistoryErrorKind?)error).FirstOrDefault();
             }
         }
     }
@@ -80,7 +83,8 @@ public sealed class UsageHistoryController : IDisposable
                 if (!next.ContainsKey(providerId))
                 {
                     _states.Remove(providerId);
-                    _errors.Remove(providerId);
+                    _readErrors.Remove(providerId);
+                    _writeErrors.Remove(providerId);
                 }
             }
 
@@ -137,23 +141,23 @@ public sealed class UsageHistoryController : IDisposable
                 .ToArray();
             lock (_gate)
             {
-                _errors.Remove(providerId);
+                _readErrors.Remove(providerId);
             }
             return entries;
         }
         catch (UsageHistoryException exception)
         {
-            SetError(providerId, exception.Kind);
+            SetReadError(providerId, exception.Kind);
             return [];
         }
         catch (IOException)
         {
-            SetError(providerId, UsageHistoryErrorKind.Unavailable);
+            SetReadError(providerId, UsageHistoryErrorKind.Unavailable);
             return [];
         }
         catch (UnauthorizedAccessException)
         {
-            SetError(providerId, UsageHistoryErrorKind.Unavailable);
+            SetReadError(providerId, UsageHistoryErrorKind.Unavailable);
             return [];
         }
     }
@@ -166,12 +170,12 @@ public sealed class UsageHistoryController : IDisposable
             lock (_gate)
             {
                 _clearError = null;
-                _errors.Clear();
+                _readErrors.Clear();
+                _writeErrors.Clear();
                 foreach (var state in _states.Values)
                 {
+                    state.SegmentId = Guid.NewGuid();
                     state.PendingEntry = null;
-                    state.ObservationHash = null;
-                    state.LastAttemptAt = null;
                 }
             }
             Changed?.Invoke(this, EventArgs.Empty);
@@ -205,7 +209,8 @@ public sealed class UsageHistoryController : IDisposable
             }
             _caches.Clear();
             _states.Clear();
-            _errors.Clear();
+            _readErrors.Clear();
+            _writeErrors.Clear();
             Changed = null;
         }
     }
@@ -275,25 +280,25 @@ public sealed class UsageHistoryController : IDisposable
                 }
 
                 state.PendingEntry = null;
-                _errors.Remove(providerId);
+                _writeErrors.Remove(providerId);
                 notify = true;
             }
             catch (UsageHistoryException exception)
             {
                 state.LastAttemptAt = timestamp;
-                SetErrorUnsafe(providerId, exception.Kind);
+                SetWriteErrorUnsafe(providerId, exception.Kind);
                 notify = true;
             }
             catch (IOException)
             {
                 state.LastAttemptAt = timestamp;
-                SetErrorUnsafe(providerId, UsageHistoryErrorKind.Unavailable);
+                SetWriteErrorUnsafe(providerId, UsageHistoryErrorKind.Unavailable);
                 notify = true;
             }
             catch (UnauthorizedAccessException)
             {
                 state.LastAttemptAt = timestamp;
-                SetErrorUnsafe(providerId, UsageHistoryErrorKind.Unavailable);
+                SetWriteErrorUnsafe(providerId, UsageHistoryErrorKind.Unavailable);
                 notify = true;
             }
         }
@@ -385,11 +390,11 @@ public sealed class UsageHistoryController : IDisposable
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToString())));
     }
 
-    private void SetError(string providerId, UsageHistoryErrorKind errorKind)
+    private void SetReadError(string providerId, UsageHistoryErrorKind errorKind)
     {
         lock (_gate)
         {
-            SetErrorUnsafe(providerId, errorKind);
+            _readErrors[providerId] = errorKind;
         }
     }
 
@@ -402,8 +407,8 @@ public sealed class UsageHistoryController : IDisposable
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    private void SetErrorUnsafe(string providerId, UsageHistoryErrorKind errorKind)
-        => _errors[providerId] = errorKind;
+    private void SetWriteErrorUnsafe(string providerId, UsageHistoryErrorKind errorKind)
+        => _writeErrors[providerId] = errorKind;
 
     private sealed class ProviderHistoryState(Guid segmentId)
     {

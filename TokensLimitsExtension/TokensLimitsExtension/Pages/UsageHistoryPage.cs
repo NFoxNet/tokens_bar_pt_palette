@@ -105,7 +105,7 @@ public sealed partial class UsageHistoryPage : ListPage, IDisposable
         {
             items.Add(new ListItem(new NoOpCommand())
             {
-                Title = _localization.GetString("history.error.title", "History could not be read"),
+                Title = _localization.GetString("history.error.title", "History storage error"),
                 Subtitle = ErrorText(error),
             });
         }
@@ -235,7 +235,7 @@ public sealed partial class UsageHistoryPage : ListPage, IDisposable
         {
             UsageHistoryErrorKind.Corrupt => ("history.error.corrupt", "Saved history is corrupt and was not changed. Clear it to restart."),
             UsageHistoryErrorKind.TooLarge => ("history.error.tooLarge", "Saved history exceeds the supported size. Clear it to restart."),
-            UsageHistoryErrorKind.InvalidData => ("history.error.invalid", "Saved history contains invalid data and was not changed. Clear it to restart."),
+            UsageHistoryErrorKind.InvalidData => ("history.error.invalid", "History measurements failed validation. Existing files were not changed."),
             _ => ("history.error.unavailable", "Saved history storage is unavailable."),
         };
         return _localization.GetString(key, fallback);

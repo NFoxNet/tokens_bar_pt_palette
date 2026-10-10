@@ -71,6 +71,64 @@ public sealed class UsageHistoryControllerTests
         Assert.True(entries[1].Timestamp - entries[0].Timestamp >= TimeSpan.FromMinutes(5));
     }
     [Fact]
+    public async Task SuccessfulReadDoesNotClearWriteErrorButSuccessfulAppendDoes()
+    {
+        using var directory = new TestDirectory();
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store = new UsageHistoryStore(directory.Path, timeProvider: clock);
+        var segment = Guid.NewGuid();
+        Assert.True(store.Append(new UsageHistoryEntry(
+            clock.GetUtcNow().AddMinutes(-10),
+            "codex",
+            UsageHistorySourceKind.Api,
+            segment,
+            false,
+            new UsageHistoryWindow(20, clock.GetUtcNow().AddHours(-1), clock.GetUtcNow().AddHours(4), 18_000, true),
+            null,
+            [])));
+
+        var provider = new MutableProvider(Snapshot(clock.GetUtcNow(), 20) with
+        {
+            PrimaryWindow = Snapshot(clock.GetUtcNow(), 20).PrimaryWindow! with { UsedPercent = double.NaN },
+            Metrics = [],
+        });
+        using var cache = new UsageSnapshotCache(provider, timeProvider: clock);
+        using var controller = new UsageHistoryController(store, [cache], clock);
+        await cache.RefreshAsync(force: true);
+
+        Assert.Equal(UsageHistoryErrorKind.InvalidData, controller.LastErrorKind);
+        Assert.Single(controller.ReadRecent("codex"));
+        Assert.Equal(UsageHistoryErrorKind.InvalidData, controller.LastErrorKind);
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        provider.Snapshot = Snapshot(clock.GetUtcNow(), 22);
+        await cache.RefreshAsync(force: true);
+
+        Assert.Null(controller.LastErrorKind);
+        Assert.Equal(2, store.Read("codex").Count);
+    }
+    [Fact]
+    public async Task ClearDoesNotResampleUnchangedCacheDuringMembershipUpdate()
+    {
+        using var directory = new TestDirectory();
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var provider = new MutableProvider(Snapshot(clock.GetUtcNow(), 20));
+        using var cache = new UsageSnapshotCache(provider, timeProvider: clock);
+        var store = new UsageHistoryStore(directory.Path, timeProvider: clock);
+        using var controller = new UsageHistoryController(store, [cache], clock);
+        await cache.RefreshAsync(force: true);
+
+        Assert.Single(store.Read("codex"));
+        Assert.True(controller.Clear());
+        Assert.Empty(store.Read("codex"));
+        controller.UpdateProviders([cache]);
+        Assert.Empty(store.Read("codex"));
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        await cache.RefreshAsync(force: true);
+        Assert.Single(store.Read("codex"));
+    }
+    [Fact]
     public async Task RotatesSegmentWhenSourceOrAccountScopeChangesWithinTheSameSourceKind()
     {
         using var directory = new TestDirectory();
