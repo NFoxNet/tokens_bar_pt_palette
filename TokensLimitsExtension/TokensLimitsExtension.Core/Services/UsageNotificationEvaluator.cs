@@ -56,17 +56,49 @@ public sealed class UsageNotificationEvaluator
                 return;
             }
 
-            var key = new WindowKey(snapshot.ProviderId, snapshot.Source ?? string.Empty, segmentId, windowKind);
+            var key = new WindowKey(
+                snapshot.ProviderId,
+                snapshot.Source ?? string.Empty,
+                snapshot.AccountScope ?? string.Empty,
+                segmentId,
+                windowKind);
+            foreach (var oldKey in _windows.Keys.Where(existing =>
+                         existing.ProviderId == key.ProviderId
+                         && existing.Source == key.Source
+                         && existing.SegmentId == key.SegmentId
+                         && existing.Window == key.Window
+                         && existing.AccountScope != key.AccountScope).ToArray())
+            {
+                _windows.Remove(oldKey);
+            }
+
             var remainingPercent = 100 - window.UsedPercent;
             if (!_windows.TryGetValue(key, out var state))
             {
-                _windows[key] = new WindowState(window.ResetAt, window.LimitWindowSeconds, window.UsedPercent, false);
+                _windows[key] = WindowState.From(window, fetchedAt, false);
                 return;
             }
 
             if (state.LimitWindowSeconds != window.LimitWindowSeconds)
             {
-                _windows[key] = new WindowState(window.ResetAt, window.LimitWindowSeconds, window.UsedPercent, false);
+                _windows[key] = WindowState.From(window, fetchedAt, false);
+                return;
+            }
+
+            if (fetchedAt <= state.FetchedAt)
+            {
+                return;
+            }
+
+            if (IsConfirmedReset(state, window, fetchedAt, now))
+            {
+                events.Add(new UsageNotificationEvent(
+                    snapshot.ProviderId,
+                    snapshot.ProviderDisplayName,
+                    windowKind,
+                    UsageNotificationEventKind.WindowReset,
+                    remainingPercent));
+                _windows[key] = WindowState.From(window, fetchedAt, false);
                 return;
             }
 
@@ -86,9 +118,31 @@ public sealed class UsageNotificationEvaluator
                 notified = false;
             }
 
-            _windows[key] = new WindowState(window.ResetAt, window.LimitWindowSeconds, window.UsedPercent, notified);
+            _windows[key] = WindowState.From(window, fetchedAt, notified);
         }
     }
+
+    private static bool IsConfirmedReset(
+        WindowState previous,
+        UsageWindow current,
+        DateTimeOffset currentFetchedAt,
+        DateTimeOffset now)
+        => previous.IsFixedWindow
+            && current.IsFixedWindow
+            && previous.StartsAt is { } previousStartsAt
+            && previous.ResetAt is { } previousResetAt
+            && current.StartsAt is { } currentStartsAt
+            && current.ResetAt is { } currentResetAt
+            && current.LimitWindowSeconds > 0
+            && previousStartsAt < previousResetAt
+            && currentStartsAt < currentResetAt
+            && previous.FetchedAt < previousResetAt
+            && previousResetAt <= now
+            && currentStartsAt > previousStartsAt
+            && currentStartsAt >= previousResetAt
+            && currentStartsAt <= currentFetchedAt
+            && currentFetchedAt < currentResetAt
+            && current.UsedPercent < previous.UsedPercent;
 
     public void ResetProvider(string providerId)
     {
@@ -102,8 +156,27 @@ public sealed class UsageNotificationEvaluator
     private readonly record struct WindowKey(
         string ProviderId,
         string Source,
+        string AccountScope,
         string SegmentId,
         UsageNotificationWindow Window);
 
-    private sealed record WindowState(DateTimeOffset ResetAt, int LimitWindowSeconds, double UsedPercent, bool ThresholdNotified);
+    private sealed record WindowState(
+        DateTimeOffset? StartsAt,
+        DateTimeOffset? ResetAt,
+        int LimitWindowSeconds,
+        double UsedPercent,
+        DateTimeOffset FetchedAt,
+        bool IsFixedWindow,
+        bool ThresholdNotified)
+    {
+        public static WindowState From(UsageWindow window, DateTimeOffset fetchedAt, bool thresholdNotified)
+            => new(
+                window.StartsAt,
+                window.ResetAt,
+                window.LimitWindowSeconds,
+                window.UsedPercent,
+                fetchedAt,
+                window.IsFixedWindow,
+                thresholdNotified);
+    }
 }

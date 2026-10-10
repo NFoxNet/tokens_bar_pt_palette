@@ -67,10 +67,68 @@ public sealed class UsageNotificationEvaluatorTests
             10));
     }
 
+    [Fact]
+    public void DoesNotCompareAcrossAccountScopesIncludingKnownToUnknown()
+    {
+        var evaluator = new UsageNotificationEvaluator();
+        evaluator.Evaluate("config-1", Snapshot(80, Now.AddHours(2), Now) with { AccountScope = "acct-a" }, Now, 10);
+
+        Assert.Empty(evaluator.Evaluate(
+            "config-1",
+            Snapshot(95, Now.AddHours(2), Now.AddSeconds(1)) with { AccountScope = "acct-b" },
+            Now.AddSeconds(1),
+            10));
+        Assert.Empty(evaluator.Evaluate(
+            "config-1",
+            Snapshot(95, Now.AddHours(2), Now.AddSeconds(2)),
+            Now.AddSeconds(2),
+            10));
+    }
+
+    [Fact]
+    public void EmitsResetOnlyForAConfirmedFixedWindowBoundary()
+    {
+        var evaluator = new UsageNotificationEvaluator();
+        var oldWindow = FixedSnapshot(96, Now.AddHours(-5), Now.AddSeconds(-1), Now.AddMinutes(-1));
+        var newWindow = FixedSnapshot(2, Now, Now.AddHours(5), Now);
+
+        Assert.Empty(evaluator.Evaluate("config-1", oldWindow, Now, 10));
+        var notification = Assert.Single(evaluator.Evaluate("config-1", newWindow, Now, 10));
+
+        Assert.Equal(UsageNotificationEventKind.WindowReset, notification.Kind);
+        Assert.Equal(UsageNotificationWindow.Primary, notification.Window);
+    }
+
+    [Fact]
+    public void DoesNotTreatRollingWindowDropAsAReset()
+    {
+        var evaluator = new UsageNotificationEvaluator();
+        var oldWindow = Snapshot(96, Now.AddHours(1), Now.AddMinutes(-1));
+        var newWindow = Snapshot(2, Now.AddHours(2), Now);
+
+        evaluator.Evaluate("config-1", oldWindow, Now, 10);
+
+        Assert.Empty(evaluator.Evaluate("config-1", newWindow, Now, 10));
+    }
+
     private static UsageSnapshot Snapshot(double usedPercent, DateTimeOffset resetAt, DateTimeOffset? fetchedAt)
         => new("codex", "Codex", new UsageWindow(usedPercent, resetAt, 18_000), null, "Plus", false)
         {
             Source = "api",
             FetchedAt = fetchedAt,
+        };
+
+    private static UsageSnapshot FixedSnapshot(
+        double usedPercent,
+        DateTimeOffset startsAt,
+        DateTimeOffset resetAt,
+        DateTimeOffset? fetchedAt)
+        => Snapshot(usedPercent, resetAt, fetchedAt) with
+        {
+            PrimaryWindow = new UsageWindow(usedPercent, resetAt, 18_000)
+            {
+                StartsAt = startsAt,
+                IsFixedWindow = true,
+            },
         };
 }

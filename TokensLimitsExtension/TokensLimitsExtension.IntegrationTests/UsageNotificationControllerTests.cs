@@ -57,6 +57,38 @@ public sealed class UsageNotificationControllerTests
         Assert.Empty(delivery.Events);
     }
 
+    [Fact]
+    public async Task FailedRefreshWithLastKnownSnapshotDoesNotNotify()
+    {
+        var time = new MutableTimeProvider(new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero));
+        var provider = new MutableProvider(Snapshot(80));
+        using var cache = new UsageSnapshotCache(provider, timeProvider: time);
+        var delivery = new RecordingDelivery();
+        using var controller = new UsageNotificationController(
+            [cache],
+            new UsageNotificationEvaluator(),
+            delivery,
+            _ => "process-config-1",
+            timeProvider: time);
+
+        await cache.RefreshAsync();
+        time.Advance(TimeSpan.FromMinutes(1));
+        provider.Failure = true;
+        cache.Invalidate();
+        await cache.RefreshAsync();
+
+        Assert.Equal(UsageProviderErrorKind.Unknown, cache.State.ErrorKind);
+        Assert.Empty(delivery.Events);
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        provider.Failure = false;
+        provider.Snapshot = Snapshot(92);
+        cache.Invalidate();
+        await cache.RefreshAsync();
+
+        Assert.Single(delivery.Events);
+    }
+
     private static UsageSnapshot Snapshot(double usedPercent)
         => new("test", "Test provider", new UsageWindow(usedPercent, DateTimeOffset.UtcNow.AddHours(1), 3600), null, null, false);
 
@@ -66,8 +98,12 @@ public sealed class UsageNotificationControllerTests
 
         public UsageSnapshot Snapshot { get; set; } = snapshot;
 
+        public bool Failure { get; set; }
+
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(Snapshot);
+            => Failure
+                ? Task.FromException<UsageSnapshot>(new InvalidOperationException("synthetic provider failure"))
+                : Task.FromResult(Snapshot);
     }
 
     private sealed class RecordingDelivery : IUsageNotificationDelivery
