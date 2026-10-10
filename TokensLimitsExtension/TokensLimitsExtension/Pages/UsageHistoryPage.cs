@@ -16,17 +16,21 @@ public sealed partial class UsageHistoryPage : ListPage, IDisposable
 {
     private readonly UsageHistoryController _controller;
     private readonly ILocalizationService _localization;
+    private readonly TimeProvider _timeProvider;
     private readonly object _gate = new();
     private IReadOnlyList<UsageSnapshotCache> _caches;
     private IListItem[] _items = [];
+    private (int Index, string ProviderId, string ProviderName, IReadOnlyList<UsageHistoryEntry> Entries)[] _paceRows = [];
     private int _disposed;
 
     public UsageHistoryPage(
         UsageHistoryController controller,
         IReadOnlyList<UsageSnapshotCache> caches,
-        ILocalizationService? localization = null)
+        ILocalizationService? localization = null,
+        TimeProvider? timeProvider = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _caches = caches ?? throw new ArgumentNullException(nameof(caches));
         _localization = localization ?? InvariantLocalizationService.Instance;
         Id = "com.tokenslimits.history";
@@ -36,13 +40,26 @@ public sealed partial class UsageHistoryPage : ListPage, IDisposable
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         ShowDetails = true;
         _controller.Changed += ControllerOnChanged;
+        _controller.PaceChanged += ControllerOnPaceChanged;
         _localization.LanguageChanged += LocalizationOnLanguageChanged;
         _controller.UpdateProviders(caches);
         RebuildItems();
     }
 
     public override IListItem[] GetItems()
-        => Volatile.Read(ref _disposed) == 0 ? Volatile.Read(ref _items) : [];
+    {
+        IListItem[] items;
+        (int Index, string ProviderId, string ProviderName, IReadOnlyList<UsageHistoryEntry> Entries)[] paceRows;
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _disposed) != 0) return [];
+            items = (IListItem[])_items.Clone();
+            paceRows = _paceRows;
+        }
+        foreach (var row in paceRows)
+            items[row.Index] = CreatePaceItem(row.ProviderId, row.ProviderName, row.Entries);
+        return items;
+    }
 
     public void UpdateProviders(IReadOnlyList<UsageSnapshotCache> caches)
     {
@@ -60,11 +77,21 @@ public sealed partial class UsageHistoryPage : ListPage, IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _controller.Changed -= ControllerOnChanged;
+        _controller.PaceChanged -= ControllerOnPaceChanged;
         _localization.LanguageChanged -= LocalizationOnLanguageChanged;
-        Volatile.Write(ref _items, []);
+        lock (_gate)
+        {
+            _items = [];
+            _paceRows = [];
+        }
     }
 
     private void ControllerOnChanged(object? sender, EventArgs args) => RebuildItems();
+
+    private void ControllerOnPaceChanged(object? sender, EventArgs args)
+    {
+        if (Volatile.Read(ref _disposed) == 0) RaiseItemsChanged();
+    }
 
     private void LocalizationOnLanguageChanged(object? sender, EventArgs args)
     {
@@ -88,12 +115,15 @@ public sealed partial class UsageHistoryPage : ListPage, IDisposable
             },
         };
 
+        var paceRows = new List<(int Index, string ProviderId, string ProviderName, IReadOnlyList<UsageHistoryEntry> Entries)>();
         foreach (var cache in caches)
         {
             var entries = _controller.ReadRecent(cache.Descriptor.Id, limit: 20);
             if (entries.Count > 0)
             {
-                items.Add(CreatePaceItem(cache.Descriptor.DisplayName, entries));
+                var chronologicalEntries = entries.Reverse().ToArray();
+                paceRows.Add((items.Count, cache.Descriptor.Id, cache.Descriptor.DisplayName, chronologicalEntries));
+                items.Add(CreatePaceItem(cache.Descriptor.Id, cache.Descriptor.DisplayName, chronologicalEntries));
             }
             foreach (var entry in entries)
             {
@@ -117,15 +147,19 @@ public sealed partial class UsageHistoryPage : ListPage, IDisposable
             });
         }
 
-        Volatile.Write(ref _items, items.ToArray());
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            _items = items.ToArray();
+            _paceRows = paceRows.ToArray();
+        }
         RaiseItemsChanged();
     }
 
-    private ListItem CreatePaceItem(string providerName, IReadOnlyList<UsageHistoryEntry> recentEntries)
+    private ListItem CreatePaceItem(string providerId, string providerName, IReadOnlyList<UsageHistoryEntry> chronologicalEntries)
     {
-        var chronologicalEntries = recentEntries.Reverse().ToArray();
-        var now = DateTimeOffset.UtcNow;
-        var estimate = UsagePaceEstimator.Estimate(chronologicalEntries, now);
+        var now = _timeProvider.GetUtcNow();
+        var estimate = _controller.EstimatePace(providerId, chronologicalEntries, now);
         var latest = chronologicalEntries[^1];
         var latestWindow = estimate?.IsPrimaryWindow == false ? latest.SecondaryWindow : latest.PrimaryWindow;
         var subtitle = estimate is null

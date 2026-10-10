@@ -41,6 +41,7 @@ public sealed class UsageHistoryController : IDisposable
     }
 
     public event EventHandler? Changed;
+    public event EventHandler? PaceChanged;
 
     public UsageHistoryErrorKind? LastErrorKind
     {
@@ -121,7 +122,44 @@ public sealed class UsageHistoryController : IDisposable
                 state.ObservationHash = null;
                 state.PendingEntry = null;
                 state.HasIdentity = false;
+                state.CurrentEntry = null;
             }
+        }
+        PaceChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Projects saved samples only for the currently observed, confirmed series.</summary>
+    public UsagePaceEstimate? EstimatePace(string providerId, IReadOnlyList<UsageHistoryEntry> entries, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
+        ArgumentNullException.ThrowIfNull(entries);
+        lock (_gate)
+        {
+            if (_disposed || entries.Count == 0 || _writeErrors.ContainsKey(providerId)
+                || !_states.TryGetValue(providerId, out var state) || state.CurrentEntry is not { } current
+                || current.IsEstimate || current.SourceKind != UsageHistorySourceKind.Api)
+            {
+                return null;
+            }
+
+            var latest = entries[^1];
+            if (latest.ProviderId != providerId || latest.SegmentId != state.SegmentId
+                || latest.SourceKind != current.SourceKind || current.Timestamp < latest.Timestamp || now < current.Timestamp)
+            {
+                return null;
+            }
+
+            var estimate = UsagePaceEstimator.Estimate(entries, now);
+            if (estimate is null) return null;
+            var observedWindow = estimate.IsPrimaryWindow ? current.PrimaryWindow : current.SecondaryWindow;
+            var savedWindow = estimate.IsPrimaryWindow ? latest.PrimaryWindow : latest.SecondaryWindow;
+            return observedWindow?.IsForecastEligible == true
+                && observedWindow.StartsAt == savedWindow!.StartsAt
+                && observedWindow.ResetAt == savedWindow.ResetAt
+                && observedWindow.LimitWindowSeconds == savedWindow.LimitWindowSeconds
+                && double.IsFinite(observedWindow.UsedPercent)
+                && observedWindow.UsedPercent >= savedWindow.UsedPercent && observedWindow.UsedPercent <= 100
+                ? estimate : null;
         }
     }
 
@@ -176,6 +214,7 @@ public sealed class UsageHistoryController : IDisposable
                 {
                     state.SegmentId = Guid.NewGuid();
                     state.PendingEntry = null;
+                    state.CurrentEntry = null;
                 }
             }
             Changed?.Invoke(this, EventArgs.Empty);
@@ -212,6 +251,7 @@ public sealed class UsageHistoryController : IDisposable
             _readErrors.Clear();
             _writeErrors.Clear();
             Changed = null;
+            PaceChanged = null;
         }
     }
 
@@ -226,18 +266,10 @@ public sealed class UsageHistoryController : IDisposable
     private void ProcessCache(UsageSnapshotCache cache)
     {
         var providerId = cache.Descriptor.Id;
+        // Cache callbacks hold their own state lock; never read another cache under _gate.
         var providerState = cache.State;
-        if (providerState.IsRefreshing || providerState.ErrorKind != UsageProviderErrorKind.None || providerState.Snapshot is not { } snapshot)
-        {
-            return;
-        }
-
-        var timestamp = providerState.LastSuccessfulRefreshAt ?? snapshot.FetchedAt ?? _timeProvider.GetUtcNow();
-        var sourceHash = Hash(snapshot.Source);
-        var accountScopeHash = Hash(snapshot.AccountScope);
-        var observationHash = Fingerprint(snapshot, sourceHash, accountScopeHash, timestamp);
         var notify = false;
-
+        var paceChanged = false;
         lock (_gate)
         {
             if (_disposed || !_caches.TryGetValue(providerId, out var registered) || !ReferenceEquals(registered, cache)
@@ -246,67 +278,84 @@ public sealed class UsageHistoryController : IDisposable
                 return;
             }
 
-            if (state.HasIdentity && (!string.Equals(state.SourceHash, sourceHash, StringComparison.Ordinal)
-                || !string.Equals(state.AccountScopeHash, accountScopeHash, StringComparison.Ordinal)))
+            if (providerState.ErrorKind != UsageProviderErrorKind.None || providerState.Snapshot is null)
             {
-                state.SegmentId = Guid.NewGuid();
-                state.ObservationHash = null;
-                state.PendingEntry = null;
-            }
-            state.SourceHash = sourceHash;
-            state.AccountScopeHash = accountScopeHash;
-            state.HasIdentity = true;
-
-            if (string.Equals(state.ObservationHash, observationHash, StringComparison.Ordinal) && state.PendingEntry is null)
-            {
-                return;
-            }
-
-            state.ObservationHash = observationHash;
-            var entry = CreateEntry(snapshot, providerId, timestamp, SourceKind(snapshot), state.SegmentId);
-            state.PendingEntry = entry;
-            if (state.LastAttemptAt is { } lastAttempt && timestamp - lastAttempt < MinimumSampleInterval)
-            {
-                return;
-            }
-
-            try
-            {
-                var appended = _store.Append(entry);
-                state.LastAttemptAt = timestamp;
-                if (!appended)
+                paceChanged = state.CurrentEntry is not null;
+                state.CurrentEntry = null;
+                if (providerState.Snapshot is null && state.HasIdentity)
                 {
-                    return;
+                    state.SegmentId = Guid.NewGuid();
+                    state.HasIdentity = false;
+                    state.ObservationHash = null;
+                    state.PendingEntry = null;
                 }
+            }
+            else if (!providerState.IsRefreshing)
+            {
+                var snapshot = providerState.Snapshot;
+                var timestamp = providerState.LastSuccessfulRefreshAt ?? snapshot.FetchedAt ?? _timeProvider.GetUtcNow();
+                var sourceHash = Hash(snapshot.Source);
+                var accountScopeHash = Hash(snapshot.AccountScope);
+                var sourceKind = SourceKind(snapshot);
+                var observationHash = Fingerprint(snapshot, sourceHash, accountScopeHash, timestamp);
+                if (state.HasIdentity && (!string.Equals(state.SourceHash, sourceHash, StringComparison.Ordinal)
+                    || !string.Equals(state.AccountScopeHash, accountScopeHash, StringComparison.Ordinal)
+                    || state.SourceKind != sourceKind))
+                {
+                    state.SegmentId = Guid.NewGuid();
+                    state.ObservationHash = null;
+                    state.PendingEntry = null;
+                }
+                state.SourceHash = sourceHash;
+                state.AccountScopeHash = accountScopeHash;
+                state.SourceKind = sourceKind;
+                state.HasIdentity = true;
 
-                state.PendingEntry = null;
-                _writeErrors.Remove(providerId);
-                notify = true;
-            }
-            catch (UsageHistoryException exception)
-            {
-                state.LastAttemptAt = timestamp;
-                SetWriteErrorUnsafe(providerId, exception.Kind);
-                notify = true;
-            }
-            catch (IOException)
-            {
-                state.LastAttemptAt = timestamp;
-                SetWriteErrorUnsafe(providerId, UsageHistoryErrorKind.Unavailable);
-                notify = true;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                state.LastAttemptAt = timestamp;
-                SetWriteErrorUnsafe(providerId, UsageHistoryErrorKind.Unavailable);
-                notify = true;
+                var entry = CreateEntry(snapshot, providerId, timestamp, sourceKind, state.SegmentId);
+                paceChanged = state.CurrentEntry is null || !string.Equals(state.ObservationHash, observationHash, StringComparison.Ordinal);
+                state.CurrentEntry = entry;
+                if (!string.Equals(state.ObservationHash, observationHash, StringComparison.Ordinal) || state.PendingEntry is not null)
+                {
+                    state.ObservationHash = observationHash;
+                    state.PendingEntry = entry;
+                    if (state.LastAttemptAt is not { } lastAttempt || timestamp - lastAttempt >= MinimumSampleInterval)
+                    {
+                        try
+                        {
+                            var appended = _store.Append(entry);
+                            state.LastAttemptAt = timestamp;
+                            if (appended)
+                            {
+                                state.PendingEntry = null;
+                                _writeErrors.Remove(providerId);
+                                notify = true;
+                            }
+                        }
+                        catch (UsageHistoryException exception)
+                        {
+                            state.LastAttemptAt = timestamp;
+                            SetWriteErrorUnsafe(providerId, exception.Kind);
+                            notify = true;
+                        }
+                        catch (IOException)
+                        {
+                            state.LastAttemptAt = timestamp;
+                            SetWriteErrorUnsafe(providerId, UsageHistoryErrorKind.Unavailable);
+                            notify = true;
+                        }
+                        catch (UnauthorizedAccessException)
+                        {
+                            state.LastAttemptAt = timestamp;
+                            SetWriteErrorUnsafe(providerId, UsageHistoryErrorKind.Unavailable);
+                            notify = true;
+                        }
+                    }
+                }
             }
         }
 
-        if (notify)
-        {
-            Changed?.Invoke(this, EventArgs.Empty);
-        }
+        if (notify) Changed?.Invoke(this, EventArgs.Empty);
+        else if (paceChanged) PaceChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private static UsageHistoryEntry CreateEntry(
@@ -413,6 +462,8 @@ public sealed class UsageHistoryController : IDisposable
     private sealed class ProviderHistoryState(Guid segmentId)
     {
         public Guid SegmentId { get; set; } = segmentId;
+        public UsageHistoryEntry? CurrentEntry { get; set; }
+        public UsageHistorySourceKind SourceKind { get; set; }
         public string? SourceHash { get; set; }
         public string? AccountScopeHash { get; set; }
         public string? ObservationHash { get; set; }
