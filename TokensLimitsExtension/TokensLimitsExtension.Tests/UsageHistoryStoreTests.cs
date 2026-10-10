@@ -89,6 +89,20 @@ public sealed class UsageHistoryStoreTests
     }
 
     [Fact]
+    public void SnapshotAccountScopeIsNeverSerialized()
+    {
+        var snapshot = new UsageSnapshot("codex", "Codex", null, null, null, false)
+        {
+            AccountScope = "opaque-account-hash",
+        };
+
+        var json = JsonSerializer.Serialize(snapshot);
+
+        Assert.DoesNotContain("opaque-account-hash", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("AccountScope", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void RejectsUnapprovedMetricKeysInsteadOfPersistingUserText()
     {
         var directory = NewDirectory();
