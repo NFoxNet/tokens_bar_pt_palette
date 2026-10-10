@@ -147,7 +147,8 @@ public sealed class UsageHistoryStoreTests
         var directory = NewDirectory();
         try
         {
-            var now = DateTimeOffset.UtcNow.AddDays(1);
+            var clock = new TestTimeProvider(DateTimeOffset.UtcNow.AddDays(1));
+            var now = clock.GetUtcNow();
             var seeded = Enumerable.Range(0, UsageHistoryStore.MaximumEntriesPerProvider)
                 .Select(index => Entry(now.AddMinutes(-5 * (UsageHistoryStore.MaximumEntriesPerProvider - index - 1))))
                 .ToArray();
@@ -155,7 +156,7 @@ public sealed class UsageHistoryStoreTests
             File.WriteAllBytes(
                 HistoryPath(directory, "codex"),
                 JsonSerializer.SerializeToUtf8Bytes(seeded, SeedJsonOptions));
-            var store = new UsageHistoryStore(directory, 30);
+            var store = new UsageHistoryStore(directory, 30, clock);
 
             Assert.True(store.Append(Entry(now.AddMinutes(5))));
 
@@ -213,6 +214,27 @@ public sealed class UsageHistoryStoreTests
         }
     }
 
+    [Fact]
+    public void RejectsFarFutureTimestampAsTypedErrorWithoutOverwritingHistory()
+    {
+        var directory = NewDirectory();
+        try
+        {
+            var store = new UsageHistoryStore(directory);
+            store.Append(Entry(DateTimeOffset.UtcNow));
+            var path = HistoryPath(directory, "codex");
+            var original = File.ReadAllBytes(path);
+
+            var exception = Assert.Throws<UsageHistoryException>(() => store.Append(Entry(DateTimeOffset.UtcNow) with { Timestamp = DateTimeOffset.MaxValue }));
+
+            Assert.Equal(UsageHistoryErrorKind.InvalidData, exception.Kind);
+            Assert.Equal(original, File.ReadAllBytes(path));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
     private static UsageHistoryEntry Entry(DateTimeOffset timestamp)
         => new(
             timestamp,
@@ -223,6 +245,11 @@ public sealed class UsageHistoryStoreTests
             new UsageHistoryWindow(20, timestamp.AddHours(-1), timestamp.AddHours(4), 18000, true),
             null,
             [new UsageHistoryMetric("tokens5h", NumericValue: 123)]);
+
+    private sealed class TestTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
 
     private static string HistoryPath(string directory, string providerId)
         => Path.Combine(directory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(providerId))) + ".json");

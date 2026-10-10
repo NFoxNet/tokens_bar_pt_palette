@@ -10,6 +10,7 @@ public enum UsageHistoryErrorKind
     Corrupt,
     TooLarge,
     InvalidData,
+    Unavailable,
 }
 
 public sealed class UsageHistoryException(UsageHistoryErrorKind kind, string message, Exception? innerException = null)
@@ -27,6 +28,7 @@ public sealed class UsageHistoryStore
     public const int MaximumFileBytes = 32 * 1024 * 1024;
     private const int MinimumSampleIntervalMinutes = 5;
     private const int MaximumMetricsPerEntry = 32;
+    private static readonly TimeSpan MaximumFutureClockSkew = TimeSpan.FromMinutes(5);
 
     private static readonly object FileGate = new();
     private static readonly HashSet<string> AllowedMetricKeys = new(StringComparer.Ordinal)
@@ -40,9 +42,10 @@ public sealed class UsageHistoryStore
     };
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _directory;
+    private readonly TimeProvider _timeProvider;
     private int _retentionDays;
 
-    public UsageHistoryStore(string directory, int retentionDays = 14)
+    public UsageHistoryStore(string directory, int retentionDays = 14, TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         if (retentionDays is not (7 or 14 or 30))
@@ -51,6 +54,7 @@ public sealed class UsageHistoryStore
         }
 
         _directory = directory;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _retentionDays = retentionDays;
     }
 
@@ -71,12 +75,12 @@ public sealed class UsageHistoryStore
     {
         ArgumentNullException.ThrowIfNull(entry);
         var path = GetFilePath(entry.ProviderId);
-        ValidateEntry(entry, entry.ProviderId);
+        ValidateEntry(entry, entry.ProviderId, _timeProvider.GetUtcNow());
 
         lock (FileGate)
         {
-            var entries = ReadFile(path, entry.ProviderId);
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
+            var entries = ReadFile(path, entry.ProviderId, now);
             entries.RemoveAll(item => item.Timestamp < now.AddDays(-_retentionDays));
             if (entry.Timestamp < now.AddDays(-_retentionDays))
             {
@@ -84,7 +88,7 @@ public sealed class UsageHistoryStore
             }
 
             var latest = entries.Count == 0 ? (DateTimeOffset?)null : entries.Max(item => item.Timestamp);
-            if (latest is { } last && entry.Timestamp < last + TimeSpan.FromMinutes(MinimumSampleIntervalMinutes))
+            if (latest is { } last && (entry.Timestamp - last) < TimeSpan.FromMinutes(MinimumSampleIntervalMinutes))
             {
                 return false;
             }
@@ -106,8 +110,9 @@ public sealed class UsageHistoryStore
         var path = GetFilePath(providerId);
         lock (FileGate)
         {
-            var cutoff = DateTimeOffset.UtcNow.AddDays(-_retentionDays);
-            return ReadFile(path, providerId)
+            var now = _timeProvider.GetUtcNow();
+            var cutoff = now.AddDays(-_retentionDays);
+            return ReadFile(path, providerId, now)
                 .Where(entry => entry.Timestamp >= cutoff)
                 .OrderBy(entry => entry.Timestamp)
                 .ToArray();
@@ -146,9 +151,11 @@ public sealed class UsageHistoryStore
         return Path.Combine(_directory, hash + ".json");
     }
 
-    private static void ValidateEntry(UsageHistoryEntry entry, string expectedProviderId)
+    private static void ValidateEntry(UsageHistoryEntry entry, string expectedProviderId, DateTimeOffset now)
     {
-        if (!string.Equals(entry.ProviderId, expectedProviderId, StringComparison.Ordinal)
+        if (entry.Timestamp.UtcTicks > now.UtcTicks
+                && entry.Timestamp.UtcTicks - now.UtcTicks > MaximumFutureClockSkew.Ticks
+            || !string.Equals(entry.ProviderId, expectedProviderId, StringComparison.Ordinal)
             || entry.SegmentId == Guid.Empty || !Enum.IsDefined(entry.SourceKind))
         {
             throw new UsageHistoryException(UsageHistoryErrorKind.InvalidData, "History entry is invalid.");
@@ -177,7 +184,7 @@ public sealed class UsageHistoryStore
 
     private static bool IsFinite(double? value) => value is null || double.IsFinite(value.Value);
 
-    private static List<UsageHistoryEntry> ReadFile(string path, string providerId)
+    private static List<UsageHistoryEntry> ReadFile(string path, string providerId, DateTimeOffset now)
     {
         if (!File.Exists(path))
         {
@@ -216,7 +223,7 @@ public sealed class UsageHistoryStore
 
             foreach (var entry in entries)
             {
-                ValidateEntry(entry, providerId);
+                ValidateEntry(entry, providerId, now);
             }
 
             return entries;
@@ -260,3 +267,4 @@ public sealed class UsageHistoryStore
         }
     }
 }
+
