@@ -294,7 +294,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         return string.Join(Environment.NewLine + Environment.NewLine, lines);
     }
 
-    private static string EscapeDetailsText(string value)
+    internal static string EscapeDetailsText(string value)
         => string.Concat(value.Select(character => character switch
         {
             '\\' => "\\\\",
@@ -313,7 +313,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
             _ => character.ToString(),
         }));
 
-    private static string FormatSafeSource(string source)
+    internal static string FormatSafeSource(string source)
     {
         var sources = source
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

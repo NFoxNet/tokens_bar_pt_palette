@@ -80,6 +80,34 @@ public sealed class UsageDisplayFormatterTests
         Assert.Equal("Total balance: 42 credits", UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, Localization));
     }
 
+    [Theory]
+    [InlineData("primary", "5ч\\90%")]
+    [InlineData("secondary", "4ч\\75%")]
+    [InlineData("balance", "Total balance: 42 credits")]
+    public void FormatDockBandSubtitleCanSelectOneMetricWithoutInventingUnavailableValues(string selection, string expected)
+    {
+        var snapshot = Snapshot(
+            primary: Window(10, 18_000),
+            secondary: Window(25, 14_400),
+            metrics: [Metric("Token balance", "42", "credits", "totalBalance")]);
+        var selected = typeof(UsageDisplayFormatter)
+            .GetMethod("FormatDockBandSubtitle", [typeof(UsageSnapshot), typeof(ILocalizationService), typeof(string)]);
+
+        Assert.NotNull(selected);
+        Assert.Equal(expected, selected!.Invoke(null, [snapshot, Localization, selection]));
+    }
+
+    [Fact]
+    public void FormatDockBandSubtitleShowsUnavailableWhenSelectedMetricIsMissing()
+    {
+        var snapshot = Snapshot(primary: Window(10, 18_000));
+        var selected = typeof(UsageDisplayFormatter)
+            .GetMethod("FormatDockBandSubtitle", [typeof(UsageSnapshot), typeof(ILocalizationService), typeof(string)]);
+
+        Assert.NotNull(selected);
+        Assert.Equal("Not available", selected!.Invoke(null, [snapshot, Localization, "balance"]));
+    }
+
     [Fact]
     public void FormatDockBandSubtitleAddsBalanceToWindowsWithoutReplacingThem()
     {

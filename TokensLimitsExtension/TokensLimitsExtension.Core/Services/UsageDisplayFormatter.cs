@@ -71,6 +71,35 @@ public static class UsageDisplayFormatter
         return estimatePrefix + subtitle;
     }
 
+    public static string FormatDockBandSubtitle(UsageSnapshot snapshot, ILocalizationService localization, string metricSelection)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(localization);
+        ArgumentNullException.ThrowIfNull(metricSelection);
+
+        if (metricSelection == "all")
+        {
+            return FormatDockBandSubtitle(snapshot, localization);
+        }
+
+        var unavailable = localization.GetString("status.dock.metricUnavailable", "Not available");
+        var estimatePrefix = snapshot.IsEstimate ? localization.GetString("status.estimate", "Estimate: ") : string.Empty;
+        return metricSelection switch
+        {
+            "primary" => snapshot.PrimaryWindow is { } primary
+                ? estimatePrefix + FormatDockWindow(primary, isPrimary: true, localization)
+                : unavailable,
+            "secondary" => snapshot.SecondaryWindow is { } secondary
+                ? estimatePrefix + FormatDockWindow(secondary, isPrimary: false, localization)
+                : unavailable,
+            "balance" => snapshot.Metrics.FirstOrDefault(metric =>
+                    string.Equals(metric.SemanticKey, "totalBalance", StringComparison.OrdinalIgnoreCase)) is { } balance
+                ? estimatePrefix + FormatDockMetric(balance, localization)
+                : unavailable,
+            _ => FormatDockBandSubtitle(snapshot, localization),
+        };
+    }
+
     public static string FormatTimeUntilReset(DateTimeOffset resetAt, DateTimeOffset now, ILocalizationService? localization = null)
     {
         var remaining = resetAt - now;

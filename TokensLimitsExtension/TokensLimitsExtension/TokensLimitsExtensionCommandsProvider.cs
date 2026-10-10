@@ -21,7 +21,7 @@ namespace TokensLimitsExtension;
 public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 {
     private readonly ICommandItem[] _commands;
-    private readonly ICommandItem[] _dockBands;
+    private ICommandItem[] _dockBands;
     private readonly TokensLimitsSettings _settings;
     private readonly UsageProviderRegistry _providerRegistry;
     private readonly bool _ownsProviderRegistry;
@@ -35,6 +35,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private readonly Dictionary<string, UsageDockBandItem> _dockBandItemsByProviderId = new(StringComparer.OrdinalIgnoreCase);
     private readonly UsageOverviewPage _overviewPage;
     private readonly TokensLimitsDockBandPage _dockBandPage;
+    private UsageSummaryPage? _summaryPage;
     private readonly HttpClient? _ownedProviderHttpClient;
     private readonly bool _settingsDrivenProviders;
     private readonly object _rebuildGate = new();
@@ -116,6 +117,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             },
         ];
         _settings.Changed += SettingsOnChanged;
+        _settings.ProviderConfigurationChanged += ProviderConfigurationOnChanged;
         RebuildEnabledSurfaces();
     }
 
@@ -132,6 +134,34 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         }
     }
 
+    public override ICommandItem? GetCommandItem(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        lock (_surfaceGate)
+        {
+            var band = _dockBands.FirstOrDefault(item => string.Equals(item.Command?.Id, id, StringComparison.Ordinal));
+            if (band is not null)
+            {
+                return band;
+            }
+
+            var topLevelCommand = _commands.FirstOrDefault(item => string.Equals(item.Command?.Id, id, StringComparison.Ordinal));
+            if (topLevelCommand is not null)
+            {
+                return topLevelCommand;
+            }
+
+            var dockPage = _dockPagesByProviderId.Values.FirstOrDefault(page => string.Equals(page.Id, id, StringComparison.Ordinal));
+            if (dockPage is not null)
+            {
+                return new CommandItem(dockPage) { Title = dockPage.Title };
+            }
+
+            var page = _pagesByProviderId.Values.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+            return page is null ? null : new CommandItem(page) { Title = page.Title };
+        }
+    }
+
     public override void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -140,6 +170,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         }
 
         _settings.Changed -= SettingsOnChanged;
+        _settings.ProviderConfigurationChanged -= ProviderConfigurationOnChanged;
         UsageDockBandItem[] dockBandItems;
         TokensLimitsPage[] pages;
         lock (_rebuildGate)
@@ -163,6 +194,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         }
 
         _dockBandPage.Dispose();
+        _summaryPage?.Dispose();
+        _summaryPage = null;
         _overviewPage.Dispose();
 
         _refreshCoordinator.Dispose();
@@ -188,7 +221,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         base.Dispose();
     }
 
-    private static UsageDockBandItem CreateDockItem(
+    private UsageDockBandItem CreateDockItem(
         UsageSnapshotCache provider,
         Action<string> logger,
         ICommand detailsCommand,
@@ -196,7 +229,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         ILocalizationService localization,
         UsageRefreshCoordinator refreshCoordinator)
     {
-        return new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings, localization, refreshCoordinator);
+        return new UsageDockBandItem(provider, logger, detailsCommand, refreshSettings, localization, refreshCoordinator, () => _settings.DockMetric);
     }
 
     private void SettingsOnChanged(object? sender, EventArgs e)
@@ -273,8 +306,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 
         if (hasSameComposition)
         {
-            // Settings such as credentials and language do not change membership.
-            _refreshCoordinator.RefreshAll();
+            UpdateDockPresentation(enabledCaches);
             return;
         }
 
@@ -297,15 +329,6 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
                 return;
             }
         }
-        else
-        {
-            _refreshCoordinator.RefreshAll();
-            if (IsRebuildSuperseded())
-            {
-                return;
-            }
-        }
-
         TokensLimitsPage[] pages;
         TokensLimitsPage[] dockPages;
         UsageDockBandItem[] dockBandItems;
@@ -419,7 +442,110 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             return;
         }
 
-        _dockBandPage.UpdateItems(dockBandItems);
+        UpdateDockPresentation(enabledCaches);
+    }
+
+    private void UpdateDockPresentation(IReadOnlyList<UsageSnapshotCache> enabledCaches)
+    {
+        var wasSummaryMode = _summaryPage is not null;
+        UsageDockBandItem[] dockItems;
+        lock (_surfaceGate)
+        {
+            dockItems = _dockBandItems.ToArray();
+        }
+
+        var itemsById = dockItems.ToDictionary(item => item.ProviderId, StringComparer.OrdinalIgnoreCase);
+        var orderedProviderIds = _settings.DockProviderOrder
+            .Concat(enabledCaches.Select(cache => cache.Descriptor.Id))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var visibleCaches = orderedProviderIds
+            .Where(_settings.IsDockVisible)
+            .Select(id => enabledCaches.FirstOrDefault(cache => cache.Descriptor.Id.Equals(id, StringComparison.OrdinalIgnoreCase)))
+            .Where(cache => cache is not null)
+            .Cast<UsageSnapshotCache>()
+            .ToArray();
+        var visibleItems = visibleCaches
+            .Select(cache => itemsById[cache.Descriptor.Id])
+            .ToArray();
+
+        if (_settings.DockSummaryEnabled)
+        {
+            foreach (var item in dockItems)
+            {
+                item.SetActive(false);
+            }
+
+            _dockBandPage.UpdateItems([]);
+            UsageSummaryPage summary;
+            lock (_surfaceGate)
+            {
+                summary = _summaryPage ??= new UsageSummaryPage(_settings.Localization, () => _settings.DockMetric);
+            }
+            summary.UpdateProviders(visibleCaches);
+            lock (_surfaceGate)
+            {
+                _dockBands = [CreateDockBandCommand(summary, summaryMode: true)];
+            }
+            if (!wasSummaryMode)
+            {
+                RaiseItemsChanged();
+            }
+            return;
+        }
+
+        UsageSummaryPage? oldSummary;
+        lock (_surfaceGate)
+        {
+            oldSummary = _summaryPage;
+            _summaryPage = null;
+        }
+        oldSummary?.Dispose();
+
+        var visibleIds = visibleCaches.Select(cache => cache.Descriptor.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in dockItems)
+        {
+            item.SetActive(visibleIds.Contains(item.ProviderId));
+            if (visibleIds.Contains(item.ProviderId))
+            {
+                item.SynchronizeState();
+            }
+        }
+        _dockBandPage.UpdateItems(visibleItems);
+        lock (_surfaceGate)
+        {
+            _dockBands = [CreateDockBandCommand(_dockBandPage, summaryMode: false)];
+        }
+        if (wasSummaryMode)
+        {
+            RaiseItemsChanged();
+        }
+    }
+
+    private CommandItem CreateDockBandCommand(ICommand page, bool summaryMode)
+        => new CommandItem(page)
+        {
+            Title = _settings.Localization.GetString("app.title", "Tokens Limits"),
+            Subtitle = _settings.Localization.GetString(
+                summaryMode ? "dock.summary.open" : "dock.show",
+                summaryMode ? "Open the cached provider summary." : "Show enabled provider limits in Dock"),
+            Icon = _dockBandPage.Icon,
+        };
+
+    private void ProviderConfigurationOnChanged(object? sender, UsageProviderConfigurationChangedEventArgs args)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        foreach (var providerId in args.ProviderIds)
+        {
+            var cache = _snapshotCaches.FirstOrDefault(candidate => candidate.Descriptor.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase));
+            if (cache is not null && _settings.IsEnabled(providerId))
+            {
+                _ = _refreshCoordinator.RefreshProviderAsync(cache);
+            }
+        }
     }
 
     private bool IsRebuildSuperseded()
