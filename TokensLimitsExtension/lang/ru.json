@@ -2,6 +2,11 @@
   "culture": "ru",
   "nativeName": "Русский",
   "strings": {
+    "setup.auth.apiKeyOrAdminApiKey": "API-ключ или Admin API-ключ",
+    "setup.auth.sessionBundle": "Сеансовый пакет Windsurf",
+    "setup.status.configurationRequired": "Требуется завершить настройку",
+    "setup.status.validationRequired": "Требуется проверить подключение",
+    "setup.status.validatedNoQuota": "{0} · {1}",
     "app.title": "Tokens Limits",
     "overview.providers": "Включённые провайдеры",
     "overview.loading": "Загрузка…",

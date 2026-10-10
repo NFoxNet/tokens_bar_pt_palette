@@ -98,6 +98,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             _settings.Localization,
             _refreshCoordinator,
             _settings.Settings.SettingsPage);
+        _setupPage = new ProviderSetupPage(_settings, [], _refreshCoordinator);
         _dockBandPage = new TokensLimitsDockBandPage(_settings.Localization);
         _dockBands =
         [
@@ -151,6 +152,11 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
                 return topLevelCommand;
             }
 
+            if (id == _setupPage.Id)
+            {
+                return new CommandItem(_setupPage) { Title = _settings.Localization.GetString("setup.name") };
+            }
+
             var dockPage = _dockPagesByProviderId.Values.FirstOrDefault(page => string.Equals(page.Id, id, StringComparison.Ordinal));
             if (dockPage is not null)
             {
@@ -175,6 +181,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         TokensLimitsPage[] pages;
         lock (_rebuildGate)
         {
+            DisposeFeatureControllers();
             lock (_surfaceGate)
             {
                 dockBandItems = [.. _dockBandItemsByProviderId.Values];
@@ -294,6 +301,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     {
         var enabledCaches = GetEnabledCaches();
         var enabledIds = enabledCaches.Select(cache => cache.Descriptor.Id).ToArray();
+        UpdateFeatureControllers(enabledCaches);
         bool hasSameComposition;
         lock (_surfaceGate)
         {
@@ -435,6 +443,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             return;
         }
 
+        _setupPage.UpdateProviders(enabledCaches, pages);
         _overviewPage.UpdateProviders(enabledCaches, pages);
         _hasBuiltComposition = true;
         if (IsRebuildSuperseded())
@@ -540,6 +549,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 
         foreach (var providerId in args.ProviderIds)
         {
+            _notificationController?.ResetProvider(providerId);
             var cache = _snapshotCaches.FirstOrDefault(candidate => candidate.Descriptor.Id.Equals(providerId, StringComparison.OrdinalIgnoreCase));
             if (cache is not null && _settings.IsEnabled(providerId))
             {

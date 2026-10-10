@@ -22,6 +22,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
     private readonly UsageRefreshCoordinator? _coordinator;
     private readonly ICommand? _settingsCommand;
     private IListItem[] _items = [];
+    private IContextItem[] _navigationCommands = [];
     private UsageSnapshotCache[] _itemCaches = [];
     private UsageProviderState[] _renderedStates = [];
     private long _renderRevision;
@@ -96,6 +97,27 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         }
     }
 
+    public void UpdateNavigationCommands(IContextItem[] commands)
+    {
+        ArgumentNullException.ThrowIfNull(commands);
+        lock (_providerGate)
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            if (_navigationCommands.Length == commands.Length
+                && _navigationCommands.Zip(commands).All(pair => pair.First is CommandContextItem first
+                    && pair.Second is CommandContextItem second && ReferenceEquals(first.Command, second.Command)
+                    && first.Title == second.Title)) return;
+            _navigationCommands = commands;
+            for (var index = 0; index < _itemCaches.Length; index++)
+            {
+                ((ListItem)_items[index]).MoreCommands = CreateMoreCommands(_itemCaches[index], _renderedStates[index]);
+            }
+            if (_itemCaches.Length == 0 && _items.Length == 1)
+                ((ListItem)_items[0]).MoreCommands = commands;
+        }
+        RaiseItemsChanged();
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -132,7 +154,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
                     var subtitle = _localization.GetString("overview.empty.subtitle", "Enable providers in the extension settings.");
                     if (_itemCaches.Length != 0 || _items.Length != 1)
                     {
-                        Volatile.Write(ref _items, [new ListItem(_settingsCommand ?? new NoOpCommand()) { Title = title, Subtitle = subtitle }]);
+                        Volatile.Write(ref _items, [new ListItem(_settingsCommand ?? new NoOpCommand()) { Title = title, Subtitle = subtitle, MoreCommands = _navigationCommands }]);
                         _itemCaches = [];
                         _renderedStates = [];
                         changed = true;
@@ -203,7 +225,9 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         {
             var context = (CommandContextItem)commands[commandIndex];
             var title = context.Command switch
+
             {
+                _ when _navigationCommands.Contains(context) => context.Title,
                 CopyTextCommand => _localization.GetString("action.copyDiagnostics", "Copy safe diagnostics"),
                 OpenUrlCommand => _localization.GetString("action.openDashboard", "Open provider dashboard"),
                 _ when commandIndex == 0 => _localization.GetString("action.refresh", "Refresh"),
@@ -368,6 +392,7 @@ public sealed partial class UsageOverviewPage : ListPage, IDisposable
         {
             Title = _localization.GetString("action.copyDiagnostics", "Copy safe diagnostics"),
         });
+        commands.AddRange(_navigationCommands);
         return commands.ToArray();
     }
 
