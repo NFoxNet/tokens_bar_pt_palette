@@ -24,6 +24,7 @@ public sealed record UsageNotificationEvent(
 /// <summary>Tracks threshold crossings for one running extension process.</summary>
 public sealed class UsageNotificationEvaluator
 {
+    private static readonly TimeSpan MaximumSnapshotAge = TimeSpan.FromMinutes(5);
     private readonly Dictionary<WindowKey, WindowState> _windows = [];
 
     public IReadOnlyList<UsageNotificationEvent> Evaluate(
@@ -39,7 +40,10 @@ public sealed class UsageNotificationEvaluator
             throw new ArgumentOutOfRangeException(nameof(thresholdPercent));
         }
 
-        if (snapshot.IsEstimate || snapshot.FetchedAt is not { } fetchedAt || fetchedAt > now)
+        if (snapshot.IsEstimate
+            || snapshot.FetchedAt is not { } fetchedAt
+            || fetchedAt > now
+            || now - fetchedAt > MaximumSnapshotAge)
         {
             return [];
         }
@@ -64,10 +68,9 @@ public sealed class UsageNotificationEvaluator
                 windowKind);
             foreach (var oldKey in _windows.Keys.Where(existing =>
                          existing.ProviderId == key.ProviderId
-                         && existing.Source == key.Source
                          && existing.SegmentId == key.SegmentId
                          && existing.Window == key.Window
-                         && existing.AccountScope != key.AccountScope).ToArray())
+                         && (existing.Source != key.Source || existing.AccountScope != key.AccountScope)).ToArray())
             {
                 _windows.Remove(oldKey);
             }
@@ -79,7 +82,7 @@ public sealed class UsageNotificationEvaluator
                 return;
             }
 
-            if (state.LimitWindowSeconds != window.LimitWindowSeconds)
+            if (state.LimitWindowSeconds != window.LimitWindowSeconds || state.IsFixedWindow != window.IsFixedWindow)
             {
                 _windows[key] = WindowState.From(window, fetchedAt, false);
                 return;
@@ -113,7 +116,7 @@ public sealed class UsageNotificationEvaluator
                     remainingPercent));
                 notified = true;
             }
-            else if (remainingPercent > thresholdPercent)
+            else if (!state.IsFixedWindow && remainingPercent > thresholdPercent)
             {
                 notified = false;
             }

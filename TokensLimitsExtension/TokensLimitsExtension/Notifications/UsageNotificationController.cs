@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using TokensLimitsExtension.Core.Models;
@@ -198,21 +199,19 @@ public sealed partial class UsageNotificationController : IDisposable
 
         foreach (var notification in notifications)
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
             try
             {
                 _delivery.Deliver(notification);
             }
-            catch (Exception exception)
+            catch (Exception exception) when (exception is COMException or InvalidOperationException or NotSupportedException)
             {
                 Debug.WriteLine($"[TokensLimits] usage notification delivery failed for {providerId}: {exception.GetType().Name}");
-                try
-                {
-                    DeliveryFailed?.Invoke(this, new UsageNotificationDeliveryFailedEventArgs(providerId, exception.GetType().Name));
-                }
-                catch (Exception diagnosticException)
-                {
-                    Debug.WriteLine($"[TokensLimits] notification failure observer failed: {diagnosticException.GetType().Name}");
-                }
+                DeliveryFailed?.Invoke(this, new UsageNotificationDeliveryFailedEventArgs(providerId, exception.GetType().Name));
             }
         }
     }

@@ -89,6 +89,65 @@ public sealed class UsageNotificationControllerTests
         Assert.Single(delivery.Events);
     }
 
+    [Fact]
+    public async Task StopsDeliveringQueuedWindowNotificationsAfterDispose()
+    {
+        var time = new MutableTimeProvider(new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero));
+        var provider = new MutableProvider(Snapshot(80) with
+        {
+            SecondaryWindow = new UsageWindow(80, time.GetUtcNow().AddHours(1), 3600),
+        });
+        using var cache = new UsageSnapshotCache(provider, timeProvider: time);
+        var delivery = new RecordingDelivery();
+        UsageNotificationController? controller = null;
+        controller = new UsageNotificationController(
+            [cache],
+            new UsageNotificationEvaluator(),
+            delivery,
+            _ => "process-config-1",
+            timeProvider: time);
+        delivery.AfterDeliver = _ => controller?.Dispose();
+
+        await cache.RefreshAsync();
+        time.Advance(TimeSpan.FromMinutes(1));
+        provider.Snapshot = Snapshot(92) with
+        {
+            SecondaryWindow = new UsageWindow(92, time.GetUtcNow().AddHours(1), 3600),
+        };
+        cache.Invalidate();
+        await cache.RefreshAsync();
+
+        Assert.Single(delivery.Events);
+        Assert.Equal(UsageNotificationWindow.Primary, delivery.Events[0].Window);
+    }
+
+    [Fact]
+    public async Task ReportsExpectedPlatformDeliveryFailureWithoutExposingExceptionMessage()
+    {
+        var time = new MutableTimeProvider(new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero));
+        var provider = new MutableProvider(Snapshot(80));
+        using var cache = new UsageSnapshotCache(provider, timeProvider: time);
+        var delivery = new FailingDelivery();
+        using var controller = new UsageNotificationController(
+            [cache],
+            new UsageNotificationEvaluator(),
+            delivery,
+            _ => "process-config-1",
+            timeProvider: time);
+        UsageNotificationDeliveryFailedEventArgs? failure = null;
+        controller.DeliveryFailed += (_, args) => failure = args;
+
+        await cache.RefreshAsync();
+        time.Advance(TimeSpan.FromMinutes(1));
+        provider.Snapshot = Snapshot(92);
+        cache.Invalidate();
+        await cache.RefreshAsync();
+
+        Assert.Equal("test", failure?.ProviderId);
+        Assert.Equal(nameof(InvalidOperationException), failure?.ErrorType);
+        Assert.Equal(UsageProviderErrorKind.None, cache.State.ErrorKind);
+    }
+
     private static UsageSnapshot Snapshot(double usedPercent)
         => new("test", "Test provider", new UsageWindow(usedPercent, DateTimeOffset.UtcNow.AddHours(1), 3600), null, null, false);
 
@@ -110,7 +169,19 @@ public sealed class UsageNotificationControllerTests
     {
         public List<UsageNotificationEvent> Events { get; } = [];
 
-        public void Deliver(UsageNotificationEvent notification) => Events.Add(notification);
+        public Action<UsageNotificationEvent>? AfterDeliver { get; set; }
+
+        public void Deliver(UsageNotificationEvent notification)
+        {
+            Events.Add(notification);
+            AfterDeliver?.Invoke(notification);
+        }
+    }
+
+    private sealed class FailingDelivery : IUsageNotificationDelivery
+    {
+        public void Deliver(UsageNotificationEvent notification)
+            => throw new InvalidOperationException("secret must not be surfaced");
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider

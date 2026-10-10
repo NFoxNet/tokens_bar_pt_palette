@@ -68,6 +68,37 @@ public sealed class UsageNotificationEvaluatorTests
     }
 
     [Fact]
+    public void DoesNotReuseBaselineAfterReturningToAnEarlierSource()
+    {
+        var evaluator = new UsageNotificationEvaluator();
+        evaluator.Evaluate("config-1", Snapshot(80, Now.AddHours(2), Now) with { Source = "api-a" }, Now, 10);
+        evaluator.Evaluate("config-1", Snapshot(80, Now.AddHours(2), Now.AddSeconds(1)) with { Source = "api-b" }, Now.AddSeconds(1), 10);
+
+        Assert.Empty(evaluator.Evaluate(
+            "config-1",
+            Snapshot(95, Now.AddHours(2), Now.AddSeconds(2)) with { Source = "api-a" },
+            Now.AddSeconds(2),
+            10));
+    }
+
+    [Fact]
+    public void IgnoresSnapshotsOlderThanFiveMinutesWithoutSeedingBaseline()
+    {
+        var evaluator = new UsageNotificationEvaluator();
+
+        Assert.Empty(evaluator.Evaluate(
+            "config-1",
+            Snapshot(80, Now.AddHours(2), Now.AddMinutes(-6)),
+            Now,
+            10));
+        Assert.Empty(evaluator.Evaluate(
+            "config-1",
+            Snapshot(95, Now.AddHours(2), Now),
+            Now,
+            10));
+    }
+
+    [Fact]
     public void DoesNotCompareAcrossAccountScopesIncludingKnownToUnknown()
     {
         var evaluator = new UsageNotificationEvaluator();
@@ -109,6 +140,23 @@ public sealed class UsageNotificationEvaluatorTests
         evaluator.Evaluate("config-1", oldWindow, Now, 10);
 
         Assert.Empty(evaluator.Evaluate("config-1", newWindow, Now, 10));
+    }
+
+    [Fact]
+    public void DoesNotRearmFixedWindowThresholdAfterRecoveryWithinSameCycle()
+    {
+        var evaluator = new UsageNotificationEvaluator();
+        var startsAt = Now.AddHours(-5);
+        var resetAt = Now.AddHours(1);
+        evaluator.Evaluate("config-1", FixedSnapshot(80, startsAt, resetAt, Now.AddMinutes(-2)), Now, 10);
+        Assert.Single(evaluator.Evaluate("config-1", FixedSnapshot(92, startsAt, resetAt, Now.AddMinutes(-1)), Now, 10));
+        evaluator.Evaluate("config-1", FixedSnapshot(80, startsAt, resetAt, Now), Now, 10);
+
+        Assert.Empty(evaluator.Evaluate(
+            "config-1",
+            FixedSnapshot(92, startsAt, resetAt, Now.AddSeconds(1)),
+            Now.AddSeconds(1),
+            10));
     }
 
     private static UsageSnapshot Snapshot(double usedPercent, DateTimeOffset resetAt, DateTimeOffset? fetchedAt)
