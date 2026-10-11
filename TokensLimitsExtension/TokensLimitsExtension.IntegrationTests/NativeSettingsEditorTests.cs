@@ -21,7 +21,7 @@ public sealed class NativeSettingsEditorTests
             .Order(StringComparer.Ordinal)
             .ToArray();
         var providerKeys = UsageProviderDescriptorRegistry.All
-            .SelectMany(descriptor => editor.KeysForProvider(descriptor.Id))
+            .SelectMany(descriptor => NativeSettingsEditor.KeysForProvider(descriptor.Id))
             .Order(StringComparer.Ordinal)
             .ToArray();
         var registered = (SettingsForm)fixture.Settings.Settings.ToContent().Single();
@@ -31,7 +31,7 @@ public sealed class NativeSettingsEditorTests
 
         Assert.Equal(registeredKeys, keys.Concat(providerKeys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
         Assert.Throws<ArgumentException>(() => editor.KeysForSection("unknown"));
-        Assert.Throws<ArgumentException>(() => editor.KeysForProvider("unknown"));
+        Assert.Throws<ArgumentException>(() => NativeSettingsEditor.KeysForProvider("unknown"));
     }
 
     private static IEnumerable<string> RegisteredInputIds(System.Text.Json.Nodes.JsonNode? node)
@@ -64,7 +64,7 @@ public sealed class NativeSettingsEditorTests
         var fields = editor.Fields(editor.KeysForSection("general"));
         var language = Assert.Single(fields, field => field.Key == "tokensLimits.language");
         var refresh = Assert.Single(fields, field => field.Key == "tokensLimits.refreshInterval");
-        var providerSecret = Assert.Single(editor.Fields(editor.KeysForProvider("deepseek")), field => field.IsSecret);
+        var providerSecret = Assert.Single(editor.Fields(NativeSettingsEditor.KeysForProvider("deepseek")), field => field.IsSecret);
 
         Assert.False(string.IsNullOrWhiteSpace(language.Title));
         Assert.NotEmpty(language.Choices);
@@ -80,7 +80,7 @@ public sealed class NativeSettingsEditorTests
     {
         using var fixture = new Fixture();
         var editor = new NativeSettingsEditor(fixture.Settings);
-        var providerKeys = editor.KeysForProvider("deepseek");
+        var providerKeys = NativeSettingsEditor.KeysForProvider("deepseek");
         var saveErrors = editor.Save(providerKeys, new Dictionary<string, string>
         {
             ["tokensLimits.providers.deepseek.apiKey"] = "test-only-secret",
@@ -115,6 +115,30 @@ public sealed class NativeSettingsEditorTests
         fixture.Settings.Dispose();
     }
 
+    [Theory]
+    [InlineData("replacement-test-secret")]
+    [InlineData("")]
+    public void SecretWriteFailureIsVisibleAndPreservesPreviousSecret(string replacement)
+    {
+        using var fixture = new Fixture();
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        var keys = NativeSettingsEditor.KeysForProvider("deepseek");
+        const string key = "tokensLimits.providers.deepseek.apiKey";
+        Assert.Empty(editor.Save(keys, new Dictionary<string, string> { [key] = "previous-test-secret" }));
+        var secretPath = Path.Combine(Path.GetDirectoryName(fixture.Settings.FilePath)!, "tokensLimits.secrets.json");
+        var before = File.ReadAllBytes(secretPath);
+        using (var locked = new FileStream(secretPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var errors = editor.Save(keys, new Dictionary<string, string> { [key] = replacement });
+            Assert.Contains(key, errors.Keys);
+            Assert.Equal("previous-test-secret", fixture.Settings.GetValue("deepseek", "apiKey"));
+            Assert.Equal(TokensLimitsSettings.SecretMask, Assert.Single(editor.Fields(keys), field => field.IsSecret).Value);
+            Assert.DoesNotContain(replacement.Length == 0 ? "previous-test-secret" : replacement, errors[key]);
+        }
+        Assert.Equal(before, File.ReadAllBytes(secretPath));
+        Assert.Empty(editor.Save(keys, new Dictionary<string, string> { [key] = replacement }));
+        Assert.Equal(replacement.Length == 0 ? null : replacement, fixture.Settings.GetValue("deepseek", "apiKey"));
+    }
     private sealed class Fixture : IDisposable
     {
         private readonly TestDirectory _directory = new();

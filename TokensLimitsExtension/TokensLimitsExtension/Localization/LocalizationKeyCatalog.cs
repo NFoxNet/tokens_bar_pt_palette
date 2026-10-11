@@ -14,6 +14,11 @@ public static class LocalizationKeyCatalog
 {
     private static readonly string[] CommonKeys =
     [
+        "settings.window.open",
+        "settings.window.description",
+        "settings.window.instructions",
+        "settings.window.saved",
+        "settings.window.saveError",
         "settings.card.configure",
         "settings.card.configureTitle",
         "settings.card.dockDescription",

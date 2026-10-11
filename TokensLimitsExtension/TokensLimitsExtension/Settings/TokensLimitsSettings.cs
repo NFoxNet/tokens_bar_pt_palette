@@ -219,14 +219,20 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             return;
         }
 
-        ((IDisposable)CommandSettings).Dispose();
-        _disposed = true;
-        Settings.SettingsChanged -= OnSettingsChanged;
-        _localization.LanguageChanged -= OnLanguageChanged;
-        _secretStore.Dispose();
-        Changed = null;
-        ProviderConfigurationChanged = null;
-        GC.SuppressFinalize(this);
+        try
+        {
+            ((IDisposable)CommandSettings).Dispose();
+        }
+        finally
+        {
+            _disposed = true;
+            Settings.SettingsChanged -= OnSettingsChanged;
+            _localization.LanguageChanged -= OnLanguageChanged;
+            _secretStore.Dispose();
+            Changed = null;
+            ProviderConfigurationChanged = null;
+            GC.SuppressFinalize(this);
+        }
     }
 
     private static SettingsStorage ResolveDefaultStorage()
@@ -536,6 +542,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
                 continue;
             }
 
+            setting.ErrorMessage = string.Empty;
             var value = Normalize(setting.Value);
             if (IsSecretMask(value))
             {
@@ -556,7 +563,9 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[TokensLimits] ERROR: unable to protect setting '{setting.Key}': {ex.Message}");
+                Debug.WriteLine($"[TokensLimits] ERROR: unable to protect setting '{setting.Key}': {ex.GetType().Name}");
+                setting.Value = _secretStore.Get(setting.Key) is null ? string.Empty : SecretMask;
+                setting.ErrorMessage = _localization.GetString("settings.window.saveError");
                 return false;
             }
         }

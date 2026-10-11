@@ -31,17 +31,17 @@ public sealed class GroupedSettingsTests
         var editor = new NativeSettingsEditor(fixture.Settings);
         foreach (var descriptor in UsageProviderDescriptorRegistry.All)
         {
-            var providerFields = editor.Fields(editor.KeysForProvider(descriptor.Id));
+            var providerFields = editor.Fields(NativeSettingsEditor.KeysForProvider(descriptor.Id));
             Assert.Contains(providerFields, field => field.Key == $"tokensLimits.providers.{descriptor.Id}.enabled");
             Assert.All(providerFields, field => Assert.False(string.IsNullOrWhiteSpace(field.Title)));
         }
-        var secret = Assert.Single(editor.Fields(editor.KeysForProvider("deepseek")), field => field.IsSecret);
+        var secret = Assert.Single(editor.Fields(NativeSettingsEditor.KeysForProvider("deepseek")), field => field.IsSecret);
         Assert.Empty(secret.Value);
-        editor.Save(editor.KeysForProvider("deepseek"), new Dictionary<string, string>
+        editor.Save(NativeSettingsEditor.KeysForProvider("deepseek"), new Dictionary<string, string>
         {
             ["tokensLimits.providers.deepseek.apiKey"] = "test-only-secret",
         });
-        Assert.Equal("••••••••", Assert.Single(editor.Fields(editor.KeysForProvider("deepseek")), field => field.IsSecret).Value);
+        Assert.Equal("••••••••", Assert.Single(editor.Fields(NativeSettingsEditor.KeysForProvider("deepseek")), field => field.IsSecret).Value);
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public sealed class GroupedSettingsTests
     {
         using var fixture = new Fixture();
         var editor = new NativeSettingsEditor(fixture.Settings);
-        editor.Save(editor.KeysForProvider("deepseek"), new Dictionary<string, string>
+        editor.Save(NativeSettingsEditor.KeysForProvider("deepseek"), new Dictionary<string, string>
         {
             ["tokensLimits.providers.deepseek.apiKey"] = "test-only-secret",
             ["tokensLimits.providers.deepseek.enabled"] = "true",
@@ -129,7 +129,7 @@ public sealed class GroupedSettingsTests
         fixture.Settings.Settings.Update(enabled.ToJsonString());
         var editor = new NativeSettingsEditor(fixture.Settings);
         var visible = Sections.SelectMany(editor.KeysForSection)
-            .Concat(UsageProviderDescriptorRegistry.All.SelectMany(descriptor => editor.KeysForProvider(descriptor.Id)))
+            .Concat(UsageProviderDescriptorRegistry.All.SelectMany(descriptor => NativeSettingsEditor.KeysForProvider(descriptor.Id)))
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -142,15 +142,15 @@ public sealed class GroupedSettingsTests
     {
         using var fixture = new Fixture();
         var editor = new NativeSettingsEditor(fixture.Settings);
-        editor.Save(editor.KeysForProvider("deepseek"), new Dictionary<string, string>
+        editor.Save(NativeSettingsEditor.KeysForProvider("deepseek"), new Dictionary<string, string>
         {
             ["tokensLimits.providers.deepseek.apiKey"] = "test-deepseek-secret",
         });
-        editor.Save(editor.KeysForProvider("openai"), new Dictionary<string, string>
+        editor.Save(NativeSettingsEditor.KeysForProvider("openai"), new Dictionary<string, string>
         {
             ["tokensLimits.providers.openai.apiKey"] = "test-openai-secret",
         });
-        editor.Save(editor.KeysForProvider("deepseek"), new Dictionary<string, string>
+        editor.Save(NativeSettingsEditor.KeysForProvider("deepseek"), new Dictionary<string, string>
         {
             ["tokensLimits.providers.deepseek.apiKey"] = string.Empty,
         });
@@ -191,7 +191,7 @@ public sealed class GroupedSettingsTests
             Assert.Equal(before, File.ReadAllText(path));
             Assert.Equal(0, changes);
             Assert.Throws<ArgumentException>(() => editor.KeysForSection("unknown"));
-            Assert.Throws<ArgumentException>(() => editor.KeysForProvider("unknown"));
+            Assert.Throws<ArgumentException>(() => NativeSettingsEditor.KeysForProvider("unknown"));
             Assert.Throws<ArgumentException>(() => editor.Fields(["unknown"]));
             Assert.Throws<ArgumentException>(() => editor.Save(editor.KeysForSection("general"), new Dictionary<string, string>
             {

@@ -2,6 +2,11 @@
   "culture": "en",
   "nativeName": "English",
   "strings": {
+    "settings.window.instructions": "Save changes in each section. Closing the window discards unsaved edits.",
+    "settings.window.saved": "Changes saved.",
+    "settings.window.saveError": "Could not save settings. Check file permissions and available disk space.",
+    "settings.window.open": "Open settings",
+    "settings.window.description": "Open the native Windows settings window for Tokens Limits.",
     "settings.card.configure": "Configure",
     "settings.card.configureTitle": "Configure {0}",
     "settings.card.dockDescription": "Summary, metrics and provider visibility",

@@ -3,12 +3,12 @@ using Microsoft.UI.Xaml;
 
 namespace TokensLimitsExtension.Settings;
 
-internal sealed partial class NativeSettingsApplication : Application
+public sealed partial class NativeSettingsApplication : Application
 {
     private readonly TokensLimitsSettings _settings;
     private NativeSettingsWindow? _window;
 
-    public NativeSettingsApplication(TokensLimitsSettings settings)
+    internal NativeSettingsApplication(TokensLimitsSettings settings)
     {
         _settings = settings;
         InitializeComponent();

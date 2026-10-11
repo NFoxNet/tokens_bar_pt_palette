@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
@@ -6,11 +7,12 @@ using Microsoft.UI.Xaml;
 
 namespace TokensLimitsExtension.Settings;
 
-internal sealed class NativeSettingsWindowHost : IDisposable
+internal sealed partial class NativeSettingsWindowHost : IDisposable
 {
     private readonly TokensLimitsSettings _settings;
     private readonly object _gate = new();
     private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Thread? _uiThread;
     private DispatcherQueue? _dispatcher;
     private NativeSettingsApplication? _application;
@@ -84,12 +86,17 @@ internal sealed class NativeSettingsWindowHost : IDisposable
 
     private void RunApplication()
     {
+        var initialized = false;
         try
         {
+            Marshal.ThrowExceptionForHR(RoInitialize(0));
+            initialized = true;
+            WinRT.ComWrappersSupport.InitializeComWrappers();
             Application.Start(_ =>
             {
                 _dispatcher = DispatcherQueue.GetForCurrentThread()
                     ?? throw new InvalidOperationException("The WinUI dispatcher queue was not created.");
+                SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(_dispatcher));
                 _application = new NativeSettingsApplication(_settings);
                 _application.OpenSettingsWindow();
                 _started.TrySetResult();
@@ -99,6 +106,11 @@ internal sealed class NativeSettingsWindowHost : IDisposable
         {
             _threadFailure = exception;
             _started.TrySetException(exception);
+        }
+        finally
+        {
+            if (initialized) RoUninitialize();
+            _stopped.TrySetResult();
         }
     }
 
@@ -129,8 +141,19 @@ internal sealed class NativeSettingsWindowHost : IDisposable
             throw new InvalidOperationException("The WinUI dispatcher is shutting down.");
         }
 
+        if (Task.WhenAny(completed.Task, _stopped.Task).GetAwaiter().GetResult() != completed.Task)
+        {
+            ThrowIfThreadStopped();
+            throw new InvalidOperationException("The settings UI stopped before completing the request.");
+        }
         completed.Task.GetAwaiter().GetResult();
     }
+
+    [LibraryImport("combase.dll")]
+    private static partial int RoInitialize(uint initType);
+
+    [LibraryImport("combase.dll")]
+    private static partial void RoUninitialize();
 
     private void ThrowIfThreadStopped()
     {

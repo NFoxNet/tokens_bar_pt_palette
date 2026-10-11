@@ -39,7 +39,7 @@ internal sealed class NativeSettingsEditor
         _ => throw new ArgumentException("Unknown settings section.", nameof(section)),
     };
 
-    public IReadOnlyList<string> KeysForProvider(string providerId)
+    public static IReadOnlyList<string> KeysForProvider(string providerId)
     {
         var descriptor = UsageProviderDescriptorRegistry.All.FirstOrDefault(
             item => string.Equals(item.Id, providerId, StringComparison.OrdinalIgnoreCase));

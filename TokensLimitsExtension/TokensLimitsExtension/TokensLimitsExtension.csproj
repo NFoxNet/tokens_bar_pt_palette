@@ -18,7 +18,15 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <UseWinUI>true</UseWinUI>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- This packaged extension uses no Main/Singleton Windows App SDK services. -->
+    <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ApplicationDefinition Include="Settings\NativeSettingsApplication.xaml" />
+    <Page Remove="Settings\NativeSettingsApplication.xaml" />
+  </ItemGroup>
 
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />
@@ -69,6 +77,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="TokensLimitsExtension.IntegrationTests" />
+    <InternalsVisibleTo Include="TokensLimitsExtension.NativeSmokeTests" />
   </ItemGroup>
 
   <!--

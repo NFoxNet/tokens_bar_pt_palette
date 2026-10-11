@@ -2,6 +2,11 @@
   "culture": "ru",
   "nativeName": "Русский",
   "strings": {
+    "settings.window.instructions": "Сохраняйте изменения в каждом разделе. При закрытии окна несохранённые изменения пропадут.",
+    "settings.window.saved": "Изменения сохранены.",
+    "settings.window.saveError": "Не удалось сохранить настройки. Проверьте права доступа к файлам и свободное место на диске.",
+    "settings.window.open": "Открыть настройки",
+    "settings.window.description": "Откройте отдельное окно настроек Tokens Limits.",
     "settings.card.configure": "Настроить",
     "settings.card.configureTitle": "Настроить: {0}",
     "settings.card.dockDescription": "Сводка, показатели и видимость провайдеров",

@@ -196,3 +196,15 @@ counts помогают сравнить одинаковые fixtures, но н�
 - если меняется provider contract — обновите unit и integration tests;
 - если меняются пользовательские настройки или команды — обновите `doc/`;
 - убедитесь, что в diff нет `bin/`, `obj/`, пакетов и секретов.
+
+### Изолированный smoke нативного окна
+
+В Windows 11 с установленным Windows App Runtime 1.8:
+
+```powershell
+dotnet run --project .\TokensLimitsExtension.NativeSmokeTests\TokensLimitsExtension.NativeSmokeTests.csproj --configuration Debug -p:Platform=x64
+```
+
+Этот opt-in проект исключён из обычной solution: он открывает настоящее окно, раскрывает пять групп и карточку провайдера, проверяет локальный логотип/поля, границы полей при размере 640×480, повторную активацию, закрытие/повторное открытие и завершение STA-потока. Используется временный каталог настроек; пользовательские файлы и установленный MSIX не меняются. Тест включает первый layout-проход: одного создания контролов недостаточно для проверки их ресурсов и стилей. Он не подтверждает запуск через реальный PowerToys COM host, качество анимации, клавиатуру, high contrast или ARM64 runtime.
+
+Расширение использует framework-dependent Windows App Runtime 1.8; он должен быть установлен для запуска MSIX. См. [официальное развёртывание Windows App SDK](https://learn.microsoft.com/windows/apps/windows-app-sdk/deploy-packaged-apps). Main/Singleton службы не используются: их Deployment Manager auto-initializer отключён [по рекомендации Microsoft](https://learn.microsoft.com/windows/apps/package-and-deploy/project-properties). Framework dependency остаётся в MSIX manifest.
