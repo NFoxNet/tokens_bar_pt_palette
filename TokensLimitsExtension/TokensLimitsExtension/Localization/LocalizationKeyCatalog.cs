@@ -14,6 +14,17 @@ public static class LocalizationKeyCatalog
 {
     private static readonly string[] CommonKeys =
     [
+        "settings.card.configure",
+        "settings.card.configureTitle",
+        "settings.card.dockDescription",
+        "settings.card.enabledCount",
+        "settings.card.generalDescription",
+        "settings.card.historyDescription",
+        "settings.card.notificationsDescription",
+        "settings.card.off",
+        "settings.card.on",
+        "settings.card.providerDescription",
+        "settings.card.providersDescription",
         "settings.save",
         "settings.section.dock",
         "settings.section.general",

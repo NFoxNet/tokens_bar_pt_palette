@@ -18,12 +18,12 @@ public sealed class GroupedSettingsTests
         Assert.IsType<JsonLocalizationService>(fixture.Settings.Localization).ApplyPreference(language);
         var card = fixture.Card();
         Assert.Empty(InputIds(card["body"]));
-        Assert.Equal(titles, ShowCards(card).Select(action => action["title"]!.GetValue<string>()));
+        Assert.Equal(titles, card["body"]!.AsArray().Select(section => section!["items"]![0]!["columns"]![1]!["items"]![0]!["text"]!.GetValue<string>()));
         Assert.All(ShowCards(card), action => Assert.Equal("Action.ShowCard", action!["type"]!.GetValue<string>()));
         var providers = Section(card, 1);
         Assert.Empty(InputIds(providers["body"]));
         Assert.Equal(UsageProviderDescriptorRegistry.All.Count, ShowCards(providers).Length);
-        var codex = ShowCards(providers).Single(action => action["title"]!.GetValue<string>() == "Codex")!["card"]!;
+        var codex = ShowCards(providers).Single(action => action["tooltip"]!.GetValue<string>() == fixture.Settings.Localization.Format("settings.card.configureTitle", "Codex"))!["card"]!;
         Assert.Contains("tokensLimits.providers.codex.enabled", InputIds(codex["body"]));
         Assert.All(InputIds(codex["body"]), id => Assert.StartsWith("tokensLimits.providers.codex.", id));
     }
@@ -130,6 +130,31 @@ public sealed class GroupedSettingsTests
         }
         finally { WinRT.MarshalInterface<IFormContent>.DisposeAbi(formPointer); }
     }
+    [Theory]
+    [InlineData("en", "Off", "On")]
+    [InlineData("ru", "Выкл.", "Вкл.")]
+    public void SectionsUseThemeCardsWithWrappedHeadersAndAccessibleExpansion(string language, string off, string on)
+    {
+        using var fixture = new Fixture();
+        fixture.Settings.Settings.Update($"{{\"tokensLimits.language\":\"{language}\"}}");
+        Assert.IsType<JsonLocalizationService>(fixture.Settings.Localization).ApplyPreference(language);
+        var card = fixture.Card();
+        foreach (var section in card["body"]!.AsArray())
+        {
+            Assert.Equal("Container", section!["type"]!.GetValue<string>());
+            Assert.Equal("emphasis", section["style"]!.GetValue<string>());
+            var header = section["items"]![0]!;
+            Assert.Equal("stretch", header["columns"]![1]!["width"]!.GetValue<string>());
+            Assert.All(header["columns"]![1]!["items"]!.AsArray(), text => Assert.True(text!["wrap"]!.GetValue<bool>()));
+            Assert.Equal("right", section["items"]![1]!["horizontalAlignment"]!.GetValue<string>());
+            Assert.False(string.IsNullOrWhiteSpace(section["items"]![1]!["actions"]![0]!["tooltip"]!.GetValue<string>()));
+        }
+        Assert.Equal(off, card["body"]![3]!["items"]![0]!["columns"]![2]!["items"]![0]!["text"]!.GetValue<string>());
+        fixture.Form().SubmitForm("{\"tokensLimits.notifications.enabled\":\"true\"}", "{}");
+        var updated = fixture.Card();
+        Assert.Equal(on, updated["body"]![3]!["items"]![0]!["columns"]![2]!["items"]![0]!["text"]!.GetValue<string>());
+        Assert.Contains("tokensLimits.notifications.threshold", InputIds(Section(updated, 3)["body"]));
+    }
     private static string[] AllInputIds(JsonNode? node)
     {
         if (node is JsonObject obj)
@@ -148,7 +173,17 @@ public sealed class GroupedSettingsTests
                 Assert.Equal(InputIds(card["body"]).Order(), action!["data"]!.AsObject().Select(pair => pair.Key).Order());
         foreach (var section in ShowCards(card)) AssertSubmitScopes(section["card"]!);
     }
-    private static JsonNode[] ShowCards(JsonNode card) => card["body"]!.AsArray().Where(node => node?["type"]?.GetValue<string>() == "ActionSet").Select(node => node!["actions"]![0]!).ToArray();
+    private static JsonNode[] ShowCards(JsonNode card) => FindShowCards(card["body"]).ToArray();
+
+    private static IEnumerable<JsonNode> FindShowCards(JsonNode? node)
+    {
+        if (node is JsonObject obj)
+        {
+            if (obj["type"]?.GetValue<string>() == "Action.ShowCard") return [obj];
+            return obj.Where(pair => pair.Key != "card").SelectMany(pair => FindShowCards(pair.Value));
+        }
+        return node is JsonArray array ? array.SelectMany(FindShowCards) : [];
+    }
 
     private static JsonNode Section(JsonNode card, int index) => ShowCards(card)[index]["card"]!;
 

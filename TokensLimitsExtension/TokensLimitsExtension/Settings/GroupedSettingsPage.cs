@@ -76,23 +76,70 @@ internal sealed partial class GroupedSettingsPage : ContentPage, IDisposable
             };
         }
 
-        static JsonObject Section(string title, JsonObject card) => new()
+        JsonObject Section(string title, string description, string icon, JsonObject card, string? status = null, bool enabled = false)
         {
-            ["type"] = "ActionSet",
-            ["actions"] = new JsonArray(new JsonObject
+            var columns = new JsonArray(
+                new JsonObject
+                {
+                    ["type"] = "Column", ["width"] = "auto", ["verticalContentAlignment"] = "center",
+                    ["items"] = new JsonArray(new JsonObject
+                    {
+                        ["type"] = "TextBlock", ["text"] = icon, ["size"] = "large", ["spacing"] = "none",
+                    }),
+                },
+                new JsonObject
+                {
+                    ["type"] = "Column", ["width"] = "stretch", ["verticalContentAlignment"] = "center",
+                    ["items"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["type"] = "TextBlock", ["text"] = title, ["size"] = "medium",
+                            ["weight"] = "bolder", ["wrap"] = true,
+                        },
+                        new JsonObject
+                        {
+                            ["type"] = "TextBlock", ["text"] = description,
+                            ["isSubtle"] = true, ["wrap"] = true, ["spacing"] = "small",
+                        }),
+                });
+            if (status is not null)
             {
-                ["type"] = "Action.ShowCard",
-                ["title"] = title,
-                ["card"] = card,
-            }),
-        };
+                columns.Add((JsonNode)new JsonObject
+                {
+                    ["type"] = "Column", ["width"] = "auto", ["verticalContentAlignment"] = "center",
+                    ["items"] = new JsonArray(new JsonObject
+                    {
+                        ["type"] = "TextBlock", ["text"] = status, ["wrap"] = true,
+                        ["color"] = enabled ? "good" : "default", ["isSubtle"] = !enabled,
+                    }),
+                });
+            }
+            return new JsonObject
+            {
+                ["type"] = "Container", ["style"] = "emphasis", ["spacing"] = "medium",
+                ["items"] = new JsonArray(
+                    new JsonObject { ["type"] = "ColumnSet", ["columns"] = columns },
+                    new JsonObject
+                    {
+                        ["type"] = "ActionSet", ["horizontalAlignment"] = "right", ["spacing"] = "small",
+                        ["actions"] = new JsonArray(new JsonObject
+                        {
+                            ["type"] = "Action.ShowCard",
+                            ["title"] = _settings.Localization.GetString("settings.card.configure"),
+                            ["tooltip"] = _settings.Localization.Format("settings.card.configureTitle", title),
+                            ["card"] = card,
+                        }),
+                    }),
+            };
+        }
 
+        string State(bool enabled) => _settings.Localization.GetString(enabled ? "settings.card.on" : "settings.card.off");
         var providers = new JsonObject { ["type"] = "AdaptiveCard", ["version"] = "1.5", ["body"] = new JsonArray() };
         foreach (var descriptor in UsageProviderDescriptorRegistry.All)
         {
             var prefix = $"tokensLimits.providers.{descriptor.Id}.";
             var keys = new[] { prefix + "enabled" }.Concat(descriptor.Settings.Select(field => prefix + field.Key));
-            providers["body"]!.AsArray().Add((JsonNode)Section(descriptor.DisplayName, Card(keys)));
+            providers["body"]!.AsArray().Add((JsonNode)Section(descriptor.DisplayName, _settings.Localization.GetString("settings.card.providerDescription"), "◇", Card(keys), State(_settings.IsEnabled(descriptor.Id)), _settings.IsEnabled(descriptor.Id)));
         }
 
         var dockKeys = DockKeys
@@ -103,11 +150,11 @@ internal sealed partial class GroupedSettingsPage : ContentPage, IDisposable
         if (_settings.HistoryEnabled) historyKeys.Add("tokensLimits.history.retentionDays");
 
         original["body"] = new JsonArray(
-            Section(_settings.Localization.GetString("settings.section.general"), Card(GeneralKeys)),
-            Section(_settings.Localization.GetString("settings.section.providers"), providers),
-            Section(_settings.Localization.GetString("settings.section.dock"), Card(dockKeys)),
-            Section(_settings.Localization.GetString("settings.section.notifications"), Card(notificationKeys)),
-            Section(_settings.Localization.GetString("settings.section.history"), Card(historyKeys)));
+            Section(_settings.Localization.GetString("settings.section.general"), _settings.Localization.GetString("settings.card.generalDescription"), "⚙", Card(GeneralKeys)),
+            Section(_settings.Localization.GetString("settings.section.providers"), _settings.Localization.GetString("settings.card.providersDescription"), "⊞", providers, _settings.Localization.Format("settings.card.enabledCount", _settings.EnabledDescriptors.Count)),
+            Section(_settings.Localization.GetString("settings.section.dock"), _settings.Localization.GetString("settings.card.dockDescription"), "▤", Card(dockKeys)),
+            Section(_settings.Localization.GetString("settings.section.notifications"), _settings.Localization.GetString("settings.card.notificationsDescription"), "♢", Card(notificationKeys), State(_settings.NotificationsEnabled), _settings.NotificationsEnabled),
+            Section(_settings.Localization.GetString("settings.section.history"), _settings.Localization.GetString("settings.card.historyDescription"), "◷", Card(historyKeys), State(_settings.HistoryEnabled), _settings.HistoryEnabled));
         original["actions"] = new JsonArray();
         return original.ToJsonString();
     }
