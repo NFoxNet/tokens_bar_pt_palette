@@ -14,103 +14,74 @@ public sealed class GroupedSettingsTests
     [Theory]
     [InlineData("en", "General", "Providers", "Dock", "Notifications", "History")]
     [InlineData("ru", "Общие", "Провайдеры", "Dock", "Уведомления", "История")]
-    public void EntryShowsFiveClickableSectionsWithoutProviderFields(string language, params string[] titles)
+    public void NativeSettingsExposeLocalizedSectionAndFieldMetadata(string language, params string[] titles)
     {
         using var fixture = new Fixture();
         Assert.IsType<JsonLocalizationService>(fixture.Settings.Localization).ApplyPreference(language);
-        var card = fixture.Card();
-        Assert.Empty(InputIds(card));
-        Assert.Equal(titles, RootSections(card).Select(section => HeaderTitle(section)));
-        Assert.Equal(Sections, RootSections(card).Select(section =>
-        {
-            var action = section["items"]![0]!["selectAction"]!;
-            Assert.Equal("Action.Submit", action["type"]!.GetValue<string>());
-            Assert.Equal("none", action["associatedInputs"]!.GetValue<string>());
-            Assert.False(string.IsNullOrWhiteSpace(action["title"]!.GetValue<string>()));
-            return action["data"]!["settingsSection"]!.GetValue<string>();
-        }));
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        var actualTitles = Sections.Select(section => fixture.Settings.Localization.GetString($"settings.section.{section}")).ToArray();
+        Assert.Equal(titles, actualTitles);
+        Assert.All(editor.KeysForSection("general"), key => Assert.False(string.IsNullOrWhiteSpace(Assert.Single(editor.Fields([key])).Title)));
     }
 
     [Fact]
-    public void SectionAndProviderNavigationExposeOnlyTheSelectedFieldsAndUseProviderLogos()
+    public void ProviderSectionsExposeLocalizedFieldsAndMaskSecrets()
     {
         using var fixture = new Fixture();
-        var form = fixture.Form();
-        NavigateSection(form, "providers");
-        var providers = JsonNode.Parse(form.TemplateJson)!;
-        Assert.Empty(InputIds(providers));
-        var providerHeaders = ProviderHeaders(ExpandedBody(Section(providers, 1)));
-        Assert.Equal(UsageProviderDescriptorRegistry.All.Count, providerHeaders.Length);
-        foreach (var header in providerHeaders)
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        foreach (var descriptor in UsageProviderDescriptorRegistry.All)
         {
-            var action = header["selectAction"]!;
-            var providerId = action["data"]!["settingsProvider"]!.GetValue<string>();
-            var logo = header["items"]![0]!["columns"]![0]!["items"]![0]!;
-            Assert.Equal("Image", logo["type"]!.GetValue<string>());
-            var imageUrl = logo["url"]!.GetValue<string>();
-            Assert.StartsWith("data:image/png;base64,", imageUrl);
-            var actualBytes = Convert.FromBase64String(imageUrl[(imageUrl.IndexOf(',', StringComparison.Ordinal) + 1)..]);
-            Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, actualBytes[..8]);
-            var assetId = providerId switch
-            {
-                "codex" or "abacus" or "aiand" or "deepseek" => providerId,
-                "alibabatokenplan" => "alibaba",
-                _ => null,
-            };
-            if (assetId is not null)
-            {
-                var assetPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Providers", $"ProviderIcon-{assetId}.64.png");
-                Assert.Equal(File.ReadAllBytes(assetPath), actualBytes);
-            }
+            var providerFields = editor.Fields(editor.KeysForProvider(descriptor.Id));
+            Assert.Contains(providerFields, field => field.Key == $"tokensLimits.providers.{descriptor.Id}.enabled");
+            Assert.All(providerFields, field => Assert.False(string.IsNullOrWhiteSpace(field.Title)));
         }
-
-        NavigateProvider(form, "codex");
-        var codex = JsonNode.Parse(form.TemplateJson)!;
-        var codexSection = Section(codex, 1);
-        Assert.Contains("tokensLimits.providers.codex.enabled", InputIds(ExpandedBody(codexSection)));
-        Assert.All(InputIds(codex), id => Assert.StartsWith("tokensLimits.providers.codex.", id));
-        Assert.DoesNotContain("tokensLimits.providers.deepseek.enabled", InputIds(codex));
+        var secret = Assert.Single(editor.Fields(editor.KeysForProvider("deepseek")), field => field.IsSecret);
+        Assert.Empty(secret.Value);
+        editor.Save(editor.KeysForProvider("deepseek"), new Dictionary<string, string>
+        {
+            ["tokensLimits.providers.deepseek.apiKey"] = "test-only-secret",
+        });
+        Assert.Equal("••••••••", Assert.Single(editor.Fields(editor.KeysForProvider("deepseek")), field => field.IsSecret).Value);
     }
 
     [Fact]
     public void DependentFieldsAppearOnlyForEnabledFeaturesAndProviders()
     {
         using var fixture = new Fixture();
-        var form = fixture.Form();
-        NavigateSection(form, "notifications");
-        Assert.DoesNotContain("tokensLimits.notifications.threshold", InputIds(JsonNode.Parse(form.TemplateJson)));
-        NavigateSection(form, "history");
-        Assert.DoesNotContain("tokensLimits.history.retentionDays", InputIds(JsonNode.Parse(form.TemplateJson)));
-        NavigateSection(form, "dock");
-        Assert.Contains("tokensLimits.dock.providers.codex.visible", InputIds(JsonNode.Parse(form.TemplateJson)));
-        Assert.DoesNotContain("tokensLimits.dock.providers.deepseek.visible", InputIds(JsonNode.Parse(form.TemplateJson)));
-
-        fixture.Settings.Settings.Update("{\"tokensLimits.notifications.enabled\":\"true\",\"tokensLimits.history.enabled\":\"true\",\"tokensLimits.providers.deepseek.enabled\":\"true\"}");
-        NavigateSection(form, "notifications");
-        Assert.Contains("tokensLimits.notifications.threshold", InputIds(JsonNode.Parse(form.TemplateJson)));
-        NavigateSection(form, "history");
-        Assert.Contains("tokensLimits.history.retentionDays", InputIds(JsonNode.Parse(form.TemplateJson)));
-        NavigateSection(form, "dock");
-        Assert.Contains("tokensLimits.dock.providers.deepseek.visible", InputIds(JsonNode.Parse(form.TemplateJson)));
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        Assert.Contains("tokensLimits.notifications.threshold", editor.KeysForSection("notifications"));
+        Assert.Contains("tokensLimits.history.retentionDays", editor.KeysForSection("history"));
+        Assert.DoesNotContain("tokensLimits.dock.providers.deepseek.visible", editor.KeysForSection("dock"));
+        fixture.Settings.Settings.Update("{\"tokensLimits.providers.deepseek.enabled\":\"true\"}");
+        Assert.Contains("tokensLimits.dock.providers.deepseek.visible", editor.KeysForSection("dock"));
     }
 
     [Fact]
     public void SavingGeneralPreservesHiddenSettingsAndProtectedSecretsAcrossReload()
     {
         using var fixture = new Fixture();
-        var form = fixture.Form();
-        NavigateSection(form, "providers");
-        NavigateProvider(form, "deepseek");
-        form.SubmitForm("{\"tokensLimits.providers.deepseek.apiKey\":\"test-only-secret\",\"tokensLimits.providers.deepseek.enabled\":\"true\"}", "{}");
-        NavigateSection(form, "history");
-        form.SubmitForm("{\"tokensLimits.history.retentionDays\":\"30\",\"tokensLimits.history.enabled\":\"true\"}", "{}");
-        NavigateSection(form, "dock");
-        form.SubmitForm("{\"tokensLimits.dock.providers.deepseek.visible\":\"false\"}", "{}");
-        NavigateSection(form, "general");
-        Assert.DoesNotContain("test-only-secret", form.TemplateJson);
-        AssertSaveScopes(JsonNode.Parse(form.TemplateJson)!);
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        editor.Save(editor.KeysForProvider("deepseek"), new Dictionary<string, string>
+        {
+            ["tokensLimits.providers.deepseek.apiKey"] = "test-only-secret",
+            ["tokensLimits.providers.deepseek.enabled"] = "true",
+        });
+        editor.Save(editor.KeysForSection("history"), new Dictionary<string, string>
+        {
+            ["tokensLimits.history.retentionDays"] = "30",
+            ["tokensLimits.history.enabled"] = "true",
+        });
+        editor.Save(editor.KeysForSection("dock"), new Dictionary<string, string>
+        {
+            ["tokensLimits.dock.providers.deepseek.visible"] = "false",
+        });
+        Assert.DoesNotContain("test-only-secret", File.ReadAllText(fixture.Settings.FilePath));
 
-        form.SubmitForm("{\"tokensLimits.refreshInterval\":\"120\",\"tokensLimits.language\":\"ru\"}", "{}");
+        editor.Save(editor.KeysForSection("general"), new Dictionary<string, string>
+        {
+            ["tokensLimits.refreshInterval"] = "120",
+            ["tokensLimits.language"] = "ru",
+        });
         using var restored = new TokensLimitsSettings(fixture.Directory);
         Assert.Equal(TimeSpan.FromSeconds(120), restored.RefreshInterval);
         Assert.True(restored.IsEnabled("deepseek"));
@@ -125,16 +96,23 @@ public sealed class GroupedSettingsTests
     public void NotificationsSaveDoesNotResetHiddenThresholdAndReportsInvalidInput()
     {
         using var fixture = new Fixture();
-        var form = fixture.Form();
-        NavigateSection(form, "notifications");
-        form.SubmitForm("{\"tokensLimits.notifications.threshold\":\"35\"}", "{}");
-        form.SubmitForm("{\"tokensLimits.notifications.enabled\":\"true\"}", "{}");
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        editor.Save(editor.KeysForSection("notifications"), new Dictionary<string, string>
+        {
+            ["tokensLimits.notifications.threshold"] = "35",
+        });
+        editor.Save(editor.KeysForSection("notifications"), new Dictionary<string, string>
+        {
+            ["tokensLimits.notifications.enabled"] = "true",
+        });
         Assert.Equal(35, fixture.Settings.NotificationThresholdPercent);
-        form.SubmitForm("{\"tokensLimits.notifications.threshold\":\"101\"}", "{}");
+        var errors = editor.Save(editor.KeysForSection("notifications"), new Dictionary<string, string>
+        {
+            ["tokensLimits.notifications.threshold"] = "101",
+        });
         Assert.Equal(35, fixture.Settings.NotificationThresholdPercent);
-        var section = Section(JsonNode.Parse(form.TemplateJson)!, 3);
-        Assert.Contains("tokensLimits.notifications.threshold", InputIds(ExpandedBody(section)));
-        Assert.Contains("Enter a whole percent", section.ToJsonString());
+        Assert.Contains("tokensLimits.notifications.threshold", errors.Keys);
+        Assert.Contains("Enter a whole percent", errors["tokensLimits.notifications.threshold"], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -149,44 +127,37 @@ public sealed class GroupedSettingsTests
         foreach (var descriptor in UsageProviderDescriptorRegistry.All)
             enabled[$"tokensLimits.providers.{descriptor.Id}.enabled"] = "true";
         fixture.Settings.Settings.Update(enabled.ToJsonString());
-        var form = fixture.Form();
-        var visible = new List<string>();
-        foreach (var sectionId in Sections)
-        {
-            NavigateSection(form, sectionId);
-            var card = JsonNode.Parse(form.TemplateJson)!;
-            visible.AddRange(InputIds(card));
-            if (sectionId == "providers")
-                foreach (var descriptor in UsageProviderDescriptorRegistry.All)
-                {
-                    NavigateProvider(form, descriptor.Id);
-                    var providerCard = JsonNode.Parse(form.TemplateJson)!;
-                    visible.AddRange(InputIds(providerCard));
-                    AssertSaveScopes(providerCard);
-                }
-            else
-                AssertSaveScopes(card);
-        }
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        var visible = Sections.SelectMany(editor.KeysForSection)
+            .Concat(UsageProviderDescriptorRegistry.All.SelectMany(descriptor => editor.KeysForProvider(descriptor.Id)))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
         var native = JsonNode.Parse(Assert.IsType<SettingsForm>(Assert.Single(fixture.Settings.Settings.ToContent())).TemplateJson)!;
-        Assert.Equal(AllInputIds(native).Order(), visible.Distinct().Order());
+        Assert.Equal(AllInputIds(native).Order(StringComparer.Ordinal), visible);
     }
 
     [Fact]
     public void ClearingOneProviderSecretPreservesOtherProviderSecrets()
     {
         using var fixture = new Fixture();
-        var form = fixture.Form();
-        NavigateSection(form, "providers");
-        NavigateProvider(form, "deepseek");
-        form.SubmitForm("{\"tokensLimits.providers.deepseek.apiKey\":\"test-deepseek-secret\"}", "{}");
-        NavigateProvider(form, "openai");
-        form.SubmitForm("{\"tokensLimits.providers.openai.apiKey\":\"test-openai-secret\"}", "{}");
-        NavigateProvider(form, "deepseek");
-        form.SubmitForm("{\"tokensLimits.providers.deepseek.apiKey\":\"\"}", "{}");
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        editor.Save(editor.KeysForProvider("deepseek"), new Dictionary<string, string>
+        {
+            ["tokensLimits.providers.deepseek.apiKey"] = "test-deepseek-secret",
+        });
+        editor.Save(editor.KeysForProvider("openai"), new Dictionary<string, string>
+        {
+            ["tokensLimits.providers.openai.apiKey"] = "test-openai-secret",
+        });
+        editor.Save(editor.KeysForProvider("deepseek"), new Dictionary<string, string>
+        {
+            ["tokensLimits.providers.deepseek.apiKey"] = string.Empty,
+        });
         using var restored = new TokensLimitsSettings(fixture.Directory);
         Assert.Null(restored.GetValue("deepseek", "apiKey"));
         Assert.Equal("test-openai-secret", restored.GetValue("openai", "apiKey"));
-        Assert.DoesNotContain("test-openai-secret", form.TemplateJson);
+        Assert.DoesNotContain("test-openai-secret", File.ReadAllText(restored.FilePath));
     }
 
     [Fact]
@@ -199,24 +170,16 @@ public sealed class GroupedSettingsTests
             Assert.NotEqual(IntPtr.Zero, settingsPointer);
             var commandSettings = WinRT.MarshalInterface<ICommandSettings>.FromAbi(settingsPointer);
             Assert.NotNull(commandSettings.SettingsPage);
+            Assert.NotEmpty(commandSettings.SettingsPage.GetContent());
         }
         finally { WinRT.MarshalInterface<ICommandSettings>.DisposeAbi(settingsPointer); }
-
-        var formPointer = WinRT.MarshalInterface<IFormContent>.FromManaged(fixture.Form());
-        try
-        {
-            Assert.NotEqual(IntPtr.Zero, formPointer);
-            var form = WinRT.MarshalInterface<IFormContent>.FromAbi(formPointer);
-            Assert.Equal(5, RootSections(JsonNode.Parse(form.TemplateJson)!).Length);
-        }
-        finally { WinRT.MarshalInterface<IFormContent>.DisposeAbi(formPointer); }
     }
 
     [Fact]
-    public void NavigationDoesNotSaveSettingsCanCollapseAndRejectsUnknownRoutes()
+    public void ReadingMetadataDoesNotSaveSettingsAndUnknownScopesAreRejected()
     {
         using var fixture = new Fixture();
-        var form = fixture.Form();
+        var editor = new NativeSettingsEditor(fixture.Settings);
         var path = fixture.Settings.FilePath;
         var before = File.ReadAllText(path);
         var changes = 0;
@@ -224,14 +187,16 @@ public sealed class GroupedSettingsTests
         fixture.Settings.Changed += handler;
         try
         {
-            NavigateSection(form, "general");
+            Assert.NotEmpty(editor.Fields(editor.KeysForSection("general")));
             Assert.Equal(before, File.ReadAllText(path));
             Assert.Equal(0, changes);
-            NavigateSection(form, "general");
-            Assert.Empty(InputIds(JsonNode.Parse(form.TemplateJson)));
-            Assert.Throws<ArgumentException>(() => form.SubmitForm("{}", "{\"settingsSection\":\"unknown\"}"));
-            NavigateSection(form, "providers");
-            Assert.Throws<ArgumentException>(() => form.SubmitForm("{}", "{\"settingsProvider\":\"unknown\"}"));
+            Assert.Throws<ArgumentException>(() => editor.KeysForSection("unknown"));
+            Assert.Throws<ArgumentException>(() => editor.KeysForProvider("unknown"));
+            Assert.Throws<ArgumentException>(() => editor.Fields(["unknown"]));
+            Assert.Throws<ArgumentException>(() => editor.Save(editor.KeysForSection("general"), new Dictionary<string, string>
+            {
+                ["tokensLimits.providers.deepseek.apiKey"] = "out-of-scope",
+            }));
             Assert.Equal(before, File.ReadAllText(path));
             Assert.Equal(0, changes);
         }
@@ -243,44 +208,25 @@ public sealed class GroupedSettingsTests
     [Theory]
     [InlineData("en", "Off", "On")]
     [InlineData("ru", "Выкл.", "Вкл.")]
-    public void SectionHeadersUseThemeCardsAndShowFeatureState(string language, string off, string on)
+    public void NativeSettingsKeepLocalizedFeatureStateMetadata(string language, string off, string on)
     {
         using var fixture = new Fixture();
         fixture.Settings.Settings.Update($"{{\"tokensLimits.language\":\"{language}\"}}");
         Assert.IsType<JsonLocalizationService>(fixture.Settings.Localization).ApplyPreference(language);
-        var form = fixture.Form();
-        var card = JsonNode.Parse(form.TemplateJson)!;
-        foreach (var section in RootSections(card))
+        var editor = new NativeSettingsEditor(fixture.Settings);
+        Assert.Equal(off, fixture.Settings.Localization.GetString("settings.card.off"));
+        Assert.Equal(on, fixture.Settings.Localization.GetString("settings.card.on"));
+        var notificationKeys = editor.KeysForSection("notifications");
+        Assert.Contains(notificationKeys, key => Assert.Single(editor.Fields([key])).Value == "false");
+        Assert.Contains("tokensLimits.notifications.threshold", notificationKeys);
+        editor.Save(notificationKeys, new Dictionary<string, string>
         {
-            Assert.Equal("Container", section["type"]!.GetValue<string>());
-            Assert.Equal("emphasis", section["style"]!.GetValue<string>());
-            var header = section["items"]![0]!;
-            Assert.Equal("Container", header["type"]!.GetValue<string>());
-            Assert.Equal("Action.Submit", header["selectAction"]!["type"]!.GetValue<string>());
-            Assert.Equal("stretch", header["items"]![0]!["columns"]![1]!["width"]!.GetValue<string>());
-            Assert.All(header["items"]![0]!["columns"]![1]!["items"]!.AsArray(), text => Assert.True(text!["wrap"]!.GetValue<bool>()));
-            Assert.Contains(header["items"]![0]!["columns"]!.AsArray(), column => column!["items"]!.AsArray().Any(item => item!["text"]?.GetValue<string>() is "⌄" or "⌃"));
-        }
-        Assert.Equal(off, StateText(Section(card, 3)));
-        NavigateSection(form, "notifications");
-        form.SubmitForm("{\"tokensLimits.notifications.enabled\":\"true\"}", "{}");
-        var updated = JsonNode.Parse(form.TemplateJson)!;
-        Assert.Equal(on, StateText(Section(updated, 3)));
-        Assert.Contains("tokensLimits.notifications.threshold", InputIds(ExpandedBody(Section(updated, 3))));
-        NavigateSection(form, "notifications");
-        Assert.Empty(InputIds(JsonNode.Parse(form.TemplateJson)));
+            ["tokensLimits.notifications.enabled"] = "true",
+        });
+        Assert.Contains(notificationKeys, key => Assert.Single(editor.Fields([key])).Value == "true");
     }
 
     private static string StateText(JsonNode section) => section["items"]![0]!["items"]![0]!["columns"]![2]!["items"]![0]!["text"]!.GetValue<string>();
-    private static JsonNode[] RootSections(JsonNode card) => card["body"]!.AsArray().Select(section => section!).ToArray();
-    private static JsonNode Section(JsonNode card, int index) => RootSections(card)[index];
-    private static string HeaderTitle(JsonNode section) => section["items"]![0]!["items"]![0]!["columns"]![1]!["items"]![0]!["text"]!.GetValue<string>();
-    private static JsonNode ExpandedBody(JsonNode section) => section["items"]![1]!;
-    private static JsonNode[] ProviderHeaders(JsonNode body) => body["items"]!.AsArray().Select(item => item!["items"]![0]!).ToArray();
-
-    private static void NavigateSection(FormContent form, string id) => form.SubmitForm("{}", new JsonObject { ["settingsSection"] = id }.ToJsonString());
-    private static void NavigateProvider(FormContent form, string id) => form.SubmitForm("{}", new JsonObject { ["settingsProvider"] = id }.ToJsonString());
-
     private static string[] AllInputIds(JsonNode? node)
     {
         if (node is JsonObject obj)
@@ -290,35 +236,6 @@ public sealed class GroupedSettingsTests
             return obj.SelectMany(pair => AllInputIds(pair.Value)).ToArray();
         }
         return node is JsonArray array ? array.SelectMany(AllInputIds).ToArray() : [];
-    }
-
-    private static string[] InputIds(JsonNode? node) => AllInputIds(node);
-
-    private static void AssertSaveScopes(JsonNode card)
-    {
-        var ids = InputIds(card).Order().ToArray();
-        var actions = card["body"]!.AsArray().SelectMany(item => FindSaveActions(item)).ToArray();
-        Assert.NotEmpty(actions);
-        foreach (var action in actions)
-            Assert.Equal(ids, action["data"]!.AsObject().Select(pair => pair.Key).Order());
-    }
-
-    private static IEnumerable<JsonNode> FindSaveActions(JsonNode? node)
-    {
-        if (node is JsonObject obj)
-        {
-            if (obj["type"]?.GetValue<string>() == "ActionSet")
-            {
-                foreach (var action in obj["actions"]!.AsArray())
-                    if (action!["type"]?.GetValue<string>() == "Action.Submit") yield return action;
-                yield break;
-            }
-            foreach (var value in obj.Select(pair => pair.Value))
-                foreach (var action in FindSaveActions(value)) yield return action;
-        }
-        else if (node is JsonArray array)
-            foreach (var value in array)
-                foreach (var action in FindSaveActions(value)) yield return action;
     }
 
     private sealed class Fixture : IDisposable
@@ -337,8 +254,6 @@ public sealed class GroupedSettingsTests
             _provider = new TokensLimitsExtensionCommandsProvider(null, _registry, Settings);
         }
 
-        public FormContent Form() => Assert.IsAssignableFrom<FormContent>(Assert.Single(_provider.Settings!.SettingsPage.GetContent()));
-        public JsonNode Card() => JsonNode.Parse(Form().TemplateJson)!;
         public void Dispose()
         {
             _provider.Dispose();

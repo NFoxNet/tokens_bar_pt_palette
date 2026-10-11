@@ -22,7 +22,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     private const int DefaultRefreshIntervalSeconds = 60;
     private const string StorageDirectoryName = "TokensLimitsExtension";
     private const string SettingsNamespace = "tokensLimits";
-    private const string SecretMask = "••••••••";
+    internal const string SecretMask = "••••••••";
 
     private readonly ChoiceSetSetting _language;
     private readonly TextSetting _refreshInterval;
@@ -202,6 +202,11 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             : Normalize(Environment.GetEnvironmentVariable(field.EnvironmentVariable));
     }
 
+    internal bool HasSavedSecret(string settingKey)
+        => _providerFields.TryGetValue(settingKey, out var setting)
+            && _secretFieldKeys.Contains(settingKey)
+            && IsSecretMask(setting.Value);
+
     public IReadOnlyList<UsageProviderDescriptor> EnabledDescriptors
         => UsageProviderDescriptorRegistry.All
             .Where(descriptor => IsEnabled(descriptor.Id))
@@ -214,10 +219,10 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             return;
         }
 
+        ((IDisposable)CommandSettings).Dispose();
         _disposed = true;
         Settings.SettingsChanged -= OnSettingsChanged;
         _localization.LanguageChanged -= OnLanguageChanged;
-        ((IDisposable)CommandSettings).Dispose();
         _secretStore.Dispose();
         Changed = null;
         ProviderConfigurationChanged = null;
