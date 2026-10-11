@@ -17,7 +17,7 @@ public sealed class ProviderSetupTests
         var settings = new TokensLimitsSettings(directory.Path);
         GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.providers.codex.enabled").Value = false;
         using var registry = new UsageProviderRegistry([new DisabledCodexProvider()]);
-        var nativeSettingsPageType = settings.Settings.SettingsPage.GetType();
+        var nativeSettingsPageType = settings.CommandSettings.SettingsPage.GetType();
         using var provider = new TokensLimitsExtensionCommandsProvider(
             null,
             registry,

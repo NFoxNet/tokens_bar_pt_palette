@@ -1,4 +1,5 @@
 using System;
+using Microsoft.CommandPalette.Extensions;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -98,10 +99,13 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         RefreshLocalizedSettings();
         ValidateRefreshInterval();
         MigrateAndMaskLoadedSecrets();
+        CommandSettings = new GroupedCommandSettings(this);
         _lastProviderConfigurationFingerprints = GetProviderConfigurationFingerprints();
         Settings.SettingsChanged += OnSettingsChanged;
         _localization.LanguageChanged += OnLanguageChanged;
     }
+
+    public ICommandSettings CommandSettings { get; }
 
     public TimeSpan RefreshInterval
     {
@@ -213,6 +217,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         _disposed = true;
         Settings.SettingsChanged -= OnSettingsChanged;
         _localization.LanguageChanged -= OnLanguageChanged;
+        ((IDisposable)CommandSettings).Dispose();
         _secretStore.Dispose();
         Changed = null;
         ProviderConfigurationChanged = null;

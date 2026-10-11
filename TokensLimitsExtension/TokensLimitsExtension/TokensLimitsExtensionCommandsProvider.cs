@@ -65,8 +65,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         Id = "com.tokenslimits.extension";
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");
         _settings = settings ?? new TokensLimitsSettings();
-        _settingsPageCommand = _settings.Settings.SettingsPage;
-        Settings = _settings.Settings;
+        _settingsPageCommand = _settings.CommandSettings.SettingsPage;
+        Settings = _settings.CommandSettings;
         _settingsDrivenProviders = providerRegistry is null || settingsDrivenProviders;
         _ownsProviderRegistry = providerRegistry is null;
         _ownedProviderHttpClient = providerRegistry is null

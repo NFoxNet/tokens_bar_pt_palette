@@ -2,6 +2,13 @@
   "culture": "en",
   "nativeName": "English",
   "strings": {
+    "settings.save": "Save",
+    "settings.section.dock": "Dock",
+    "settings.section.general": "General",
+    "settings.section.history": "History",
+    "settings.section.notifications": "Notifications",
+    "settings.section.providers": "Providers",
+    "settings.title": "Settings",
     "history.pace.comparison": "Usage now: {0}% · even pace by now: {1}%",
     "history.segment": "Series {0}",
     "history.metric.tokens5h": "Tokens · 5 hours",

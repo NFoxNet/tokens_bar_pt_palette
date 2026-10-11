@@ -28,7 +28,7 @@ public sealed class ProviderSetupPageTests
         Assert.DoesNotContain("sample-secret-value", item.Details.Body, StringComparison.Ordinal);
         Assert.Contains(settings.Localization.GetString("setup.status.disabled", "Disabled · open settings to enable"), item.Subtitle, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(item.MoreCommands!, command =>
-            command is CommandContextItem context && context.Command?.GetType().Name == "SettingsContentPage");
+            command is CommandContextItem context && ReferenceEquals(context.Command, settings.CommandSettings.SettingsPage));
         Assert.DoesNotContain(item.MoreCommands!, command =>
             command is CommandContextItem context && context.Title.Contains("validate", StringComparison.OrdinalIgnoreCase));
     }
@@ -46,7 +46,7 @@ public sealed class ProviderSetupPageTests
 
         Assert.Contains(settings.Localization.GetString("setup.status.authRequired", "Authentication required"), item.Subtitle, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(item.MoreCommands!, command =>
-            command is CommandContextItem context && context.Command?.GetType().Name == "SettingsContentPage");
+            command is CommandContextItem context && ReferenceEquals(context.Command, settings.CommandSettings.SettingsPage));
     }
 
     [Fact]

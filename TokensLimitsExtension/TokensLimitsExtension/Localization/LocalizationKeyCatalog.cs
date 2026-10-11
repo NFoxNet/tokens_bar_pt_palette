@@ -14,6 +14,13 @@ public static class LocalizationKeyCatalog
 {
     private static readonly string[] CommonKeys =
     [
+        "settings.save",
+        "settings.section.dock",
+        "settings.section.general",
+        "settings.section.history",
+        "settings.section.notifications",
+        "settings.section.providers",
+        "settings.title",
         "settings.notificationsEnabled",
         "settings.notificationsDescription",
         "settings.notificationThreshold",

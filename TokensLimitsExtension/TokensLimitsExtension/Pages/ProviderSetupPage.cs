@@ -239,7 +239,7 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
     {
         var actions = new List<IContextItem>
         {
-            new CommandContextItem(_settings.Settings.SettingsPage)
+            new CommandContextItem(_settings.CommandSettings.SettingsPage)
             {
                 Title = localization.GetString("setup.action.settings", "Open extension settings"),
                 Subtitle = localization.GetString("setup.action.settingsSubtitle", "Configure provider credentials in extension settings."),

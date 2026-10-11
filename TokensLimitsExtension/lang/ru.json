@@ -2,6 +2,13 @@
   "culture": "ru",
   "nativeName": "Русский",
   "strings": {
+    "settings.save": "Сохранить",
+    "settings.section.dock": "Dock",
+    "settings.section.general": "Общие",
+    "settings.section.history": "История",
+    "settings.section.notifications": "Уведомления",
+    "settings.section.providers": "Провайдеры",
+    "settings.title": "Настройки",
     "history.pace.comparison": "Расход сейчас: {0}% · равномерный расход к этому моменту: {1}%",
     "history.segment": "Серия {0}",
     "history.metric.tokens5h": "Токены · 5 часов",
