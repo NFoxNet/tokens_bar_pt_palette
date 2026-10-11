@@ -7,3 +7,5 @@ Only the active section or provider contributes form fields. Opening or closing 
 Upgrade in place with the signed package for your architecture. The package identity, publisher, and signing certificate are unchanged. Do not uninstall first. Package preparation does not install or publish the release.
 
 Live PowerToys rendering and keyboard focus, ARM64 runtime, and an upgrade with real user settings require separate verification.
+
+Local validation: 410 tests passed in both Debug x64 and Release x64. Signed x64 and ARM64 packages passed version, architecture, publisher, pinned signer, CMS signature, payload block hashes, and SHA256SUMS verification. Existing SDK/WinRT trimming and missing-symbol-tool warnings remain; no new project warnings were introduced.
