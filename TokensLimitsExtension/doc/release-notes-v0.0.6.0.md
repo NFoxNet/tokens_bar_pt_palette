@@ -1,5 +1,6 @@
 # TokensLimitsExtension 0.0.6.0
 
+- Navigate compact settings through General, Providers, Dock, Notifications, and History sections. Provider credentials open in separate cards; dependent options appear after enabling and saving their feature. Existing settings and protected secrets are preserved.
 - Customize Dock provider visibility, ordering, and displayed metrics independently of provider availability.
 - Connect providers through a guided setup page with explicit configuration validation.
 - Enable an optional native quick summary from Dock. Disabled by default.
@@ -15,4 +16,4 @@ Use the signed package matching your Windows architecture together with the publ
 
 Local package preparation does not publish a GitHub release. Live PowerToys UI/COM, ARM64 runtime, and upgrades preserving real user settings require separate validation.
 
-Local validation: 398 tests passed; signed x64 and ARM64 packages passed CMS, manifest, payload block hash, and checksum verification. Release builds retain Windows SDK/WinRT trim warnings and do not include a separate symbols package.
+Local validation after settings grouping: 406 tests passed; signed x64 and ARM64 packages passed CMS, manifest, payload block hash, and checksum verification. Release builds retain Windows SDK/WinRT trim warnings and do not include a separate symbols package.
