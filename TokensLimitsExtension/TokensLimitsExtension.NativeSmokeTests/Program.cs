@@ -47,7 +47,14 @@ try
     for (var attempt = 0; attempt < 100 && !loaded; attempt++)
     {
         Thread.Sleep(50);
-        OnUi(() => loaded = newDockRow!.IsLoaded);
+        OnUi(() =>
+        {
+            var scroll = (ScrollViewer)first!.Content;
+            var dock = ((StackPanel)scroll.Content).Children.OfType<SettingsExpander>().ElementAt(2);
+            scroll.ChangeView(null, dock.TransformToVisual((StackPanel)scroll.Content).TransformPoint(new Windows.Foundation.Point()).Y, null, true);
+            scroll.UpdateLayout();
+            loaded = newDockRow!.IsLoaded;
+        });
     }
     if (!loaded) throw new InvalidOperationException("New Dock provider field was not rendered.");
     Console.WriteLine("PASS: changed Dock membership renders in the open window.");
