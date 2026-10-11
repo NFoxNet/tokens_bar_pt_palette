@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using TokensLimitsExtension.Core.Models;
 
 namespace TokensLimitsExtension.Core.Services;
@@ -19,7 +20,7 @@ public sealed class UsageHistoryException(UsageHistoryErrorKind kind, string mes
     public UsageHistoryErrorKind Kind { get; } = kind;
 }
 
-public sealed class UsageHistoryStore
+public sealed partial class UsageHistoryStore
 {
     /// <summary>Maximum retained samples for one provider.</summary>
     public const int MaximumEntriesPerProvider = 8_640;
@@ -40,7 +41,7 @@ public sealed class UsageHistoryStore
         "quotaUnavailable",
         "connectionStatus",
     };
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly string _directory;
     private readonly TimeProvider _timeProvider;
     private int _retentionDays;
@@ -214,7 +215,7 @@ public sealed class UsageHistoryStore
 
         try
         {
-            var entries = JsonSerializer.Deserialize<List<UsageHistoryEntry>>(bytes, JsonOptions)
+            var entries = JsonSerializer.Deserialize(bytes, HistoryJsonContext.Default.ListUsageHistoryEntry)
                 ?? throw new JsonException("History root is empty.");
             if (entries.Count > MaximumEntriesPerProvider || entries.Any(entry => entry is null))
             {
@@ -240,7 +241,7 @@ public sealed class UsageHistoryStore
 
     private void WriteFileAtomically(string path, IReadOnlyList<UsageHistoryEntry> entries)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(entries, JsonOptions);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(entries, HistoryJsonContext.Default.IReadOnlyListUsageHistoryEntry);
         if (bytes.Length > MaximumFileBytes)
         {
             throw new UsageHistoryException(UsageHistoryErrorKind.TooLarge, "History file exceeds the allowed size.");
@@ -265,5 +266,12 @@ public sealed class UsageHistoryStore
                 File.Delete(temporaryPath);
             }
         }
+    }
+
+    [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
+    [JsonSerializable(typeof(List<UsageHistoryEntry>))]
+    [JsonSerializable(typeof(IReadOnlyList<UsageHistoryEntry>))]
+    private sealed partial class HistoryJsonContext : JsonSerializerContext
+    {
     }
 }
