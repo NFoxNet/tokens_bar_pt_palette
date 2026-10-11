@@ -49,3 +49,9 @@
 Независимое read-only ревью не обнаружило Critical/Important/Minor замечаний. Release x64 и ARM64 собраны, оба подписанных MSIX прошли Test-ReleasePackage и SHA256SUMS; комплект `artifacts/release-0.0.6.0/` основного checkout обновлён только после проверки контрольных сумм прежних файлов. В каждой Release-сборке остаются три прежних SDK/WinRT/symbol warnings; новых warnings в нашем коде нет. Документация обновлена в operations.md, feature-ux.md и английских release notes.
 
 JSON/COM-тесты не подтверждают живой PowerToys renderer: вложенные ShowCard, фокус, узкое окно и раскрытие после сохранения нужно проверить вручную по operations.md/feature-ux.md. ARM64 runtime и обновление реальных настроек остаются отдельными acceptance gaps. Установленный пакет и secrets пользователя не менялись; push/публикация не выполнялись.
+
+## Установочное обновление 0.0.6.1
+
+После диагностики установленного 0.0.6.0 подтверждён отказ Windows 0x80073CFB: повторная версия с отличающимся содержимым не заменяет пакет. Версия поднята до 0.0.6.1 в commit 033cfc9, без смены identity/Publisher/сертификата. Подписанные Release x64/ARM64 собраны из этого коммита; каждый build завершён с 0 errors и тремя прежними SDK/WinRT/symbol warnings.
+
+Release x64 test run: 257 Core +149 integration =406 passed, 0 failures/skips. Оба MSIX прошли CMS/manifest/version/architecture/COM/assets/block hashes проверку с сертификатом предыдущего пакета. SHA256SUMS проверены до и после копирования. Готовый комплект: artifacts/release-0.0.6.1/ основного checkout; прежние пакеты не удалены. Установленное приложение остаётся 0.0.6.0: установка/живой renderer/обновление реальных настроек не проверялись и не выполнялись.
