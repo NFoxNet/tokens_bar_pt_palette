@@ -24,14 +24,15 @@ internal static class ProviderIconCatalog
         "zed", "zenmux", "zoommate",
     };
 
-    public static IconInfo For(string providerId)
+    public static IconInfo For(string providerId) => IconHelpers.FromRelativePath(PathFor(providerId));
+
+    public static string PathFor(string providerId)
     {
         var assetId = providerId.Equals("alibabatokenplan", StringComparison.OrdinalIgnoreCase)
             ? "alibaba"
             : providerId;
-        var path = CodexBarIcons.Contains(assetId)
+        return CodexBarIcons.Contains(assetId)
             ? $"Assets\\Providers\\ProviderIcon-{assetId}.64.png"
             : "Assets\\Providers\\ProviderIcon-generic.64.png";
-        return IconHelpers.FromRelativePath(path);
     }
 }

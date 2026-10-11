@@ -99,6 +99,7 @@ public sealed class GroupedSettingsTests
     {
         using var fixture = new Fixture();
         var form = fixture.Form();
+        NavigateSection(form, "providers");
         NavigateProvider(form, "deepseek");
         form.SubmitForm("{\"tokensLimits.providers.deepseek.apiKey\":\"test-only-secret\",\"tokensLimits.providers.deepseek.enabled\":\"true\"}", "{}");
         NavigateSection(form, "history");
@@ -175,6 +176,7 @@ public sealed class GroupedSettingsTests
     {
         using var fixture = new Fixture();
         var form = fixture.Form();
+        NavigateSection(form, "providers");
         NavigateProvider(form, "deepseek");
         form.SubmitForm("{\"tokensLimits.providers.deepseek.apiKey\":\"test-deepseek-secret\"}", "{}");
         NavigateProvider(form, "openai");
@@ -274,7 +276,7 @@ public sealed class GroupedSettingsTests
     private static JsonNode Section(JsonNode card, int index) => RootSections(card)[index];
     private static string HeaderTitle(JsonNode section) => section["items"]![0]!["items"]![0]!["columns"]![1]!["items"]![0]!["text"]!.GetValue<string>();
     private static JsonNode ExpandedBody(JsonNode section) => section["items"]![1]!;
-    private static JsonNode[] ProviderHeaders(JsonNode body) => body["items"]!.AsArray().Where(item => item!["type"]?.GetValue<string>() == "Container" && item["selectAction"] is not null).Select(item => item!).ToArray();
+    private static JsonNode[] ProviderHeaders(JsonNode body) => body["items"]!.AsArray().Select(item => item!["items"]![0]!).ToArray();
 
     private static void NavigateSection(FormContent form, string id) => form.SubmitForm("{}", new JsonObject { ["settingsSection"] = id }.ToJsonString());
     private static void NavigateProvider(FormContent form, string id) => form.SubmitForm("{}", new JsonObject { ["settingsProvider"] = id }.ToJsonString());

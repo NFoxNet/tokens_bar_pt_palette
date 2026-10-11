@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
 using Microsoft.CommandPalette.Extensions;
@@ -21,6 +22,8 @@ internal sealed partial class GroupedSettingsPage : ContentPage, IDisposable
     private static readonly string[] GeneralKeys = ["tokensLimits.language", "tokensLimits.refreshInterval"];
     private static readonly string[] DockKeys = ["tokensLimits.dock.summaryEnabled", "tokensLimits.dock.metric", "tokensLimits.dock.providerOrder"];
     private readonly TokensLimitsSettings _settings;
+    private string? _expandedSection;
+    private string? _expandedProvider;
 
     public GroupedSettingsPage(TokensLimitsSettings settings)
     {
@@ -55,7 +58,7 @@ internal sealed partial class GroupedSettingsPage : ContentPage, IDisposable
         var inputs = original["body"]!.AsArray().ToDictionary(node => InputId(node!), node => node!);
         var submit = original["actions"]![0]!.AsObject();
 
-        JsonObject Card(IEnumerable<string> keys)
+        JsonObject Fields(IEnumerable<string> keys)
         {
             var body = new JsonArray();
             var data = new JsonObject();
@@ -67,25 +70,22 @@ internal sealed partial class GroupedSettingsPage : ContentPage, IDisposable
             var action = submit.DeepClone().AsObject();
             action["title"] = _settings.Localization.GetString("settings.save");
             action["data"] = data;
-            return new JsonObject
+            body.Add((JsonNode)new JsonObject
             {
-                ["type"] = "AdaptiveCard",
-                ["version"] = "1.5",
-                ["body"] = body,
-                ["actions"] = new JsonArray(action),
-            };
+                ["type"] = "ActionSet", ["actions"] = new JsonArray(action),
+            });
+            return new JsonObject { ["type"] = "Container", ["spacing"] = "medium", ["items"] = body };
         }
 
-        JsonObject Section(string title, string description, string icon, JsonObject card, string? status = null, bool enabled = false)
+        JsonObject Section(string id, string title, string description, JsonObject icon,
+            Func<JsonObject> content, string? status = null, bool enabled = false, bool provider = false)
         {
+            var expanded = provider ? _expandedProvider == id : _expandedSection == id;
             var columns = new JsonArray(
                 new JsonObject
                 {
                     ["type"] = "Column", ["width"] = "auto", ["verticalContentAlignment"] = "center",
-                    ["items"] = new JsonArray(new JsonObject
-                    {
-                        ["type"] = "TextBlock", ["text"] = icon, ["size"] = "large", ["spacing"] = "none",
-                    }),
+                    ["items"] = new JsonArray(icon),
                 },
                 new JsonObject
                 {
@@ -114,34 +114,57 @@ internal sealed partial class GroupedSettingsPage : ContentPage, IDisposable
                     }),
                 });
             }
+            columns.Add((JsonNode)new JsonObject
+            {
+                ["type"] = "Column", ["width"] = "auto", ["verticalContentAlignment"] = "center",
+                ["items"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "TextBlock", ["text"] = expanded ? "⌃" : "⌄", ["size"] = "large",
+                }),
+            });
+            var items = new JsonArray(new JsonObject
+            {
+                ["type"] = "Container",
+                ["selectAction"] = new JsonObject
+                {
+                    ["type"] = "Action.Submit", ["associatedInputs"] = "none",
+                    ["title"] = _settings.Localization.Format("settings.card.configureTitle", title),
+                    ["tooltip"] = _settings.Localization.Format("settings.card.configureTitle", title),
+                    ["data"] = new JsonObject { [provider ? "settingsProvider" : "settingsSection"] = id },
+                },
+                ["items"] = new JsonArray(new JsonObject { ["type"] = "ColumnSet", ["columns"] = columns }),
+            });
+            if (expanded) items.Add((JsonNode)content());
             return new JsonObject
             {
-                ["type"] = "Container", ["style"] = "emphasis", ["spacing"] = "medium",
-                ["items"] = new JsonArray(
-                    new JsonObject { ["type"] = "ColumnSet", ["columns"] = columns },
-                    new JsonObject
-                    {
-                        ["type"] = "ActionSet", ["horizontalAlignment"] = "right", ["spacing"] = "small",
-                        ["actions"] = new JsonArray(new JsonObject
-                        {
-                            ["type"] = "Action.ShowCard",
-                            ["title"] = _settings.Localization.GetString("settings.card.configure"),
-                            ["tooltip"] = _settings.Localization.Format("settings.card.configureTitle", title),
-                            ["card"] = card,
-                        }),
-                    }),
+                ["type"] = "Container", ["style"] = "emphasis", ["spacing"] = "medium", ["items"] = items,
             };
         }
 
-        string State(bool enabled) => _settings.Localization.GetString(enabled ? "settings.card.on" : "settings.card.off");
-        var providers = new JsonObject { ["type"] = "AdaptiveCard", ["version"] = "1.5", ["body"] = new JsonArray() };
-        foreach (var descriptor in UsageProviderDescriptorRegistry.All)
+        static JsonObject Symbol(string text) => new()
         {
-            var prefix = $"tokensLimits.providers.{descriptor.Id}.";
-            var keys = new[] { prefix + "enabled" }.Concat(descriptor.Settings.Select(field => prefix + field.Key));
-            providers["body"]!.AsArray().Add((JsonNode)Section(descriptor.DisplayName, _settings.Localization.GetString("settings.card.providerDescription"), "◇", Card(keys), State(_settings.IsEnabled(descriptor.Id)), _settings.IsEnabled(descriptor.Id)));
+            ["type"] = "TextBlock", ["text"] = text, ["size"] = "large", ["spacing"] = "none",
+        };
+        string State(bool enabled) => _settings.Localization.GetString(enabled ? "settings.card.on" : "settings.card.off");
+        JsonObject Providers()
+        {
+            var items = new JsonArray();
+            foreach (var descriptor in UsageProviderDescriptorRegistry.All)
+            {
+                var prefix = $"tokensLimits.providers.{descriptor.Id}.";
+                var keys = new[] { prefix + "enabled" }.Concat(descriptor.Settings.Select(field => prefix + field.Key));
+                var icon = new JsonObject
+                {
+                    ["type"] = "Image", ["width"] = "32px", ["height"] = "32px", ["altText"] = descriptor.DisplayName,
+                    ["url"] = "data:image/png;base64," + Convert.ToBase64String(File.ReadAllBytes(
+                        Path.Combine(AppContext.BaseDirectory, ProviderIconCatalog.PathFor(descriptor.Id)))),
+                };
+                items.Add((JsonNode)Section(descriptor.Id, descriptor.DisplayName,
+                    _settings.Localization.GetString("settings.card.providerDescription"), icon,
+                    () => Fields(keys), State(_settings.IsEnabled(descriptor.Id)), _settings.IsEnabled(descriptor.Id), provider: true));
+            }
+            return new JsonObject { ["type"] = "Container", ["spacing"] = "medium", ["items"] = items };
         }
-
         var dockKeys = DockKeys
             .Concat(_settings.EnabledDescriptors.Select(descriptor => $"tokensLimits.dock.providers.{descriptor.Id}.visible"));
         var notificationKeys = new List<string> { "tokensLimits.notifications.enabled" };
@@ -150,11 +173,11 @@ internal sealed partial class GroupedSettingsPage : ContentPage, IDisposable
         if (_settings.HistoryEnabled) historyKeys.Add("tokensLimits.history.retentionDays");
 
         original["body"] = new JsonArray(
-            Section(_settings.Localization.GetString("settings.section.general"), _settings.Localization.GetString("settings.card.generalDescription"), "⚙", Card(GeneralKeys)),
-            Section(_settings.Localization.GetString("settings.section.providers"), _settings.Localization.GetString("settings.card.providersDescription"), "⊞", providers, _settings.Localization.Format("settings.card.enabledCount", _settings.EnabledDescriptors.Count)),
-            Section(_settings.Localization.GetString("settings.section.dock"), _settings.Localization.GetString("settings.card.dockDescription"), "▤", Card(dockKeys)),
-            Section(_settings.Localization.GetString("settings.section.notifications"), _settings.Localization.GetString("settings.card.notificationsDescription"), "♢", Card(notificationKeys), State(_settings.NotificationsEnabled), _settings.NotificationsEnabled),
-            Section(_settings.Localization.GetString("settings.section.history"), _settings.Localization.GetString("settings.card.historyDescription"), "◷", Card(historyKeys), State(_settings.HistoryEnabled), _settings.HistoryEnabled));
+            Section("general", _settings.Localization.GetString("settings.section.general"), _settings.Localization.GetString("settings.card.generalDescription"), Symbol("⚙"), () => Fields(GeneralKeys)),
+            Section("providers", _settings.Localization.GetString("settings.section.providers"), _settings.Localization.GetString("settings.card.providersDescription"), Symbol("⊞"), Providers, _settings.Localization.Format("settings.card.enabledCount", _settings.EnabledDescriptors.Count)),
+            Section("dock", _settings.Localization.GetString("settings.section.dock"), _settings.Localization.GetString("settings.card.dockDescription"), Symbol("▤"), () => Fields(dockKeys)),
+            Section("notifications", _settings.Localization.GetString("settings.section.notifications"), _settings.Localization.GetString("settings.card.notificationsDescription"), Symbol("♢"), () => Fields(notificationKeys), State(_settings.NotificationsEnabled), _settings.NotificationsEnabled),
+            Section("history", _settings.Localization.GetString("settings.section.history"), _settings.Localization.GetString("settings.card.historyDescription"), Symbol("◷"), () => Fields(historyKeys), State(_settings.HistoryEnabled), _settings.HistoryEnabled));
         original["actions"] = new JsonArray();
         return original.ToJsonString();
     }
@@ -195,7 +218,26 @@ internal sealed partial class GroupedSettingsPage : ContentPage, IDisposable
 
         public override ICommandResult SubmitForm(string inputs, string data)
         {
-            _native.SubmitForm(inputs, data);
+            var action = string.IsNullOrEmpty(data) ? null : JsonNode.Parse(data)?.AsObject();
+            if (action?["settingsSection"] is JsonValue sectionValue)
+            {
+                var section = sectionValue.GetValue<string>();
+                if (section is not ("general" or "providers" or "dock" or "notifications" or "history"))
+                    throw new ArgumentException("Unknown settings section.", nameof(data));
+                _page._expandedSection = _page._expandedSection == section ? null : section;
+                _page._expandedProvider = null;
+            }
+            else if (action?["settingsProvider"] is JsonValue providerValue)
+            {
+                var provider = providerValue.GetValue<string>();
+                if (_page._expandedSection != "providers" || !UsageProviderDescriptorRegistry.All.Any(descriptor => descriptor.Id == provider))
+                    throw new ArgumentException("Unknown or unavailable provider settings.", nameof(data));
+                _page._expandedProvider = _page._expandedProvider == provider ? null : provider;
+            }
+            else
+            {
+                _native.SubmitForm(inputs, data);
+            }
             TemplateJson = _page.GroupTemplate(_page.NativeForm().TemplateJson);
             return CommandResult.KeepOpen();
         }
