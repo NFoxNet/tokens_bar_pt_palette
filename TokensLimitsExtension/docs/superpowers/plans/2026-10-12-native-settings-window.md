@@ -21,10 +21,10 @@
 
 ## Tasks
 
-- [ ] 1. Add a small editor adapter over native SettingsForm: extract current input metadata, group keys, scoped save, mask handling and validation. Add offline regression tests for all keys, secret preservation, scoped saves and invalid input.
-- [ ] 2. Add lazy STA WinUI Application/window lifecycle without replacing the MTA COM hosting path. Add the toolkit dependency and resources; handle repeat opening, closing/reopening and disposal.
-- [ ] 3. Build NativeSettingsWindow with five real SettingsExpander groups and SettingsCard rows. Provider expanders use existing logos; localized labels and input controls derive from existing settings metadata. Show errors and keep edited section open after save. Retain unsaved edits within a section; never expose credentials.
-- [ ] 4. Replace GroupedSettingsPage simulated accordion with a localized open button. All existing settings entry points use the same page/window service. Adapt integration tests to host launch and editor contract.
+- [x] 1. Add a small editor adapter over native SettingsForm: extract current input metadata, group keys, scoped save, mask handling and validation. Add offline regression tests for all keys, secret preservation, scoped saves and invalid input.
+- [x] 2. Add lazy STA WinUI Application/window lifecycle without replacing the MTA COM hosting path. Add the toolkit dependency and resources; handle repeat opening, closing/reopening and disposal.
+- [x] 3. Build NativeSettingsWindow with five real SettingsExpander groups and SettingsCard rows. Provider expanders use existing logos; localized labels and input controls derive from existing settings metadata. Show errors and keep edited section open after save. Retain unsaved edits within a section; never expose credentials.
+- [x] 4. Replace GroupedSettingsPage simulated accordion with a localized open button. All existing settings entry points use the same page/window service. Adapt integration tests to host launch and editor contract.
 - [ ] 5. Review lifecycle/secret handling, run restore/build/full tests and Release x64/ARM64 packaging checks. Update architecture, operations and verification docs; bump the package version if producing changed installation artifacts.
 
 ## Review focus
