@@ -7,7 +7,9 @@ var directory = Path.Combine(Path.GetTempPath(), "TokensLimits.NativeSmoke." + G
 Directory.CreateDirectory(directory);
 try
 {
-    using var settings = new TokensLimitsSettings(directory);
+    var storage = TokensLimitsSettings.ResolveStorage(directory, null);
+    using var settings = (TokensLimitsSettings)Activator.CreateInstance(
+        typeof(TokensLimitsSettings), BindingFlags.Instance | BindingFlags.NonPublic, null, [storage], null)!;
     using var host = new NativeSettingsWindowHost(settings);
     var invoke = typeof(NativeSettingsWindowHost).GetMethod("InvokeOnUi", BindingFlags.Instance | BindingFlags.NonPublic)!;
     var appField = typeof(NativeSettingsWindowHost).GetField("_application", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -15,6 +17,7 @@ try
     void OnUi(Action action) => invoke.Invoke(host, [action]);
     NativeSettingsWindow? first = null;
     host.Open();
+    Thread.Sleep(100);
     OnUi(() =>
     {
         first = (NativeSettingsWindow)windowField.GetValue(appField.GetValue(host))!;
@@ -29,6 +32,25 @@ try
             throw new InvalidOperationException("Provider logo/fields missing.");
         Console.WriteLine("PASS: real WinUI window, five groups, provider logo and lazy fields.");
     });
+    settings.Settings.Update("{\"tokensLimits.providers.deepseek.enabled\":\"true\"}");
+    SettingsCard? newDockRow = null;
+    OnUi(() =>
+    {
+        var panel = (StackPanel)((ScrollViewer)first!.Content).Content;
+        var dock = panel.Children.OfType<SettingsExpander>().ElementAt(2);
+        dock.IsExpanded = false;
+        dock.IsExpanded = true;
+        newDockRow = (SettingsCard)dock.Items.Last();
+        dock.StartBringIntoView();
+    });
+    var loaded = false;
+    for (var attempt = 0; attempt < 100 && !loaded; attempt++)
+    {
+        Thread.Sleep(50);
+        OnUi(() => loaded = newDockRow!.IsLoaded);
+    }
+    if (!loaded) throw new InvalidOperationException("New Dock provider field was not rendered.");
+    Console.WriteLine("PASS: changed Dock membership renders in the open window.");
     OnUi(() => first!.AppWindow.Resize(new Windows.Graphics.SizeInt32(640, 480)));
     Thread.Sleep(100);
     OnUi(() =>

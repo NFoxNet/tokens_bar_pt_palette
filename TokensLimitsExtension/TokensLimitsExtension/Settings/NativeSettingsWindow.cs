@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using CommunityToolkit.WinUI.Controls;
 using Microsoft.UI.Xaml;
@@ -55,6 +56,7 @@ internal sealed partial class NativeSettingsWindow : Window
                 var provider = new SettingsExpander
                 {
                     Header = descriptor.DisplayName,
+                    Items = new ObservableCollection<object>(),
                     HeaderIcon = new BitmapIcon
                     {
                         UriSource = new Uri("ms-appx:///" + ProviderIconCatalog.PathFor(descriptor.Id).Replace('\\', '/')),
@@ -83,7 +85,7 @@ internal sealed partial class NativeSettingsWindow : Window
 
     private SettingsExpander Expander(string id, string glyph)
     {
-        var expander = new SettingsExpander { HeaderIcon = new FontIcon { Glyph = glyph } };
+        var expander = new SettingsExpander { HeaderIcon = new FontIcon { Glyph = glyph }, Items = new ObservableCollection<object>() };
         _localize.Add(() =>
         {
             expander.Header = _settings.Localization.GetString("settings.section." + id);
