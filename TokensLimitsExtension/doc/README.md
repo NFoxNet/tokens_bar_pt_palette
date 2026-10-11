@@ -29,9 +29,10 @@
 
 - C# / .NET 10.
 - Приложение: `net10.0-windows10.0.26100.0`.
-- Минимальная Windows: `10.0.19041.0`.
+- Минимальная Windows: `10.0.22000.0` (Windows 11).
 - Целевые архитектуры: `x64` и `ARM64`.
 - UI/runtime: Microsoft Command Palette Extensions Toolkit, Windows App SDK, WinRT COM server.
+- Настройки открываются в отдельном нативном окне WinUI 3; PowerToys предоставляет команду открытия.
 - Тесты: xUnit и `Microsoft.NET.Test.Sdk`.
 
 ## Пользовательский поток
