@@ -11,7 +11,7 @@
   <Identity
     Name="TokensLimitsExtension"
     Publisher="CN=NFoxNet"
-    Version="0.0.6.0" />
+    Version="0.0.6.1" />
 
   <Properties>
     <DisplayName>Tokens Limits</DisplayName>
