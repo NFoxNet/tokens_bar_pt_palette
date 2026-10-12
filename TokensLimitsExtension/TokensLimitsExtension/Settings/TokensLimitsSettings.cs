@@ -1,4 +1,5 @@
 using System;
+using Microsoft.CommandPalette.Extensions;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -21,17 +22,21 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     private const int DefaultRefreshIntervalSeconds = 60;
     private const string StorageDirectoryName = "TokensLimitsExtension";
     private const string SettingsNamespace = "tokensLimits";
-    private const string SecretMask = "••••••••";
+    internal const string SecretMask = "••••••••";
 
     private readonly ChoiceSetSetting _language;
-
     private readonly TextSetting _refreshInterval;
+    private readonly ToggleSetting _dockSummaryEnabled;
+    private readonly TextSetting _dockProviderOrder;
+    private readonly ChoiceSetSetting _dockMetric;
 
     private readonly Dictionary<string, ToggleSetting> _providerToggles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ToggleSetting> _dockVisibilityToggles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextSetting> _providerFields = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _secretFieldKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly ProtectedSecretStore _secretStore;
     private readonly JsonLocalizationService _localization;
+    private Dictionary<string, string> _lastProviderConfigurationFingerprints = new(StringComparer.OrdinalIgnoreCase);
 
     private bool _disposed;
     private bool _handlingSettingsChange;
@@ -68,17 +73,39 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             IsRequired = true,
             Placeholder = $"{MinimumRefreshIntervalSeconds}–{MaximumRefreshIntervalSeconds}",
         };
+        _dockSummaryEnabled = new ToggleSetting(
+            $"{SettingsNamespace}.dock.summaryEnabled",
+            string.Empty,
+            string.Empty,
+            false);
+        _dockProviderOrder = new TextSetting(
+            $"{SettingsNamespace}.dock.providerOrder",
+            string.Empty,
+            string.Empty,
+            string.Empty);
+        _dockMetric = new ChoiceSetSetting(
+            $"{SettingsNamespace}.dock.metric",
+            [new ChoiceSetSetting.Choice("All available values", "all")]);
         Settings.Add(_language);
         Settings.Add(_refreshInterval);
+        Settings.Add(_dockSummaryEnabled);
+        Settings.Add(_dockProviderOrder);
+        Settings.Add(_dockMetric);
+        AddDockVisibilitySettings();
+        AddFeatureSettings();
         AddProviderSettings();
         LoadSettings();
         _localization.ApplyPreference(_language.Value, notify: false);
         RefreshLocalizedSettings();
         ValidateRefreshInterval();
         MigrateAndMaskLoadedSecrets();
+        CommandSettings = new GroupedCommandSettings(this);
+        _lastProviderConfigurationFingerprints = GetProviderConfigurationFingerprints();
         Settings.SettingsChanged += OnSettingsChanged;
         _localization.LanguageChanged += OnLanguageChanged;
     }
+
+    public ICommandSettings CommandSettings { get; }
 
     public TimeSpan RefreshInterval
     {
@@ -94,6 +121,38 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
     }
 
     public event EventHandler? Changed;
+
+    public bool DockSummaryEnabled => _dockSummaryEnabled.Value;
+
+    public string DockMetric
+    {
+        get
+        {
+            var value = _dockMetric.Value ?? "all";
+            return value is "primary" or "secondary" or "balance" ? value : "all";
+        }
+    }
+
+    public IReadOnlyList<string> DockProviderOrder
+    {
+        get
+        {
+            var knownIds = UsageProviderDescriptorRegistry.All.Select(descriptor => descriptor.Id).ToArray();
+            var knownIdSet = knownIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var configured = (_dockProviderOrder.Value ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(knownIdSet.Contains)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return configured.Concat(knownIds.Where(id => !configured.Contains(id, StringComparer.OrdinalIgnoreCase))).ToArray();
+        }
+    }
+
+    public bool IsDockVisible(string providerId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
+        return !_dockVisibilityToggles.TryGetValue(providerId, out var setting) || setting.Value;
+    }
 
     public event EventHandler<UsageProviderConfigurationChangedEventArgs>? ProviderConfigurationChanged;
 
@@ -143,6 +202,11 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             : Normalize(Environment.GetEnvironmentVariable(field.EnvironmentVariable));
     }
 
+    internal bool HasSavedSecret(string settingKey)
+        => _providerFields.TryGetValue(settingKey, out var setting)
+            && _secretFieldKeys.Contains(settingKey)
+            && IsSecretMask(setting.Value);
+
     public IReadOnlyList<UsageProviderDescriptor> EnabledDescriptors
         => UsageProviderDescriptorRegistry.All
             .Where(descriptor => IsEnabled(descriptor.Id))
@@ -155,13 +219,20 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             return;
         }
 
-        _disposed = true;
-        Settings.SettingsChanged -= OnSettingsChanged;
-        _localization.LanguageChanged -= OnLanguageChanged;
-        _secretStore.Dispose();
-        Changed = null;
-        ProviderConfigurationChanged = null;
-        GC.SuppressFinalize(this);
+        try
+        {
+            ((IDisposable)CommandSettings).Dispose();
+        }
+        finally
+        {
+            _disposed = true;
+            Settings.SettingsChanged -= OnSettingsChanged;
+            _localization.LanguageChanged -= OnLanguageChanged;
+            _secretStore.Dispose();
+            Changed = null;
+            ProviderConfigurationChanged = null;
+            GC.SuppressFinalize(this);
+        }
     }
 
     private static SettingsStorage ResolveDefaultStorage()
@@ -278,6 +349,20 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
     }
 
+    private void AddDockVisibilitySettings()
+    {
+        foreach (var descriptor in UsageProviderDescriptorRegistry.All)
+        {
+            var setting = new ToggleSetting(
+                $"{SettingsNamespace}.dock.providers.{descriptor.Id}.visible",
+                string.Empty,
+                string.Empty,
+                true);
+            _dockVisibilityToggles.Add(descriptor.Id, setting);
+            Settings.Add(setting);
+        }
+    }
+
     private static string ProviderKey(string providerId)
         => $"{SettingsNamespace}.providers.{providerId}.enabled";
 
@@ -286,6 +371,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
 
     private void RefreshLocalizedSettings()
     {
+        RefreshFeatureSettings();
         _language.Label = _localization.GetString("settings.language");
         _language.Description = _localization.GetString("settings.languageDescription");
         _language.Choices =
@@ -299,12 +385,28 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             "settings.refreshIntervalDescription",
             MinimumRefreshIntervalSeconds,
             MaximumRefreshIntervalSeconds);
+        _dockSummaryEnabled.Label = _localization.GetString("settings.dock.summaryEnabled");
+        _dockSummaryEnabled.Description = _localization.GetString("settings.dock.summaryEnabledDescription");
+        _dockProviderOrder.Label = _localization.GetString("settings.dock.providerOrder");
+        _dockProviderOrder.Description = _localization.GetString("settings.dock.providerOrderDescription");
+        _dockMetric.Label = _localization.GetString("settings.dock.metric");
+        _dockMetric.Description = _localization.GetString("settings.dock.metricDescription");
+        _dockMetric.Choices =
+        [
+            new ChoiceSetSetting.Choice(_localization.GetString("settings.dock.metric.all"), "all"),
+            new ChoiceSetSetting.Choice(_localization.GetString("settings.dock.metric.primary"), "primary"),
+            new ChoiceSetSetting.Choice(_localization.GetString("settings.dock.metric.secondary"), "secondary"),
+            new ChoiceSetSetting.Choice(_localization.GetString("settings.dock.metric.balance"), "balance"),
+        ];
 
         foreach (var descriptor in UsageProviderDescriptorRegistry.All)
         {
             var toggle = _providerToggles[descriptor.Id];
             toggle.Label = _localization.Format("settings.enableProvider", descriptor.DisplayName);
             toggle.Description = _localization.Format("settings.providerSource", descriptor.DisplayName);
+            var dockVisibility = _dockVisibilityToggles[descriptor.Id];
+            dockVisibility.Label = _localization.Format("settings.dock.providerVisible", descriptor.DisplayName);
+            dockVisibility.Description = _localization.GetString("settings.dock.providerVisibleDescription");
 
             foreach (var field in descriptor.Settings)
             {
@@ -337,11 +439,12 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
 
         _handlingSettingsChange = true;
-        var previousFingerprints = GetProviderConfigurationFingerprints();
+        var previousFingerprints = _lastProviderConfigurationFingerprints;
         try
         {
             _localization.ApplyPreference(_language.Value);
             ValidateRefreshInterval();
+            ValidateFeatureSettings();
             if (PersistAndMaskSecrets())
             {
                 SaveSettings();
@@ -353,6 +456,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
         }
 
         var currentFingerprints = GetProviderConfigurationFingerprints();
+        _lastProviderConfigurationFingerprints = currentFingerprints;
         var changedProviderIds = currentFingerprints
             .Where(pair => !previousFingerprints.TryGetValue(pair.Key, out var previous) || !string.Equals(previous, pair.Value, StringComparison.Ordinal))
             .Select(pair => pair.Key)
@@ -438,6 +542,7 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
                 continue;
             }
 
+            setting.ErrorMessage = string.Empty;
             var value = Normalize(setting.Value);
             if (IsSecretMask(value))
             {
@@ -458,7 +563,9 @@ public sealed partial class TokensLimitsSettings : JsonSettingsManager, IUsageRe
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[TokensLimits] ERROR: unable to protect setting '{setting.Key}': {ex.Message}");
+                Debug.WriteLine($"[TokensLimits] ERROR: unable to protect setting '{setting.Key}': {ex.GetType().Name}");
+                setting.Value = _secretStore.Get(setting.Key) is null ? string.Empty : SecretMask;
+                setting.ErrorMessage = _localization.GetString("settings.window.saveError");
                 return false;
             }
         }

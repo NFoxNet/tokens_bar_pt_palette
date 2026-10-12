@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Opt-in interactive smoke test; kept outside the headless test solution. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.22000.0</TargetPlatformMinVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
+    <ApplicationManifest>../TokensLimitsExtension/app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../TokensLimitsExtension/TokensLimitsExtension.csproj" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <None Include="../lang/*.json" Link="lang/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../TokensLimitsExtension/Assets/Providers/*.64.png" Link="Assets/Providers/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopyXamlResources" AfterTargets="Build">
+    <ItemGroup>
+      <XamlResources Include="../TokensLimitsExtension/bin/$(Platform)/$(Configuration)/$(TargetFramework)/$(RuntimeIdentifier)/resources.pri" />
+      <XamlComponents Include="../TokensLimitsExtension/bin/$(Platform)/$(Configuration)/$(TargetFramework)/$(RuntimeIdentifier)/Settings/*.xbf" />
+    </ItemGroup>
+    <Copy SourceFiles="@(XamlResources)" DestinationFolder="$(OutDir)" />
+    <Copy SourceFiles="@(XamlComponents)" DestinationFolder="$(OutDir)Settings" />
+  </Target>
+</Project>

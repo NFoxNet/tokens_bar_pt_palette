@@ -16,6 +16,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     private readonly IUsageProviderStateSource? _stateSource;
     private readonly UsageRefreshCoordinator? _coordinator;
     private readonly ILocalizationService _localization;
+    private readonly Func<string>? _metricSelection;
     private readonly CopyTextCommand _diagnosticsCommand;
     private readonly CommandContextItem _refreshMoreCommand;
     private readonly CommandContextItem? _dashboardMoreCommand;
@@ -24,13 +25,14 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     private int _isActive = 1;
     private int _disposed;
 
-    public UsageDockBandItem(IUsageProvider provider, Action<string>? logger = null, ICommand? detailsCommand = null, IUsageRefreshSettings? refreshSettings = null, ILocalizationService? localization = null, UsageRefreshCoordinator? coordinator = null)
+    public UsageDockBandItem(IUsageProvider provider, Action<string>? logger = null, ICommand? detailsCommand = null, IUsageRefreshSettings? refreshSettings = null, ILocalizationService? localization = null, UsageRefreshCoordinator? coordinator = null, Func<string>? metricSelection = null)
         : base(detailsCommand ?? new NoOpCommand { Id = $"com.tokenslimits.provider.{provider?.Descriptor.Id}.dock", Name = provider?.Descriptor.DisplayName ?? "Usage limits" })
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _stateSource = provider as IUsageProviderStateSource;
         _coordinator = coordinator;
         _localization = localization ?? InvariantLocalizationService.Instance;
+        _metricSelection = metricSelection;
         Title = _provider.Descriptor.DisplayName;
         Subtitle = _localization.GetString("details.loading", "Loading…");
         DockSubtitle = Subtitle;
@@ -56,6 +58,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
     }
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+    public string ProviderId => _provider.Descriptor.Id;
     internal bool IsActive => Volatile.Read(ref _isActive) != 0;
     public string DockSubtitle { get; private set => SetProperty(ref field, value); } = string.Empty;
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
@@ -154,7 +157,7 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         UpdateDiagnostics();
         if (state.Snapshot is { } snapshot)
         {
-            var subtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization);
+            var subtitle = FormatSnapshotSubtitle(snapshot);
             if (state.IsStale)
             {
                 subtitle = string.Concat(subtitle, " · ", GetStatusWarning(state));
@@ -171,7 +174,11 @@ public sealed partial class UsageDockBandItem : ListItem, IDisposable
         }
         else ApplyUnavailable(state);
     }
-    private void ApplySnapshot(UsageSnapshot snapshot) { if (IsDisposed || !IsActive) return; Title = snapshot.ProviderDisplayName; DockSubtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization); Subtitle = DockSubtitle; }
+    private void ApplySnapshot(UsageSnapshot snapshot) { if (IsDisposed || !IsActive) return; Title = snapshot.ProviderDisplayName; DockSubtitle = FormatSnapshotSubtitle(snapshot); Subtitle = DockSubtitle; }
+    private string FormatSnapshotSubtitle(UsageSnapshot snapshot)
+        => _metricSelection is null
+            ? UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization)
+            : UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, _localization, _metricSelection());
     private void ApplyUnavailable(UsageProviderState? state = null)
     {
         if (IsDisposed || !IsActive) return;

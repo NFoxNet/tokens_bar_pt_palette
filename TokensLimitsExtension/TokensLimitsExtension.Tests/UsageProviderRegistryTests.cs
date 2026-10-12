@@ -42,6 +42,7 @@ public sealed class UsageProviderRegistryTests
             "pro",
             false)
         {
+            AccountScope = new string('A', 64),
             AdditionalRateLimits =
             [
                 new CodexAdditionalRateLimit(
@@ -54,6 +55,7 @@ public sealed class UsageProviderRegistryTests
 
         var snapshot = await adapter.GetUsageSnapshotAsync();
 
+        Assert.Equal(codexSnapshot.AccountScope, snapshot.AccountScope);
         Assert.Equal("codex", snapshot.ProviderId);
         Assert.Equal("Codex", snapshot.ProviderDisplayName);
         Assert.Equal(38, snapshot.PrimaryWindow!.UsedPercent);

@@ -1,11 +1,14 @@
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using System.Globalization;
+using System.Reflection;
 using TokensLimitsExtension;
 using TokensLimitsExtension.Core.Models;
 using TokensLimitsExtension.Core.Providers;
 using TokensLimitsExtension.Core.Services;
 using TokensLimitsExtension.Localization;
+using TokensLimitsExtension.Settings;
+using System.Collections;
 
 namespace TokensLimitsExtension.IntegrationTests;
 
@@ -168,6 +171,142 @@ public sealed class NativeUsageUxTests
         Assert.Contains("55%", dock.Subtitle, StringComparison.Ordinal);
         Assert.Equal(dock.Subtitle, dock.DockSubtitle);
         Assert.Equal(1, itemsChanged);
+    }
+
+    [Fact]
+    public async Task DockPresentationChangesKeepOverviewRefreshesAndProviderPinsStable()
+    {
+        using var testDirectory = new TestDirectory();
+        using var settings = new TokensLimitsSettings(testDirectory.Path);
+        var ampToggle = GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.providers.amp.enabled");
+        ampToggle.Value = true;
+        ApplySettingsChange(settings);
+        var codex = new CountingProvider("codex", "Codex");
+        var amp = new CountingProvider("amp", "Amp");
+        using var registry = new UsageProviderRegistry([codex, amp]);
+        using var commands = new TokensLimitsExtensionCommandsProvider(null, registry, settings, settingsDrivenProviders: true);
+        var caches = GetPrivateField<UsageSnapshotCache[]>(commands, "_snapshotCaches");
+        await Task.WhenAll(caches.Select(cache => cache.RefreshAsync(force: true)));
+
+        var codexCalls = codex.CallCount;
+        var ampCalls = amp.CallCount;
+        GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.dock.providers.codex.visible").Value = false;
+        GetRegisteredSetting<TextSetting>(settings, "tokensLimits.dock.providerOrder").Value = "amp,codex,amp,unknown";
+        GetRegisteredSetting<ChoiceSetSetting>(settings, "tokensLimits.dock.metric").Value = "balance";
+        ApplySettingsChange(settings);
+
+        var band = Assert.Single(commands.GetDockBands());
+        Assert.Equal(TokensLimitsDockBandPage.StableId, band.Command!.Id);
+        var dockPage = Assert.IsType<TokensLimitsDockBandPage>(band.Command);
+        Assert.Collection(dockPage.GetItems(), item => Assert.Equal("Amp", item.Title));
+        Assert.Equal(2, Assert.IsType<UsageOverviewPage>(Assert.Single(commands.TopLevelCommands()).Command).GetItems().Length);
+        Assert.Equal(codexCalls, codex.CallCount);
+        Assert.Equal(ampCalls, amp.CallCount);
+
+        var codexPin = commands.GetCommandItem("com.tokenslimits.codex.limits.dock");
+        Assert.Equal("com.tokenslimits.codex.limits.dock", codexPin?.Command?.Id);
+        var ampPin = commands.GetCommandItem("com.tokenslimits.provider.amp.limits.dock");
+        Assert.Equal("com.tokenslimits.provider.amp.limits.dock", ampPin?.Command?.Id);
+
+        GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.dock.summaryEnabled").Value = true;
+        ApplySettingsChange(settings);
+        var summaryBand = Assert.Single(commands.GetDockBands());
+        Assert.Equal(TokensLimitsDockBandPage.StableId, summaryBand.Command!.Id);
+        var summary = Assert.IsType<UsageSummaryPage>(summaryBand.Command);
+        var body = Assert.IsType<MarkdownContent>(Assert.Single(summary.GetContent())).Body;
+        Assert.Contains("Amp", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Codex", body, StringComparison.Ordinal);
+        Assert.True(HasStateChangedSubscriber(Assert.Single(caches, cache => cache.Descriptor.Id == "amp"), summary));
+        Assert.False(HasStateChangedSubscriber(Assert.Single(caches, cache => cache.Descriptor.Id == "codex"), summary));
+        Assert.Equal(codexCalls, codex.CallCount);
+        Assert.Equal(ampCalls, amp.CallCount);
+
+        GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.dock.summaryEnabled").Value = false;
+        ApplySettingsChange(settings);
+        Assert.IsType<TokensLimitsDockBandPage>(Assert.Single(commands.GetDockBands()).Command);
+        Assert.False(HasStateChangedSubscriber(Assert.Single(caches, cache => cache.Descriptor.Id == "amp"), summary));
+    }
+
+    [Fact]
+    public async Task DockSummaryUsesCachedSafeSourceAndDisposesItsSubscriptions()
+    {
+        var provider = new SnapshotProvider(
+            DateTimeOffset.UtcNow,
+            source: "https://private-user:private-password@provider.example/usage?access_token=test-token#session");
+        using var cache = new UsageSnapshotCache(provider);
+        await cache.RefreshAsync(force: true);
+        var calls = provider.GetUsageSnapshotCallCount;
+        var summary = new UsageSummaryPage(InvariantLocalizationService.Instance, () => "all");
+        summary.UpdateProviders([cache]);
+
+        var body = Assert.IsType<MarkdownContent>(Assert.Single(summary.GetContent())).Body;
+
+        Assert.Contains("provider.example/usage", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-user", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-password", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("access_token", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("test-token", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("session", body, StringComparison.Ordinal);
+        Assert.True(HasStateChangedSubscriber(cache, summary));
+        _ = summary.GetContent();
+        Assert.Equal(calls, provider.GetUsageSnapshotCallCount);
+
+        summary.Dispose();
+
+        Assert.False(HasStateChangedSubscriber(cache, summary));
+    }
+
+    [Fact]
+    public async Task DockSummaryRedactsLocalPathsAndEscapesMarkdown()
+    {
+        using var cache = new UsageSnapshotCache(new SnapshotProvider(
+            DateTimeOffset.UtcNow,
+            source: @"C:\Users\Private\usage_[secret](javascript:alert(1)).json"));
+        await cache.RefreshAsync(force: true);
+        using var summary = new UsageSummaryPage(InvariantLocalizationService.Instance, () => "all");
+        summary.UpdateProviders([cache]);
+
+        var body = Assert.IsType<MarkdownContent>(Assert.Single(summary.GetContent())).Body;
+
+        Assert.Contains(UsageOverviewPage.EscapeDetailsText("usage_[secret](javascript:alert(1)).json"), body, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\Users\Private", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DockSummaryPublishesWhenMetricChangesWithoutProviderChanges()
+    {
+        using var cache = new UsageSnapshotCache(new SnapshotProvider(DateTimeOffset.UtcNow));
+        await cache.RefreshAsync(force: true);
+        var metric = "all";
+        using var summary = new UsageSummaryPage(InvariantLocalizationService.Instance, () => metric);
+        summary.UpdateProviders([cache]);
+        var itemsChanged = 0;
+        summary.ItemsChanged += (_, _) => itemsChanged++;
+
+        metric = "secondary";
+        summary.UpdateProviders([cache]);
+
+        Assert.Equal(1, itemsChanged);
+        Assert.Contains("Not available", Assert.IsType<MarkdownContent>(Assert.Single(summary.GetContent())).Body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en", "Not available")]
+    [InlineData("ru", "Недоступно")]
+    public void DockShowsLocalizedUnavailableTextForMissingSelectedMetric(string language, string expected)
+    {
+        using var userDirectory = new TestDirectory();
+        var localization = new JsonLocalizationService(
+            Path.Combine(AppContext.BaseDirectory, "lang"), userDirectory.Path, language);
+        var snapshot = CreateSnapshot(DateTimeOffset.UtcNow) with
+        {
+            PrimaryWindow = null,
+            SecondaryWindow = null,
+        };
+
+        var subtitle = UsageDisplayFormatter.FormatDockBandSubtitle(snapshot, localization, "balance");
+
+        Assert.Equal(expected, subtitle);
     }
 
     [Fact]
@@ -341,14 +480,11 @@ public sealed class NativeUsageUxTests
         Assert.Equal("Нет включённых провайдеров", Assert.IsType<ListItem>(Assert.Single(overview.GetItems())).Title);
     }
 
-    private sealed class CountingProvider : IUsageProvider
+    private sealed class CountingProvider(string providerId = "ux-test", string displayName = "UX Test") : IUsageProvider
     {
         private int _callCount;
 
-        public UsageProviderDescriptor Descriptor { get; } = new(
-            "ux-test",
-            "UX Test",
-            dashboardUrl: "http://provider.example/dashboard");
+        public UsageProviderDescriptor Descriptor { get; } = new(providerId, displayName, dashboardUrl: "http://provider.example/dashboard");
 
         public TaskCompletionSource SecondCallStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -357,7 +493,7 @@ public sealed class NativeUsageUxTests
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
         {
             if (Interlocked.Increment(ref _callCount) == 2) SecondCallStarted.TrySetResult();
-            return Task.FromResult(CreateSnapshot(DateTimeOffset.UtcNow));
+            return Task.FromResult(CreateSnapshot(DateTimeOffset.UtcNow) with { ProviderId = providerId, ProviderDisplayName = displayName });
         }
     }
 
@@ -367,10 +503,15 @@ public sealed class NativeUsageUxTests
         string? source = null,
         string? plan = null) : IUsageProvider
     {
+        private int _usageSnapshotCallCount;
         public UsageProviderDescriptor Descriptor { get; } = new("ux-test", "UX Test", dashboardUrl: dashboardUrl);
+        public int GetUsageSnapshotCallCount => Volatile.Read(ref _usageSnapshotCallCount);
 
         public Task<UsageSnapshot> GetUsageSnapshotAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(CreateSnapshot(fetchedAt, plan, source));
+        {
+            Interlocked.Increment(ref _usageSnapshotCallCount);
+            return Task.FromResult(CreateSnapshot(fetchedAt, plan, source));
+        }
     }
 
     private sealed class ValidatableProvider : IUsageProvider, IUsageProviderConnectionValidator
@@ -466,6 +607,38 @@ public sealed class NativeUsageUxTests
             false) with { FetchedAt = fetchedAt, Source = source };
 
     private static string ContextTitle(IContextItem item) => ((CommandContextItem)item).Title;
+
+    private static T GetRegisteredSetting<T>(TokensLimitsSettings settings, string key)
+        where T : class
+    {
+        var field = typeof(Microsoft.CommandPalette.Extensions.Toolkit.Settings).GetField(
+            "_settings",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var registeredSettings = Assert.IsAssignableFrom<IDictionary>(field?.GetValue(settings.Settings));
+        return Assert.IsType<T>(registeredSettings[key]);
+    }
+
+    private static void ApplySettingsChange(TokensLimitsSettings settings)
+    {
+        var method = typeof(TokensLimitsSettings).GetMethod("OnSettingsChanged", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method!.Invoke(settings, [settings.Settings, null]);
+    }
+
+    private static T GetPrivateField<T>(object instance, string name)
+    {
+        var field = instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsType<T>(field!.GetValue(instance));
+    }
+
+    private static bool HasStateChangedSubscriber(UsageSnapshotCache cache, object target)
+    {
+        var field = typeof(UsageSnapshotCache).GetField("StateChanged", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var handlers = field!.GetValue(cache) as Delegate;
+        return handlers?.GetInvocationList().Any(handler => ReferenceEquals(handler.Target, target)) ?? false;
+    }
 
     private sealed class TestDirectory : IDisposable
     {

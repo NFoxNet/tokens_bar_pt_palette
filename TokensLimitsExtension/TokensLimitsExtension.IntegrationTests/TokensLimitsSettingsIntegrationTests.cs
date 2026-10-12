@@ -49,10 +49,16 @@ public sealed class TokensLimitsSettingsIntegrationTests
         Assert.IsType<JsonLocalizationService>(settings.Localization).ApplyPreference("en");
 
         var refreshInterval = GetRegisteredSetting<TextSetting>(settings, "tokensLimits.refreshInterval");
+        var dockSummary = GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.dock.summaryEnabled");
+        var dockVisibility = GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.dock.providers.codex.visible");
+        var dockMetric = GetRegisteredSetting<ChoiceSetSetting>(settings, "tokensLimits.dock.metric");
         var codexToggle = GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.providers.codex.enabled");
         var deepSeekApiKey = GetRegisteredSetting<TextSetting>(settings, "tokensLimits.providers.deepseek.apiKey");
 
         Assert.Equal("Refresh interval", refreshInterval.Label);
+        Assert.Equal("Show a summary in the Dock", dockSummary.Label);
+        Assert.Equal("Show Codex in the Dock", dockVisibility.Label);
+        Assert.Equal("Dock metric", dockMetric.Label);
         Assert.Equal("Enable Codex", codexToggle.Label);
         Assert.Equal("API key", deepSeekApiKey.Label);
         Assert.Contains("environment variable", deepSeekApiKey.Description, StringComparison.OrdinalIgnoreCase);
@@ -72,8 +78,56 @@ public sealed class TokensLimitsSettingsIntegrationTests
 
         Assert.IsType<JsonLocalizationService>(settings.Localization).ApplyPreference("ru");
         Assert.Equal("Частота обновления", refreshInterval.Label);
+        Assert.Equal("Показывать сводку в Dock", dockSummary.Label);
+        Assert.Equal("Показывать Codex в Dock", dockVisibility.Label);
+        Assert.Equal("Показатель Dock", dockMetric.Label);
         Assert.Equal("Включить Codex", codexToggle.Label);
         Assert.Equal("API-ключ", deepSeekApiKey.Label);
+    }
+
+    [Fact]
+    public void DockSettingsDefaultToExistingProviderButtonsAndExposePresentationOptions()
+    {
+        using var storage = new TestDirectory();
+        using var settings = new TokensLimitsSettings(storage.Path);
+
+        Assert.Equal(false, settings.GetType().GetProperty("DockSummaryEnabled")?.GetValue(settings));
+        Assert.Equal("all", settings.GetType().GetProperty("DockMetric")?.GetValue(settings));
+        Assert.True((bool?)settings.GetType().GetMethod("IsDockVisible")?.Invoke(settings, ["codex"]));
+        Assert.IsAssignableFrom<IReadOnlyList<string>>(
+            settings.GetType().GetProperty("DockProviderOrder")?.GetValue(settings));
+    }
+
+    [Fact]
+    public void DockProviderOrderIgnoresUnknownAndDuplicateIdsAndAppendsNewProviders()
+    {
+        using var storage = new TestDirectory();
+        using var settings = new TokensLimitsSettings(storage.Path);
+        var orderSetting = GetRegisteredSetting<TextSetting>(settings, "tokensLimits.dock.providerOrder");
+        orderSetting.Value = "deepseek,unknown,deepseek,codex";
+        ApplySettingsChange(settings);
+
+        var order = Assert.IsAssignableFrom<IReadOnlyList<string>>(
+            settings.GetType().GetProperty("DockProviderOrder")?.GetValue(settings));
+        Assert.Equal("deepseek", order[0]);
+        Assert.Equal("codex", order[1]);
+        Assert.Equal(UsageProviderDescriptorRegistry.All.Count, order.Count);
+        Assert.Equal(order.Count, order.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.DoesNotContain("unknown", order, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SettingsChangeReportsProviderConfigurationChangedAfterValueIsEdited()
+    {
+        using var storage = new TestDirectory();
+        using var settings = new TokensLimitsSettings(storage.Path);
+        HashSet<string>? changedProviderIds = null;
+        settings.ProviderConfigurationChanged += (_, args) => changedProviderIds = args.ProviderIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        GetRegisteredSetting<TextSetting>(settings, "tokensLimits.providers.amp.baseUrl").Value = "https://example.test";
+
+        ApplySettingsChange(settings);
+
+        Assert.Contains("amp", changedProviderIds ?? [], StringComparer.OrdinalIgnoreCase);
     }
 
     private static T GetRegisteredSetting<T>(TokensLimitsSettings settings, string key)
@@ -84,6 +138,15 @@ public sealed class TokensLimitsSettingsIntegrationTests
             BindingFlags.Instance | BindingFlags.NonPublic);
         var registeredSettings = Assert.IsAssignableFrom<IDictionary>(field?.GetValue(settings.Settings));
         return Assert.IsType<T>(registeredSettings[key]);
+    }
+
+    private static void ApplySettingsChange(TokensLimitsSettings settings)
+    {
+        var method = typeof(TokensLimitsSettings).GetMethod(
+            "OnSettingsChanged",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method!.Invoke(settings, [settings.Settings, null]);
     }
 
     private sealed class TestDirectory : IDisposable
