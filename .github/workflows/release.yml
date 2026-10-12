@@ -61,6 +61,18 @@ jobs:
         run: |
           $password = ConvertTo-SecureString $env:MSIX_CERTIFICATE_PASSWORD -AsPlainText -Force
           .\scripts\Build-Release.ps1 -CertificatePath $env:PFX_PATH -CertificatePassword $password
+      - name: Install x64 framework dependency on the disposable runner
+        run: |
+          $framework = @(Get-ChildItem 'artifacts/release/x64' -Recurse -Filter 'Microsoft.WindowsAppRuntime.1.8.msix' | Where-Object { $_.Directory.Name -eq 'x64' })
+          if ($framework.Count -ne 1) { throw 'Expected one x64 Windows App Runtime framework package.' }
+          Add-AppxPackage -Path $framework[0].FullName
+      - name: Check native settings Release startup
+        run: |
+          dotnet restore 'TokensLimitsExtension/TokensLimitsExtension.NativeSmokeTests/TokensLimitsExtension.NativeSmokeTests.csproj' --locked-mode -p:Platform=x64
+          dotnet build 'TokensLimitsExtension/TokensLimitsExtension.NativeSmokeTests/TokensLimitsExtension.NativeSmokeTests.csproj' --configuration Debug -p:Platform=x64 --no-restore
+          [xml]$manifest = Get-Content 'TokensLimitsExtension/TokensLimitsExtension/Package.appxmanifest'
+          $version = $manifest.Package.Identity.Version
+          .\scripts\Test-NativeSettingsReleaseStartup.ps1 -PackagePath "artifacts/release/TokensLimitsExtension_${version}_x64.msix" -SmokeDirectory 'TokensLimitsExtension/TokensLimitsExtension.NativeSmokeTests/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64' -OutputDirectory "$env:RUNNER_TEMP/native-release-startup"
       - name: Validate release artifacts
         run: |
           $ErrorActionPreference = 'Stop'
@@ -133,6 +145,7 @@ jobs:
       run:
         shell: pwsh
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download validated release payload
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -143,7 +156,8 @@ jobs:
         with:
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false
+          body_path: TokensLimitsExtension/doc/release-notes-v0.0.6.5.md
           files: |
             artifacts/release/*.msix
             artifacts/release/*.cer
