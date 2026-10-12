@@ -65,7 +65,8 @@ jobs:
         run: |
           $framework = @(Get-ChildItem 'artifacts/release/x64' -Recurse -Filter 'Microsoft.WindowsAppRuntime.1.8.msix' | Where-Object { $_.Directory.Name -eq 'x64' })
           if ($framework.Count -ne 1) { throw 'Expected one x64 Windows App Runtime framework package.' }
-          Add-AppxPackage -Path $framework[0].FullName
+          $installed = @(Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.1.8' | Where-Object { $_.Architecture -eq 'X64' -and [version]$_.Version -ge [version]'8000.994.2142.0' })
+          if ($installed.Count -eq 0) { Add-AppxPackage -Path $framework[0].FullName }
       - name: Check native settings Release startup
         run: |
           dotnet restore 'TokensLimitsExtension/TokensLimitsExtension.NativeSmokeTests/TokensLimitsExtension.NativeSmokeTests.csproj' --locked-mode -p:Platform=x64
