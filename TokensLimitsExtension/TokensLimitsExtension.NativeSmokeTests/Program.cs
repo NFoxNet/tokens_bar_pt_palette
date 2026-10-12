@@ -17,6 +17,13 @@ try
     void OnUi(Action action) => invoke.Invoke(host, [action]);
     NativeSettingsWindow? first = null;
     host.Open();
+    if (args.Contains("--startup-only", StringComparer.Ordinal))
+    {
+        host.Open();
+        host.Dispose();
+        Console.WriteLine("PASS: package WinUI startup, repeated activation and shutdown.");
+        return;
+    }
     Thread.Sleep(100);
     OnUi(() =>
     {

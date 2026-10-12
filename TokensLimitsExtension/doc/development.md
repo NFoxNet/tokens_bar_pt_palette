@@ -208,3 +208,15 @@ dotnet run --project .\TokensLimitsExtension.NativeSmokeTests\TokensLimitsExtens
 Этот opt-in проект исключён из обычной solution: он открывает настоящее окно, раскрывает пять групп и карточку провайдера, проверяет локальный логотип/поля, границы полей при размере 640×480, повторную активацию, закрытие/повторное открытие и завершение STA-потока. Используется временный каталог настроек; пользовательские файлы и установленный MSIX не меняются. Тест включает первый layout-проход: одного создания контролов недостаточно для проверки их ресурсов и стилей. Он не подтверждает запуск через реальный PowerToys COM host, качество анимации, клавиатуру, high contrast или ARM64 runtime.
 
 Расширение использует framework-dependent Windows App Runtime 1.8; он должен быть установлен для запуска MSIX. См. [официальное развёртывание Windows App SDK](https://learn.microsoft.com/windows/apps/windows-app-sdk/deploy-packaged-apps). Main/Singleton службы не используются: их Deployment Manager auto-initializer отключён [по рекомендации Microsoft](https://learn.microsoft.com/windows/apps/package-and-deploy/project-properties). Framework dependency остаётся в MSIX manifest.
+### Release WinUI startup regression
+
+Release packaging must preserve `WinRT.Runtime` via `TrimmerRootAssembly`. Trimming its runtime interop paths caused `Application.Start` to fail-fast with E_POINTER in 0.0.6.4; Debug-only UI tests did not detect it. Keep trimming enabled for other libraries.
+
+Run the opt-in NativeSmokeTests with `--startup-only` against extracted Release application, Core, toolkit, Microsoft.WinUI, Microsoft.Windows.SDK.NET and WinRT.Runtime DLLs plus the package PRI/resources. This mode uses only the production open/activate/shutdown path; detailed control inspection needs WinUI getters that the product linker can legitimately remove. The unpackaged test host retains its own .NET/bootstrap files. It does not prove live Command Palette activation or an installed upgrade.
+From the Git root after building NativeSmokeTests, invoke:
+
+```powershell
+./scripts/Test-NativeSettingsReleaseStartup.ps1 -PackagePath ./artifacts/release-0.0.6.5/TokensLimitsExtension_0.0.6.5_x64.msix -SmokeDirectory ./TokensLimitsExtension/TokensLimitsExtension.NativeSmokeTests/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64 -OutputDirectory ./TokensLimitsExtension/artifacts-local-feature-ux/release-startup-check
+```
+
+Use a fresh output directory and a smoke host compiled against the same application version.
