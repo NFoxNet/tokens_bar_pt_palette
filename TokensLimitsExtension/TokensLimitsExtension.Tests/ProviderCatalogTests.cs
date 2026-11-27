@@ -1064,8 +1064,8 @@ public sealed class ProviderCatalogTests
     [Fact]
     public async Task BoundedProcessRunnerStopsAnOversizedCliOutput()
     {
-        var powershell = GetWindowsPowerShellPath();
-        if (powershell is null)
+        var commandPrompt = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        if (!OperatingSystem.IsWindows())
         {
             return;
         }
@@ -1075,8 +1075,8 @@ public sealed class ProviderCatalogTests
             maxOutputCharacters: 1_024);
 
         await Assert.ThrowsAsync<UsageProviderRequestException>(() => runner.RunAsync(
-            powershell,
-            ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write(('x' * 4096))"],
+            commandPrompt,
+            ["/d", "/c", "echo", new string('x', 4096)],
             CancellationToken.None));
     }
 
