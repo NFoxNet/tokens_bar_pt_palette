@@ -13,24 +13,29 @@ internal static class ProviderIconCatalog
 {
     private static readonly HashSet<string> CodexBarIcons = new(StringComparer.OrdinalIgnoreCase)
     {
-        "abacus", "aiand", "alibaba", "amp", "antigravity", "bedrock", "chutes",
-        "claude", "clawrouter", "codebuff", "codex", "commandcode", "copilot", "crof",
+        "abacus", "aiand", "alibaba", "amp", "antigravity", "augment", "bedrock", "chutes",
+        "claude", "clawrouter", "clinepass", "codebuff", "codex", "commandcode", "copilot", "crof",
         "cursor", "deepgram", "deepinfra", "deepseek", "devin", "doubao", "elevenlabs",
         "factory", "fireworks", "gemini", "grok", "groq", "ibmbob", "jetbrains", "kilo",
         "kimi", "kiro", "litellm", "llmproxy", "longcat", "manus", "mimo", "minimax",
-        "mistral", "neuralwatt", "notion", "opencode", "opencodego", "openrouter",
+        "mistral", "neuralwatt", "notion", "ollama", "opencode", "opencodego", "openrouter",
         "perplexity", "poe", "qoder", "qwencloud", "sakana", "stepfun", "sub2api",
         "synthetic", "t3chat", "venice", "warp", "wayfinder", "windsurf", "xai", "zai",
-        "zed", "zenmux", "zoommate",
+        "vertexai", "zed", "zenmux", "zoommate",
     };
 
     public static IconInfo For(string providerId) => IconHelpers.FromRelativePath(PathFor(providerId));
 
     public static string PathFor(string providerId)
     {
-        var assetId = providerId.Equals("alibabatokenplan", StringComparison.OrdinalIgnoreCase)
-            ? "alibaba"
-            : providerId;
+        var assetId = providerId.ToLowerInvariant() switch
+        {
+            "alibabatokenplan" => "alibaba",
+            "openai" => "codex",
+            "azureopenai" => "codex",
+            "moonshot" => "kimi",
+            var id => id,
+        };
         return CodexBarIcons.Contains(assetId)
             ? $"Assets\\Providers\\ProviderIcon-{assetId}.64.png"
             : "Assets\\Providers\\ProviderIcon-generic.64.png";

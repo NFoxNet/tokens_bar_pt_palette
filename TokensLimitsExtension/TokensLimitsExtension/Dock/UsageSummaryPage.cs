@@ -20,7 +20,7 @@ public sealed partial class UsageSummaryPage : ContentPage, IDisposable
     {
         _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _metricSelection = metricSelection ?? throw new ArgumentNullException(nameof(metricSelection));
-        Id = TokensLimitsDockBandPage.StableId;
+        Id = "com.tokenslimits.dock.summary";
         Title = _localization.GetString("app.title", "Tokens Limits");
         Name = _localization.GetString("dock.summary.title", "Usage summary");
         Icon = IconHelpers.FromRelativePath("Assets\\StoreLogo.png");

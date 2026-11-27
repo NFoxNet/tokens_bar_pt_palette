@@ -209,7 +209,7 @@ public static class UsageProviderDescriptorRegistry
             "openai",
             "OpenAI",
             UsageProviderAuthKind.ApiKey,
-            "https://platform.openai.com/usage",
+            "https://platform.openai.com/account/billing",
             settings:
             [
                 ApiKey("OPENAI_API_KEY"),
@@ -219,7 +219,7 @@ public static class UsageProviderDescriptorRegistry
                 Project(),
                 Plain("historyDays", "Дней истории", "Сколько последних дней запрашивать в Usage API OpenAI (1–365).", "OPENAI_HISTORY_DAYS", "30"),
             ],
-            sourceDescription: "Официальные OpenAI Usage/Costs API; для организации обычно требуется Admin API-ключ.") ,
+            sourceDescription: "Расходы и использование из OpenAI Admin API. Остаток кредитов доступен в биллинге организации.") ,
         new(
             "opencode",
             "OpenCode",

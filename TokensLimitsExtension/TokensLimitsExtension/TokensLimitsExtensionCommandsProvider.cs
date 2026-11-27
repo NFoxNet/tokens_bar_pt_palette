@@ -21,7 +21,7 @@ namespace TokensLimitsExtension;
 public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 {
     private readonly ICommandItem[] _commands;
-    private ICommandItem[] _dockBands;
+    private readonly ICommandItem[] _dockBands;
     private readonly TokensLimitsSettings _settings;
     private readonly ICommand _settingsPageCommand;
     private readonly UsageProviderRegistry _providerRegistry;
@@ -36,7 +36,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
     private readonly Dictionary<string, UsageDockBandItem> _dockBandItemsByProviderId = new(StringComparer.OrdinalIgnoreCase);
     private readonly UsageOverviewPage _overviewPage;
     private readonly TokensLimitsDockBandPage _dockBandPage;
-    private UsageSummaryPage? _summaryPage;
+    private readonly UsageSummaryPage _summaryPage;
+    private readonly ListItem _summaryDockItem;
     private readonly HttpClient? _ownedProviderHttpClient;
     private readonly bool _settingsDrivenProviders;
     private readonly object _rebuildGate = new();
@@ -102,6 +103,8 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             _settingsPageCommand);
         _setupPage = new ProviderSetupPage(_settings, [], _refreshCoordinator);
         _dockBandPage = new TokensLimitsDockBandPage(_settings.Localization);
+        _summaryPage = new UsageSummaryPage(_settings.Localization, () => _settings.DockMetric);
+        _summaryDockItem = new ListItem(_summaryPage) { Icon = _summaryPage.Icon };
         _dockBands =
         [
             new CommandItem(_dockBandPage)
@@ -207,8 +210,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
         }
 
         _dockBandPage.Dispose();
-        _summaryPage?.Dispose();
-        _summaryPage = null;
+        _summaryPage.Dispose();
         _overviewPage.Dispose();
 
         _refreshCoordinator.Dispose();
@@ -318,8 +320,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             hasSameComposition = _hasBuiltComposition
                 && _enabledProviderIds.SequenceEqual(enabledIds, StringComparer.OrdinalIgnoreCase)
                 && _pages.All(page => page.IsActive)
-                && _dockPages.All(page => page.IsActive)
-                && _dockBandItems.All(item => item.IsActive);
+                && _dockPages.All(page => page.IsActive);
         }
 
         if (hasSameComposition)
@@ -466,7 +467,6 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
 
     private void UpdateDockPresentation(IReadOnlyList<UsageSnapshotCache> enabledCaches)
     {
-        var wasSummaryMode = _summaryPage is not null;
         UsageDockBandItem[] dockItems;
         lock (_surfaceGate)
         {
@@ -494,31 +494,15 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
                 item.SetActive(false);
             }
 
-            _dockBandPage.UpdateItems([]);
-            UsageSummaryPage summary;
-            lock (_surfaceGate)
-            {
-                summary = _summaryPage ??= new UsageSummaryPage(_settings.Localization, () => _settings.DockMetric);
-            }
-            summary.UpdateProviders(visibleCaches);
-            lock (_surfaceGate)
-            {
-                _dockBands = [CreateDockBandCommand(summary, summaryMode: true)];
-            }
-            if (!wasSummaryMode)
-            {
-                RaiseItemsChanged();
-            }
+            _summaryPage.UpdateProviders(visibleCaches);
+            _summaryDockItem.Title = _settings.Localization.GetString("app.title", "Tokens Limits");
+            _summaryDockItem.Subtitle = _settings.Localization.GetString("dock.summary.open", "Open the cached provider summary.");
+            // The host holds the band and its ListPage across mode changes.
+            _dockBandPage.UpdateItems([_summaryDockItem]);
             return;
         }
 
-        UsageSummaryPage? oldSummary;
-        lock (_surfaceGate)
-        {
-            oldSummary = _summaryPage;
-            _summaryPage = null;
-        }
-        oldSummary?.Dispose();
+        _summaryPage.UpdateProviders([]);
 
         var visibleIds = visibleCaches.Select(cache => cache.Descriptor.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var item in dockItems)
@@ -530,25 +514,7 @@ public partial class TokensLimitsExtensionCommandsProvider : CommandProvider
             }
         }
         _dockBandPage.UpdateItems(visibleItems);
-        lock (_surfaceGate)
-        {
-            _dockBands = [CreateDockBandCommand(_dockBandPage, summaryMode: false)];
-        }
-        if (wasSummaryMode)
-        {
-            RaiseItemsChanged();
-        }
     }
-
-    private CommandItem CreateDockBandCommand(ICommand page, bool summaryMode)
-        => new CommandItem(page)
-        {
-            Title = _settings.Localization.GetString("app.title", "Tokens Limits"),
-            Subtitle = _settings.Localization.GetString(
-                summaryMode ? "dock.summary.open" : "dock.show",
-                summaryMode ? "Open the cached provider summary." : "Show enabled provider limits in Dock"),
-            Icon = _dockBandPage.Icon,
-        };
 
     private void ProviderConfigurationOnChanged(object? sender, UsageProviderConfigurationChangedEventArgs args)
     {

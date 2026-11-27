@@ -164,6 +164,10 @@
     "sha256": "1ffa05c609d3ace7b3f1de7595413b0f8a2bfb02c50473a5c2fadf192a101a4f"
   },
   {
+    "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-ollama.svg",
+    "sha256": "54554bc4a31fa1a1fbf34b634e19438fb8ff42a2b7d4279958b9f21f905d611f"
+  },
+  {
     "sourcePath": "Sources/CodexBar/Resources/ProviderIcon-opencode.svg",
     "sha256": "327f9c9070cc3800e1df7a0a35c1f655f1a2d1b22f9b406b792e62b034ed4e58"
   },

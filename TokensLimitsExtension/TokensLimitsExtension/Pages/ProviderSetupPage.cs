@@ -96,6 +96,7 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
         {
             Title = title,
             Subtitle = subtitle,
+            Icon = ProviderIconCatalog.For(descriptor.Id),
             Details = new Details
             {
                 Title = title,
@@ -118,7 +119,9 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
 
         if (HasMissingAuthentication(descriptor))
         {
-            return localization.GetString("setup.status.authRequired", "Authentication required");
+            return descriptor.Id == "openai"
+                ? localization.GetString("status.openaiAdminKeyRequired", "OpenAI Admin API key required")
+                : localization.GetString("setup.status.authRequired", "Authentication required");
         }
 
         if (HasMissingConfiguration(descriptor))
@@ -329,7 +332,7 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
     {
         if (descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase))
         {
-            return [];
+            return ["adminApiKey"];
         }
 
         if (descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)) return ["sessionBundle"];
@@ -360,11 +363,7 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
     }
 
     private static string[] GetAuthenticationOptionKeys(UsageProviderDescriptor descriptor)
-        => descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)
-            ? descriptor.Settings.Where(field => field.Key.Equals("apiKey", StringComparison.OrdinalIgnoreCase)
-                    || field.Key.Equals("adminApiKey", StringComparison.OrdinalIgnoreCase))
-                .Select(field => field.Key).ToArray()
-            : descriptor.AuthKind switch
+        => descriptor.AuthKind switch
         {
             UsageProviderAuthKind.ApiKeyOrCookie => descriptor.Settings
                 .Where(field => field.Key.Equals("apiKey", StringComparison.OrdinalIgnoreCase)
@@ -380,7 +379,7 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
 
     private static string[] GetRequiredAuthenticationFieldKeys(UsageProviderDescriptor descriptor)
     {
-        if (descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)) return [];
+        if (descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)) return ["adminApiKey"];
         if (descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)) return ["sessionBundle"];
         return descriptor.AuthKind switch
         {
@@ -408,7 +407,7 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
     private static string AuthLocalizationKey(UsageProviderDescriptor descriptor)
     {
         if (descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)) return "setup.auth.sessionBundle";
-        if (descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)) return "setup.auth.apiKeyOrAdminApiKey";
+        if (descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)) return "setup.auth.adminApiKey";
         return descriptor.AuthKind switch
         {
             UsageProviderAuthKind.ApiKey => "setup.auth.apiKey",
@@ -424,7 +423,7 @@ public sealed partial class ProviderSetupPage : ListPage, IDisposable
     private static string AuthFallback(UsageProviderDescriptor descriptor) => descriptor.Id.Equals("windsurf", StringComparison.OrdinalIgnoreCase)
         ? "Windsurf session bundle"
         : descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase)
-            ? "OpenAI API key or Admin API key"
+            ? "OpenAI Admin API key"
             : AuthFallback(descriptor.AuthKind);
 
     private static string AuthFallback(UsageProviderAuthKind kind) => kind switch

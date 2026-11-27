@@ -148,7 +148,7 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
 
         if (_descriptor.Id.Equals("openai", StringComparison.OrdinalIgnoreCase))
         {
-            return await ExecuteWithDeadlineAsync(GetOpenAiSnapshotAsync, cancellationToken).ConfigureAwait(false);
+            return await GetOpenAiSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
 
         if (_descriptor.Id.Equals("amp", StringComparison.OrdinalIgnoreCase))
@@ -1959,14 +1959,84 @@ public sealed class ConfiguredUsageProvider : IUsageProvider, IUsageProviderConn
 
     private async Task<UsageSnapshot> GetOpenAiSnapshotAsync(CancellationToken cancellationToken)
     {
+        var snapshot = await ExecuteWithDeadlineAsync(GetOpenAiUsageAsync, cancellationToken).ConfigureAwait(false);
+        var baseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl");
+        var balanceKey = _configuration.GetValue(Descriptor.Id, "apiKey");
+        var adminKey = _configuration.GetValue(Descriptor.Id, "adminApiKey")
+            ?? Environment.GetEnvironmentVariable("OPENAI_ADMIN_KEY");
+        if ((baseUrl is not null && !string.Equals(ParseBaseUrl(baseUrl, "OpenAI").GetLeftPart(UriPartial.Authority), "https://api.openai.com", StringComparison.OrdinalIgnoreCase))
+            || !string.IsNullOrWhiteSpace(_configuration.GetValue(Descriptor.Id, "projectId"))
+            || string.IsNullOrWhiteSpace(balanceKey)
+            || balanceKey.StartsWith("sk-admin-", StringComparison.Ordinal)
+            || string.Equals(balanceKey, adminKey, StringComparison.Ordinal))
+        {
+            return snapshot;
+        }
+
+        var balance = await TryGetOpenAiCreditBalanceAsync(balanceKey, cancellationToken).ConfigureAwait(false);
+        return balance is not decimal amount
+            ? snapshot
+            : snapshot with
+            {
+                Metrics =
+                [
+                    new UsageMetric("Total balance", amount.ToString(CultureInfo.InvariantCulture),
+                        SemanticKey: "totalBalance", NumericValue: amount, CurrencyCode: "USD"),
+                    .. snapshot.Metrics,
+                ],
+                Source = snapshot.Source + ", dashboard/billing/credit_grants",
+            };
+    }
+
+    private async Task<decimal?> TryGetOpenAiCreditBalanceAsync(string apiKey, CancellationToken cancellationToken)
+    {
+        // shortcut: credit_grants is a private compatibility endpoint. Replace it if OpenAI publishes a balance API.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(2));
+        var endpoint = UsageProviderEndpointCatalog.For(Descriptor.Id).Single(candidate => candidate.Name == "credit-grants");
+        using var request = new HttpRequestMessage(HttpMethod.Get, endpoint.Url);
+        try
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            using var response = await _httpClient
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token)
+                .ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger($"[TokensLimits] Provider openai: credit balance unavailable (HTTP {(int)response.StatusCode}).");
+                return null;
+            }
+
+            var content = await ReadBoundedResponseMemoryAsync(response.Content, deadline.Token).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(content);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("total_available", out var available)
+                && available.ValueKind == JsonValueKind.Number
+                && available.TryGetDecimal(out var amount))
+            {
+                return amount;
+            }
+
+            _logger("[TokensLimits] Provider openai: credit balance unavailable (unsupported response).");
+            return null;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested
+            && exception is HttpRequestException or IOException or JsonException or FormatException or OperationCanceledException or UsageProviderRequestException)
+        {
+            _logger($"[TokensLimits] Provider openai: credit balance unavailable ({exception.GetType().Name}).");
+            return null;
+        }
+    }
+
+    private async Task<UsageSnapshot> GetOpenAiUsageAsync(CancellationToken cancellationToken)
+    {
         var apiKey = _configuration.GetValue(Descriptor.Id, "adminApiKey")
-            ?? Environment.GetEnvironmentVariable("OPENAI_ADMIN_KEY")
-            ?? _configuration.GetValue(Descriptor.Id, "apiKey")
-            ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+            ?? Environment.GetEnvironmentVariable("OPENAI_ADMIN_KEY");
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             throw new UsageProviderConfigurationException(
-                "Для OpenAI нужен Admin API-ключ (OPENAI_ADMIN_KEY или поле Admin API-ключ). ");
+                "Для OpenAI нужен Admin API-ключ (OPENAI_ADMIN_KEY или поле Admin API-ключ).");
         }
 
         var baseUrl = _configuration.GetValue(Descriptor.Id, "baseUrl") ?? "https://api.openai.com";

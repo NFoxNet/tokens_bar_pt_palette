@@ -271,7 +271,7 @@ public static class UsageProviderEndpointCatalog
             ["ollama"] = [Get("models", "http://127.0.0.1:11434/api/tags", apiKey: false)],
             ["openai"] =
             [
-                Get("credit-grants", "https://api.openai.com/v1/dashboard/billing/credit_grants", baseUrl: true),
+                Get("credit-grants", "https://api.openai.com/v1/dashboard/billing/credit_grants"),
                 Get("costs", "https://api.openai.com/v1/organization/costs", baseUrl: true),
                 Get("usage", "https://api.openai.com/v1/organization/usage/completions", baseUrl: true),
             ],

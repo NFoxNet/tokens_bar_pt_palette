@@ -158,7 +158,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: false
-          body_path: TokensLimitsExtension/doc/release-notes-v0.0.6.5.md
+          body_path: TokensLimitsExtension/doc/release-notes-v0.0.6.6.md
           files: |
             artifacts/release/*.msix
             artifacts/release/*.cer

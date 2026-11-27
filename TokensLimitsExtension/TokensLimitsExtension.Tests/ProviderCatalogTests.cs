@@ -891,6 +891,61 @@ public sealed class ProviderCatalogTests
     }
 
     [Fact]
+    public async Task OpenAiUsageRejectsAProjectKeyBeforeSendingAnAdminRequest()
+    {
+        var handler = new OpenAiHandler();
+        using var client = new HttpClient(handler);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "openai"),
+            new TestConfiguration(
+                ("openai", "adminApiKey", string.Empty),
+                ("openai", "apiKey", "project-key")),
+            client);
+
+        await Assert.ThrowsAsync<UsageProviderConfigurationException>(() => provider.GetUsageSnapshotAsync());
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK, "{\"total_available\":12.34}", true)]
+    [InlineData(HttpStatusCode.OK, "{\"total_granted\":20,\"total_used\":4}", false)]
+    [InlineData(HttpStatusCode.Forbidden, "{}", false)]
+    public async Task OpenAiBalanceUsesItsOwnKeyAndKeepsAdminUsageWhenUnavailable(
+        HttpStatusCode balanceStatus, string balanceBody, bool hasBalance)
+    {
+        var handler = new OpenAiHandler(balanceStatus, balanceBody);
+        using var client = new HttpClient(handler);
+        using var provider = new ConfiguredUsageProvider(
+            UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "openai"),
+            new TestConfiguration(
+                ("openai", "adminApiKey", "admin-key"),
+                ("openai", "apiKey", "balance-key"),
+                ("openai", "historyDays", "1")),
+            client);
+
+        var snapshot = await provider.GetUsageSnapshotAsync();
+
+        var balanceRequest = Assert.Single(handler.Requests, request =>
+            request.RequestUri!.AbsoluteUri == "https://api.openai.com/v1/dashboard/billing/credit_grants");
+        Assert.Equal("Bearer balance-key", balanceRequest.Headers.Authorization!.ToString());
+        Assert.All(handler.Requests.Where(request => request != balanceRequest), request =>
+            Assert.Equal("Bearer admin-key", request.Headers.Authorization!.ToString()));
+        Assert.Contains(snapshot.Metrics, metric => metric.Name == "Spend" && metric.Value == "1.25");
+
+        var balances = snapshot.Metrics.Where(metric => metric.SemanticKey == "totalBalance");
+        if (hasBalance)
+        {
+            var balance = Assert.Single(balances);
+            Assert.Equal(12.34m, balance.NumericValue);
+            Assert.Equal("USD", balance.CurrencyCode);
+        }
+        else
+        {
+            Assert.Empty(balances);
+        }
+    }
+
+    [Fact]
     public async Task OpenAiUsageUsesAdminKeyAndFollowsUsagePagination()
     {
         var handler = new OpenAiHandler();
@@ -898,6 +953,7 @@ public sealed class ProviderCatalogTests
             UsageProviderDescriptorRegistry.All.Single(descriptor => descriptor.Id == "openai"),
             new TestConfiguration(
                 ("openai", "adminApiKey", "admin-key"),
+                ("openai", "apiKey", "balance-key"),
                 ("openai", "baseUrl", "https://openai.example.test"),
                 ("openai", "historyDays", "1")),
             new HttpClient(handler));
@@ -1306,14 +1362,25 @@ public sealed class ProviderCatalogTests
         }
     }
 
-    private sealed class OpenAiHandler : HttpMessageHandler
+    private sealed class OpenAiHandler(
+        HttpStatusCode balanceStatus = HttpStatusCode.Forbidden,
+        string balanceBody = "{}") : HttpMessageHandler
     {
         public List<HttpRequestMessage> Requests { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add(request);
-            var isCosts = request.RequestUri!.AbsolutePath.EndsWith("/costs", StringComparison.Ordinal);
+            if (request.RequestUri!.AbsolutePath == "/v1/dashboard/billing/credit_grants")
+            {
+                return Task.FromResult(new HttpResponseMessage(balanceStatus)
+                {
+                    Content = new StringContent(balanceBody, Encoding.UTF8, "application/json"),
+                    RequestMessage = request,
+                });
+            }
+
+            var isCosts = request.RequestUri.AbsolutePath.EndsWith("/costs", StringComparison.Ordinal);
             var hasPage = request.RequestUri.Query.Contains("page=next", StringComparison.Ordinal);
             var body = isCosts
                 ? hasPage

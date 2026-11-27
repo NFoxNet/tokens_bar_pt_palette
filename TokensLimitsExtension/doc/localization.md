@@ -46,12 +46,16 @@ fallback.
 ## Иконки
 
 Поставляемые SVG и PNG 32/64/128 находятся в
-`TokensLimitsExtension/Assets/Providers`. Это офлайн-копии выбранных
-`ProviderIcon-*.svg` из CodexBar revision
-`392310c665485f8d57c93881e7416c5ebf69d8ef`. Контрольные суммы и исходные
-пути — в `CodexBar-icons.manifest.json`; текст MIT и атрибуция — в
-`THIRD_PARTY_NOTICES.md`.
+`TokensLimitsExtension/Assets/Providers`. Выбранные значки CodexBar скопированы
+из revision `392310c665485f8d57c93881e7416c5ebf69d8ef`; для Ollama использован
+`ProviderIcon-ollama.svg` из revision
+`cf79d1310493f2d028af62cc21e422b5f33c70a5`, по MIT-лицензии CodexBar. Источники
+и контрольные суммы собраны в `CodexBar-icons.manifest.json`, атрибуция и текст
+лицензии — в `THIRD_PARTY_NOTICES.md`.
 
-Не все логотипы дают права на использование товарных знаков. Ресурсы с явной
-ссылкой на отдельные внешние brand terms не включены; для них и неизвестных
-provider ID используется нейтральная иконка.
+Растровые варианты имеют общий нейтральный круглый фон с контрастной обводкой:
+он делает чёрные и белые монохромные знаки читаемыми на светлой и тёмной теме.
+Для Augment, ClinePass и Vertex AI используются собственные буквенные значки,
+поскольку исходные брендовые значки не входят в проверенный набор. OpenAI и
+Azure OpenAI используют знак Codex, Moonshot — знак Kimi. Неизвестные ID
+сохраняют нейтральную иконку.

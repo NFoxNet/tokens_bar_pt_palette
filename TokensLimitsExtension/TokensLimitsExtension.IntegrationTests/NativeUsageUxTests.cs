@@ -211,8 +211,11 @@ public sealed class NativeUsageUxTests
         GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.dock.summaryEnabled").Value = true;
         ApplySettingsChange(settings);
         var summaryBand = Assert.Single(commands.GetDockBands());
-        Assert.Equal(TokensLimitsDockBandPage.StableId, summaryBand.Command!.Id);
-        var summary = Assert.IsType<UsageSummaryPage>(summaryBand.Command);
+        Assert.Same(band, summaryBand);
+        Assert.Same(dockPage, summaryBand.Command);
+        var summaryItem = Assert.IsType<ListItem>(Assert.Single(dockPage.GetItems()));
+        var summary = Assert.IsType<UsageSummaryPage>(summaryItem.Command);
+        Assert.NotEqual(dockPage.Id, summary.Id);
         var body = Assert.IsType<MarkdownContent>(Assert.Single(summary.GetContent())).Body;
         Assert.Contains("Amp", body, StringComparison.Ordinal);
         Assert.DoesNotContain("Codex", body, StringComparison.Ordinal);
@@ -223,8 +226,14 @@ public sealed class NativeUsageUxTests
 
         GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.dock.summaryEnabled").Value = false;
         ApplySettingsChange(settings);
-        Assert.IsType<TokensLimitsDockBandPage>(Assert.Single(commands.GetDockBands()).Command);
+        Assert.Same(band, Assert.Single(commands.GetDockBands()));
+        Assert.Collection(dockPage.GetItems(), item => Assert.Equal("Amp", item.Title));
         Assert.False(HasStateChangedSubscriber(Assert.Single(caches, cache => cache.Descriptor.Id == "amp"), summary));
+
+        GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.dock.summaryEnabled").Value = true;
+        ApplySettingsChange(settings);
+        Assert.Same(summaryItem, Assert.Single(dockPage.GetItems()));
+        Assert.Same(summary, summaryItem.Command);
     }
 
     [Fact]

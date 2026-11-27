@@ -37,7 +37,7 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
     public override IListItem[] GetItems()
         => Volatile.Read(ref _disposed) != 0 ? [] : Volatile.Read(ref _items);
 
-    public void UpdateItems(IReadOnlyList<UsageDockBandItem> items)
+    public void UpdateItems(IReadOnlyList<IListItem> items)
     {
         ArgumentNullException.ThrowIfNull(items);
         if (Volatile.Read(ref _disposed) != 0)
@@ -45,8 +45,13 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
             return;
         }
 
+        if (Volatile.Read(ref _items).SequenceEqual(items, ReferenceEqualityComparer.Instance))
+        {
+            return;
+        }
+
         var previousItems = _observedItems;
-        var updatedObservedItems = items.ToArray();
+        var updatedObservedItems = items.OfType<UsageDockBandItem>().ToArray();
         foreach (var item in previousItems)
         {
             item.PropChanged -= DockItemOnPropChanged;
@@ -57,7 +62,7 @@ public sealed partial class TokensLimitsDockBandPage : ListPage, IDisposable
             item.PropChanged += DockItemOnPropChanged;
         }
 
-        var updatedItems = updatedObservedItems.Cast<IListItem>().ToArray();
+        var updatedItems = items.ToArray();
         _observedItems = updatedObservedItems;
         Volatile.Write(ref _items, updatedItems);
         RaiseItemsChanged(updatedItems.Length);

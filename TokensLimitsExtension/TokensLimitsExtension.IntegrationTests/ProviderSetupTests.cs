@@ -11,6 +11,12 @@ namespace TokensLimitsExtension.IntegrationTests;
 public sealed class ProviderSetupTests
 {
     [Fact]
+    public void OpenAiUsesThePackagedOpenAiMarkInsteadOfTheGenericProviderIcon()
+    {
+        Assert.Equal(@"Assets\Providers\ProviderIcon-codex.64.png", ProviderIconCatalog.PathFor("openai"));
+    }
+
+    [Fact]
     public void AllDisabledOverviewRoutesToTheNativeExtensionSettingsPage()
     {
         using var directory = new TestDirectory();
