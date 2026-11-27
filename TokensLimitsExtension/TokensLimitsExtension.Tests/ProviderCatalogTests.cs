@@ -1083,8 +1083,8 @@ public sealed class ProviderCatalogTests
     [Fact]
     public async Task BoundedProcessRunnerKillsAnUnboundedWriterWhenOutputLimitIsHit()
     {
-        var powershell = GetWindowsPowerShellPath();
-        if (powershell is null)
+        var commandPrompt = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        if (!OperatingSystem.IsWindows())
         {
             return;
         }
@@ -1093,8 +1093,8 @@ public sealed class ProviderCatalogTests
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
         await Assert.ThrowsAsync<UsageProviderRequestException>(() => runner.RunAsync(
-            powershell,
-            ["-NoProfile", "-NonInteractive", "-Command", "while ($true) { [Console]::Write(('x' * 4096)) }"],
+            commandPrompt,
+            ["/d", "/c", "for /L %i in (1,1,2147483647) do @echo " + new string('x', 4096)],
             CancellationToken.None));
 
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3), $"Runner waited {stopwatch.Elapsed} after the output limit was reached.");
@@ -1103,21 +1103,21 @@ public sealed class ProviderCatalogTests
     [Fact]
     public async Task BoundedProcessRunnerReturnsBothOutputStreamsAndExitCode()
     {
-        var powershell = GetWindowsPowerShellPath();
-        if (powershell is null)
+        var commandPrompt = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        if (!OperatingSystem.IsWindows())
         {
             return;
         }
 
         var runner = new BoundedUsageProviderProcessRunner(TimeSpan.FromSeconds(5), 4_096);
         var result = await runner.RunAsync(
-            powershell,
-            ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Write('ok'); [Console]::Error.Write('warn'); exit 7"],
+            commandPrompt,
+            ["/d", "/c", "(echo ok)&(echo warn 1>&2)&exit /b 7"],
             CancellationToken.None);
 
         Assert.Equal(7, result.ExitCode);
-        Assert.Equal("ok", result.StandardOutput);
-        Assert.Equal("warn", result.StandardError);
+        Assert.Equal("ok\r\n", result.StandardOutput);
+        Assert.Equal("warn \r\n", result.StandardError);
     }
 
     [Fact]
