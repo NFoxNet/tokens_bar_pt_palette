@@ -525,8 +525,14 @@ internal static class UsageJsonParser
                 {
                     classificationPath += ".weekly";
                 }
+                var windowType = FindString(properties, "window_type", "windowType", "type");
+                var startsAt = FindDate(properties, "starts_at", "start_at", "window_start", "currentPeriodStart");
+                var isFixedWindow = (string.Equals(windowType, "fixed", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(windowType, "cycle", StringComparison.OrdinalIgnoreCase))
+                    && startsAt is not null && reset is not null && startsAt < reset;
                 var seconds = FindNumber(properties, "window_seconds", "windowSeconds", "period_seconds", "periodSeconds")
                     ?? FindQuotaWindowSeconds(properties)
+                    ?? (isFixedWindow ? (reset!.Value - startsAt!.Value).TotalSeconds : (double?)null)
                     ?? GuessWindowSeconds(classificationPath);
                 if (effectiveReset is not null && double.IsFinite(percentUsed))
                 {
@@ -536,7 +542,11 @@ internal static class UsageJsonParser
                         new UsageWindow(
                             Math.Clamp(percentUsed, 0, 100),
                             effectiveReset.Value,
-                            (int)Math.Clamp(resolvedSeconds, 0, int.MaxValue)),
+                            (int)Math.Clamp(resolvedSeconds, 0, int.MaxValue))
+                        {
+                            StartsAt = isFixedWindow ? startsAt : null,
+                            IsFixedWindow = isFixedWindow,
+                        },
                         kind));
                 }
             }

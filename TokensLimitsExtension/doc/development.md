@@ -2,12 +2,16 @@
 
 ## Требования
 
-- Windows 10 19041 или новее.
+- Windows 11 22000 или новее (минимальная версия приложения).
 - Visual Studio с workload для Windows App SDK/.NET или установленный SDK 10.0.401 из `global.json`.
 - Windows SDK 26100 и восстановленные NuGet-пакеты.
 - Для runtime-проверки — Microsoft PowerToys с включённым Command Palette.
 
 Версии пакетов централизованы в `Directory.Packages.props`. Не добавляйте разные версии одного пакета в отдельные `.csproj` без необходимости.
+
+Окно настроек использует `CommunityToolkit.WinUI.Controls.SettingsControls`
+`8.2.251219` и Windows App SDK `1.8.260921001`. Эти зависимости принадлежат
+UI-хосту; Command Palette COM entry point остаётся прежним.
 
 ## CLI-цикл
 
@@ -45,6 +49,16 @@ explicitly removes the package data.
 3. Запускайте профиль `(Package)`, а не `(Unpackaged)`.
 4. После Deploy в Command Palette выполните `Reload` → `Reload Command Palette extensions`.
 5. Для диагностики смотрите Output window в режиме Debug; код пишет сообщения через `Debug.WriteLine` и `ExtensionHost.LogMessage`.
+
+Для ручной проверки нативного окна откройте настройки из команды PowerToys,
+закройте окно и откройте повторно, затем проверьте повторную активацию уже
+открытого окна. Проверьте клавиатурную навигацию и фокус, высокий контраст,
+настройку Windows «эффекты анимации» (reduced motion), узкую ширину окна и
+перенос длинных заголовков. Также проверьте раскрытие нескольких разделов,
+сохранение черновика при переключении карточек, состояния выключенных порога и
+retention, маски секретов, очистку пустого секрета и сохранение после Reload.
+Эти проверки живого UI и системных тем пока не подтверждены; сборка и
+интеграционные тесты не заменяют их.
 
 ### Локальный baseline процесса
 
@@ -182,3 +196,27 @@ counts помогают сравнить одинаковые fixtures, но н�
 - если меняется provider contract — обновите unit и integration tests;
 - если меняются пользовательские настройки или команды — обновите `doc/`;
 - убедитесь, что в diff нет `bin/`, `obj/`, пакетов и секретов.
+
+### Изолированный smoke нативного окна
+
+В Windows 11 с установленным Windows App Runtime 1.8:
+
+```powershell
+dotnet run --project .\TokensLimitsExtension.NativeSmokeTests\TokensLimitsExtension.NativeSmokeTests.csproj --configuration Debug -p:Platform=x64
+```
+
+Этот opt-in проект исключён из обычной solution: он открывает настоящее окно, раскрывает пять групп и карточку провайдера, проверяет локальный логотип/поля, границы полей при размере 640×480, повторную активацию, закрытие/повторное открытие и завершение STA-потока. Используется временный каталог настроек; пользовательские файлы и установленный MSIX не меняются. Тест включает первый layout-проход: одного создания контролов недостаточно для проверки их ресурсов и стилей. Он не подтверждает запуск через реальный PowerToys COM host, качество анимации, клавиатуру, high contrast или ARM64 runtime.
+
+Расширение использует framework-dependent Windows App Runtime 1.8; он должен быть установлен для запуска MSIX. См. [официальное развёртывание Windows App SDK](https://learn.microsoft.com/windows/apps/windows-app-sdk/deploy-packaged-apps). Main/Singleton службы не используются: их Deployment Manager auto-initializer отключён [по рекомендации Microsoft](https://learn.microsoft.com/windows/apps/package-and-deploy/project-properties). Framework dependency остаётся в MSIX manifest.
+### Release WinUI startup regression
+
+Release packaging must preserve `WinRT.Runtime` via `TrimmerRootAssembly`. Trimming its runtime interop paths caused `Application.Start` to fail-fast with E_POINTER in 0.0.6.4; Debug-only UI tests did not detect it. Keep trimming enabled for other libraries.
+
+Run the opt-in NativeSmokeTests with `--startup-only` against extracted Release application, Core, toolkit, Microsoft.WinUI, Microsoft.Windows.SDK.NET and WinRT.Runtime DLLs plus the package PRI/resources. This mode uses only the production open/activate/shutdown path; detailed control inspection needs WinUI getters that the product linker can legitimately remove. The unpackaged test host retains its own .NET/bootstrap files. It does not prove live Command Palette activation or an installed upgrade.
+From the Git root after building NativeSmokeTests, invoke:
+
+```powershell
+./scripts/Test-NativeSettingsReleaseStartup.ps1 -PackagePath ./artifacts/release-0.0.6.5/TokensLimitsExtension_0.0.6.5_x64.msix -SmokeDirectory ./TokensLimitsExtension/TokensLimitsExtension.NativeSmokeTests/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64 -OutputDirectory ./TokensLimitsExtension/artifacts-local-feature-ux/release-startup-check
+```
+
+Use a fresh output directory and a smoke host compiled against the same application version.

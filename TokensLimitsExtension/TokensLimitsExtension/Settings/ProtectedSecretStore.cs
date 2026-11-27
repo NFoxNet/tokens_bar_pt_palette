@@ -65,8 +65,18 @@ internal sealed partial class ProtectedSecretStore : IDisposable
         var protectedValue = Convert.ToBase64String(Protect(value));
         lock (_gate)
         {
+            _protectedValues.TryGetValue(key, out var previous);
             _protectedValues[key] = protectedValue;
-            SaveValuesLocked();
+            try
+            {
+                SaveValuesLocked();
+            }
+            catch
+            {
+                if (previous is null) _protectedValues.Remove(key);
+                else _protectedValues[key] = previous;
+                throw;
+            }
         }
     }
 
@@ -77,9 +87,17 @@ internal sealed partial class ProtectedSecretStore : IDisposable
 
         lock (_gate)
         {
-            if (_protectedValues.Remove(key))
+            if (_protectedValues.Remove(key, out var previous))
             {
-                SaveValuesLocked();
+                try
+                {
+                    SaveValuesLocked();
+                }
+                catch
+                {
+                    _protectedValues[key] = previous;
+                    throw;
+                }
             }
         }
     }

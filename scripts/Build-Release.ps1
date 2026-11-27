@@ -72,7 +72,7 @@ finally {
 }
 
 $packages = @(Get-ChildItem -LiteralPath $OutputDirectory -Recurse -Filter '*.msix' |
-    Where-Object { $_.Name -notlike '*Dependencies*' })
+    Where-Object { $_.Name -like "$($manifest.Package.Identity.Name)_$($manifest.Package.Identity.Version)_*.msix" })
 if ($packages.Count -ne $Platform.Count) {
     throw "Expected $($Platform.Count) MSIX packages, found $($packages.Count)."
 }

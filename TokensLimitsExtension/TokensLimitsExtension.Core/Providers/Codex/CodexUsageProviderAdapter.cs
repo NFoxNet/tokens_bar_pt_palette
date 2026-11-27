@@ -62,6 +62,7 @@ public sealed class CodexUsageProviderAdapter : IUsageProvider, IDisposable
                             limit.SecondaryWindow.LimitWindowSeconds)))
                 .ToArray(),
             Metrics = snapshot.Metrics,
+            AccountScope = snapshot.AccountScope,
         };
     }
 

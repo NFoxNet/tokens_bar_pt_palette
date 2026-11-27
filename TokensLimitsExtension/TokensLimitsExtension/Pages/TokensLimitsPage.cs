@@ -390,8 +390,12 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
         {
             yield return new ListItem(new OpenUrlCommand(dashboardUrl.AbsoluteUri))
             {
-                Title = _localization.GetString("action.openDashboard", "Open provider dashboard"),
-                Subtitle = _localization.GetString("action.openDashboardSubtitle", "Open the trusted provider website."),
+                Title = _usageProvider.Descriptor.Id == "openai"
+                    ? _localization.GetString("action.openOpenAiBilling", "Open OpenAI billing")
+                    : _localization.GetString("action.openDashboard", "Open provider dashboard"),
+                Subtitle = _usageProvider.Descriptor.Id == "openai"
+                    ? _localization.GetString("action.openOpenAiBillingSubtitle", "Check your organization's current credit balance.")
+                    : _localization.GetString("action.openDashboardSubtitle", "Open the trusted provider website."),
             };
         }
 
@@ -456,6 +460,9 @@ public sealed partial class TokensLimitsPage : ListPage, IDisposable
     private string GetNextStep(UsageProviderState state)
         => state.ErrorKind switch
         {
+            UsageProviderErrorKind.MissingConfiguration or UsageProviderErrorKind.Authentication
+                when _usageProvider.Descriptor.Id == "openai"
+                => _localization.GetString("status.openaiAdminKeyRequired", "OpenAI Admin API key required"),
             UsageProviderErrorKind.MissingConfiguration
                 => _localization.GetString("status.nextStep.configure", "Open extension settings and configure this provider."),
             UsageProviderErrorKind.Authentication

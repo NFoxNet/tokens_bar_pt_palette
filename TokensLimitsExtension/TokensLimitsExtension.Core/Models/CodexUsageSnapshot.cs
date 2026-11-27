@@ -18,6 +18,9 @@ public sealed record CodexUsageSnapshot(
     string? Plan,
     bool IsEstimate)
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AccountScope { get; init; }
+
     public IReadOnlyList<CodexAdditionalRateLimit> AdditionalRateLimits { get; init; } = [];
 
     public bool HasPrimaryWindow { get; init; } = true;

@@ -1,9 +1,16 @@
+using System.Text.Json.Serialization;
+
 namespace TokensLimitsExtension.Core.Models;
 
 public sealed record UsageWindow(
     double UsedPercent,
     DateTimeOffset ResetAt,
-    int LimitWindowSeconds);
+    int LimitWindowSeconds)
+{
+    public DateTimeOffset? StartsAt { get; init; }
+
+    public bool IsFixedWindow { get; init; }
+}
 
 public sealed record AdditionalUsageLimit(
     string Name,
@@ -43,4 +50,8 @@ public sealed record UsageSnapshot(
     public DateTimeOffset? FetchedAt { get; init; }
 
     public string? Source { get; init; }
+
+    /// <summary>Opaque, non-reversible account partition hint; callers must not persist it.</summary>
+    [JsonIgnore]
+    public string? AccountScope { get; init; }
 }

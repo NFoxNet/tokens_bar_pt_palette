@@ -11,13 +11,19 @@ namespace TokensLimitsExtension.IntegrationTests;
 public sealed class ProviderSetupTests
 {
     [Fact]
+    public void OpenAiUsesThePackagedOpenAiMarkInsteadOfTheGenericProviderIcon()
+    {
+        Assert.Equal(@"Assets\Providers\ProviderIcon-codex.64.png", ProviderIconCatalog.PathFor("openai"));
+    }
+
+    [Fact]
     public void AllDisabledOverviewRoutesToTheNativeExtensionSettingsPage()
     {
         using var directory = new TestDirectory();
         var settings = new TokensLimitsSettings(directory.Path);
         GetRegisteredSetting<ToggleSetting>(settings, "tokensLimits.providers.codex.enabled").Value = false;
         using var registry = new UsageProviderRegistry([new DisabledCodexProvider()]);
-        var nativeSettingsPageType = settings.Settings.SettingsPage.GetType();
+        var nativeSettingsPageType = settings.CommandSettings.SettingsPage.GetType();
         using var provider = new TokensLimitsExtensionCommandsProvider(
             null,
             registry,
